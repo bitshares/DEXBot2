@@ -59,11 +59,11 @@ Definitions:
 - `n` = weight distribution (controls how sizes scale across grid)
 
 Weight distribution examples (set `n` via `weightDistribution`):
-- `-1` = Super Valley (largest orders farthest from center)
-- `0` = Valley (orders decrease linearly outward)
+- `-1` = Super Valley (aggressive concentration towards the edge)
+- `0` = Valley (orders increase linearly towards edge)
 - `0.5` = Neutral (balanced distribution)
-- `1` = Mountain (largest orders closest to center)
-- `2` = Super Mountain (aggressive concentration near center)
+- `1` = Mountain (order increase linearly towards center)
+- `2` = Super Mountain (aggressive concentration towards center)
 
 ## Configuration
 
