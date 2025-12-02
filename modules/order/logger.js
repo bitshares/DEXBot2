@@ -1,3 +1,4 @@
+// Simple console logger used by the OrderManager for structured status updates.
 class Logger {
     constructor(level = 'info') {
         this.levels = { debug: 0, info: 1, warn: 2, error: 3 };

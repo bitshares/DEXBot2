@@ -39,6 +39,7 @@ function log(...args) {
     console.log(new Date().toISOString(), `[bot ${BOT_NUMBER} ${assetContext}]`, ...args);
 }
 
+// Boot up an OrderManager instance using available config/env and authenticate a preferred account if provided.
 async function startBot(settings = {}) {
     if (running) {
         log('startBot called but bot already running');

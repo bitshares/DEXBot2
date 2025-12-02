@@ -1,3 +1,4 @@
+// Interactive CLI helper for editing the tracked bot profiles stored in profiles/bots.json.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline-sync');
@@ -179,6 +180,7 @@ function promptBotData(base = {}) {
     };
 }
 
+// Entry point exposing a menu-driven interface for creating, modifying, and reviewing bots.
 async function main() {
     console.log('dexbot bots — bots.json configurator (writes profiles/bots.json)');
     const { config, filePath } = loadBotsConfig();

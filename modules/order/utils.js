@@ -34,6 +34,7 @@ function parseRelativeMultiplierString(value) {
 }
 
 function resolveRelativePrice(value, marketPrice, mode = 'min') {
+    // Interpret relative multipliers like '5x' as min/max bounds around the market price.
     const multiplier = parseRelativeMultiplierString(value);
     if (multiplier === null || !Number.isFinite(marketPrice) || multiplier === 0) return null;
     if (mode === 'min') return marketPrice / multiplier;

@@ -163,6 +163,7 @@ function loadAccounts() {
         return { masterPasswordHash: '', accounts: {} };
     }
 }
+// Display the saved account names to the console and return their ordering.
 function listKeyNames(accounts) {
     if (!accounts || Object.keys(accounts).length === 0) {
         console.log('  (no accounts stored yet)');
@@ -244,6 +245,7 @@ function hashPassword(password) {
 }
 
 // Export validator for tests and other modules
+// Launch the interactive key manager menu (add/modify/remove keys and update master password).
 async function main() {
     console.log('BitShares Key Manager');
     console.log('========================');

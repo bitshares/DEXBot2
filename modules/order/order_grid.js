@@ -1,7 +1,9 @@
 const { ORDER_TYPES } = require('./constants');
 
+// Build the foundational grid of virtual orders based on increments, spread, and funds.
 class OrderGridGenerator {
     static createOrderGrid(config) {
+        // Compute helper arrays of buy/sell price levels relative to the market price.
         const { marketPrice, minPrice, maxPrice, incrementPercent, targetSpreadPercent } = config;
         const incrementFactor = 1 + (incrementPercent / 100);
         const nOrders = Math.ceil(Math.log((1 + (targetSpreadPercent / 100)) / incrementFactor) / Math.log(incrementFactor));
@@ -38,6 +40,7 @@ class OrderGridGenerator {
         return { orders: [...sellOrders, ...buyOrders], initialSpreadCount };
     }
 
+    // Distribute funds across the grid respecting weights and increment guidance.
     static calculateOrderSizes(orders, config, sellFunds, buyFunds) {
         const { incrementPercent, weightDistribution: { sell: sellWeight, buy: buyWeight } } = config;
         const incrementFactor = incrementPercent / 100;

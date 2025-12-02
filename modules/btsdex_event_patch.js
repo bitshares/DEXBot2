@@ -1,3 +1,4 @@
+// Patch for the btsdex event subsystem to keep account history in sync via the history API.
 const historyApi = require('btsdex-api').history;
 let patched = false;
 try {

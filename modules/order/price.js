@@ -1,3 +1,4 @@
+// Try several on-chain lookups to resolve an asset symbol or id to metadata.
 const lookupAsset = async (BitShares, s) => {
     try { const a = await BitShares.assets[s.toLowerCase()]; if (a && a.id) return a; } catch (e) {}
     try { const r = await BitShares.db.lookup_asset_symbols([s]); if (r && r[0] && r[0].id) return r[0]; } catch (e) {}
@@ -5,6 +6,7 @@ const lookupAsset = async (BitShares, s) => {
     return null;
 };
 
+// Derive a market-based price via orderbooks/ticker data and invert to quote per base.
 const deriveMarketPrice = async (BitShares, symA, symB) => {
     try {
         const aMeta = await lookupAsset(BitShares, symA);
@@ -40,6 +42,7 @@ const deriveMarketPrice = async (BitShares, symA, symB) => {
     }
 };
 
+// Derive a price from a liquidity pool reserve ratio, falling back to weighted OB averaging.
 const derivePoolPrice = async (BitShares, symA, symB) => {
     try {
         const aMeta = await lookupAsset(BitShares, symA);

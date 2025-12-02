@@ -22,6 +22,7 @@ try {
     // Some environments may not have subscribe available at require time; that's okay
 }
 
+// Block until the singleton BitShares client reports a connected state or times out.
 async function waitForConnected(timeoutMs = 30000) {
     const start = Date.now();
     while (!connected) {
@@ -35,7 +36,7 @@ async function waitForConnected(timeoutMs = 30000) {
 function onConnected(cb) { connectedCallbacks.add(cb); return () => connectedCallbacks.delete(cb); }
 
 function createAccountClient(accountName, privateKey) {
-    // Keep using per-account instance for signing/broadcasting where needed
+    // Instantiate a per-account client used for signing/broadcasting transactions.
     return new BitSharesLib(accountName, privateKey);
 }
 

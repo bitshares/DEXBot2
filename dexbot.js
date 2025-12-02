@@ -8,6 +8,8 @@ const accountKeys = require('./modules/account_keys');
 const accountBots = require('./modules/account_bots');
 const { IndexDB, createBotKey } = require('./modules/indexdb');
 
+// Primary CLI driver that manages tracked bots and helper utilities such as key/bot editors.
+
 // Tracked runtime bot definitions live in profiles/bots.json
 const PROFILES_BOTS_FILE = path.join(__dirname, 'profiles', 'bots.json');
 
@@ -22,6 +24,7 @@ const CLI_EXAMPLES = [
 ];
 const cliArgs = process.argv.slice(2);
 
+// Show the CLI usage/help text when requested or upon invalid commands.
 function printCLIUsage() {
     console.log('Usage: dexbot [command] [bot-name]');
     console.log('Commands:');
@@ -37,6 +40,7 @@ function printCLIUsage() {
     console.log('Envs: RUN_LOOP_MS controls the polling delay; LIVE_BOT_NAME or BOT_NAME selects a single entry.');
 }
 
+// Print curated CLI snippets for quick reference.
 function printCLIExamples() {
     console.log('CLI Examples:');
     CLI_EXAMPLES.forEach((example, index) => {
@@ -57,11 +61,13 @@ if (cliArgs.includes(CLI_EXAMPLES_FLAG)) {
     process.exit(0);
 }
 
+// Helper that strips inline comments before parsing bot JSON files.
 function parseJsonWithComments(raw) {
     const stripped = raw.replace(/\/\*(?:.|[\r\n])*?\*\//g, '').replace(/(^|\s*)\/\/.*$/gm, '');
     return JSON.parse(stripped);
 }
 
+// Load the tracked bot settings file, handling missing files or parse failures gracefully.
 function loadSettingsFile() {
     if (!fs.existsSync(PROFILES_BOTS_FILE)) {
         console.error('profiles/bots.json not found. Run `npm run bootstrap:profiles` to create it from the tracked examples.');
@@ -77,6 +83,7 @@ function loadSettingsFile() {
     }
 }
 
+// Persist the tracked bot settings to disk when users edit via CLI.
 function saveSettingsFile(config, filePath) {
     try {
         fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -86,6 +93,7 @@ function saveSettingsFile(config, filePath) {
     }
 }
 
+// Normalize the root data structure so we always operate on an array of bot entries.
 function resolveRawBotEntries(settings) {
     if (!settings || typeof settings !== 'object') return [];
     if (Array.isArray(settings.bots)) return settings.bots;
@@ -93,6 +101,7 @@ function resolveRawBotEntries(settings) {
     return [];
 }
 
+// Decorate each bot entry with metadata (botKey, index, default active) for runtime use.
 function normalizeBotEntries(rawEntries) {
     return rawEntries.map((entry, index) => {
         const normalized = { active: entry.active === undefined ? true : !!entry.active, ...entry };
@@ -269,6 +278,7 @@ class DEXBot {
 
 let accountKeysAutostarted = false;
 
+// Launch the account key manager helper with optional BitShares handshake and cleanup.
 async function runAccountManager({ waitForConnection = false, exitAfter = false, disconnectAfter = false } = {}) {
     if (waitForConnection) {
         try {
@@ -297,6 +307,7 @@ async function runAccountManager({ waitForConnection = false, exitAfter = false,
     }
 }
 
+// Handle master password prompts and auto-launch key manager when missing.
 async function authenticateMasterPassword() {
     try {
         return accountOrders.authenticate();
@@ -355,6 +366,7 @@ function collectValidationIssues(entries, sourceName) {
     return { errors, warnings };
 }
 
+// Run the provided bot entries, enforcing validation, master password needs, and order manager start.
 async function runBotInstances(botEntries, { forceDryRun = false, sourceName = 'settings' } = {}) {
     if (!botEntries.length) {
         console.log(`No bot entries were found in ${sourceName}.`);
@@ -430,6 +442,7 @@ async function runBotInstances(botEntries, { forceDryRun = false, sourceName = '
     return instances;
 }
 
+// Entry point that resolves a named bot (or all tracked bots) before running them.
 async function startBotByName(botName, { dryRun = false } = {}) {
     if (!botName) {
         return runDefaultBots({ forceDryRun: dryRun, sourceName: dryRun ? 'CLI drystart (all)' : 'CLI start (all)' });
@@ -452,6 +465,7 @@ async function startBotByName(botName, { dryRun = false } = {}) {
     await runBotInstances(normalized, { forceDryRun: dryRun, sourceName: dryRun ? 'CLI drystart' : 'CLI start' });
 }
 
+// Mark tracked bots (one or all) inactive in the config file.
 async function stopBotByName(botName) {
     const { config, filePath } = loadSettingsFile();
     const entries = resolveRawBotEntries(config);
@@ -485,12 +499,14 @@ async function stopBotByName(botName) {
     console.log(`Marked '${botName}' inactive in ${path.basename(filePath)}. Stop the running process manually (Ctrl+C).`);
 }
 
+// Convenience wrapper that stops, then re-runs bot(s) after warning about manual shutdown.
 async function restartBotByName(botName) {
     const target = botName ? ` '${botName}'` : ' all active bots';
     console.log(`Restarting${target}. Ensure any previous run is stopped (Ctrl+C) before new execution.`);
     await startBotByName(botName, { dryRun: false });
 }
 
+// Parse CLI arguments and dispatch the requested command if provided.
 async function handleCLICommands() {
     if (!cliArgs.length) return false;
     const [command, target] = cliArgs;
@@ -530,6 +546,7 @@ async function handleCLICommands() {
     }
 }
 
+// Run whatever bots are marked active in the tracked settings file.
 async function runDefaultBots({ forceDryRun = false, sourceName = 'settings' } = {}) {
     const { config } = loadSettingsFile();
     const entries = resolveRawBotEntries(config);
@@ -537,6 +554,7 @@ async function runDefaultBots({ forceDryRun = false, sourceName = 'settings' } =
     await runBotInstances(normalized, { forceDryRun, sourceName });
 }
 
+// Entry point combining CLI shortcuts and default bot execution.
 async function bootstrap() {
     if (await handleCLICommands()) return;
     await runDefaultBots();

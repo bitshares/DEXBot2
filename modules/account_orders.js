@@ -1,3 +1,4 @@
+// Utilities for managing BitShares account keys, fills, and limit-order operations.
 const { BitShares, createAccountClient, waitForConnected } = require('./bitshares_client');
 const { floatToBlockchainInt } = require('./order/utils');
 const crypto = require('crypto');
@@ -67,6 +68,7 @@ class MasterPasswordError extends Error {
 const MASTER_PASSWORD_MAX_ATTEMPTS = 3;
 let masterPasswordAttempts = 0;
 
+// Prompt the user for the master password, limiting the total attempts.
 function _promptPassword() {
     if (masterPasswordAttempts >= MASTER_PASSWORD_MAX_ATTEMPTS) {
         throw new MasterPasswordError(`Incorrect master password after ${MASTER_PASSWORD_MAX_ATTEMPTS} attempts.`);
@@ -94,7 +96,7 @@ function authenticate() {
     }
 }
 
-// Get decrypted private key for an account
+// Decrypt and return the stored private key for the requested account.
 function getPrivateKey(accountName, masterPassword) {
     const accountsData = loadAccounts();
     const account = accountsData.accounts[accountName];
@@ -127,12 +129,13 @@ async function _getAssetPrecision(assetRef) {
 let preferredAccountId = null;
 let preferredAccountName = null;
 
-// Set preferred account
+// Remember the preferred account id/name for reuse in other helpers.
 function setPreferredAccount(accountId, accountName) {
     preferredAccountId = accountId;
     if (accountName) preferredAccountName = accountName;
 }
 
+// Attempt to derive an account name from an id by querying the BitShares chain.
 async function resolveAccountName(accountRef) {
     if (!accountRef) return null;
     if (typeof accountRef !== 'string') return null;
@@ -149,6 +152,7 @@ async function resolveAccountName(accountRef) {
     return null;
 }
 
+// Attempt to derive an account id from a name using on-chain lookup.
 async function resolveAccountId(accountName) {
     if (!accountName) return null;
     if (typeof accountName !== 'string') return null;
@@ -168,7 +172,7 @@ async function resolveAccountId(accountName) {
 // Map accountName -> { userCallbacks: Set<Function>, bsCallback: Function }
 const accountSubscriptions = new Map();
 
-// Helper: create BitShares-level account subscription which fans out to user callbacks
+// Ensure a per-account BitShares subscription exists so we only subscribe once.
 function _ensureAccountSubscriber(accountName) {
     if (accountSubscriptions.has(accountName)) return accountSubscriptions.get(accountName);
 
@@ -199,7 +203,7 @@ function _ensureAccountSubscriber(accountName) {
     return entry;
 }
 
-// Select account for operations
+// Prompt user to select an account after authenticating with the master password.
 async function selectAccount() {
     const masterPassword = authenticate();
     const accountsData = loadAccounts();
@@ -235,6 +239,7 @@ async function selectAccount() {
     return { accountName: selectedAccount, privateKey: privateKey, id: preferredAccountId };
 }
 
+// Fetch open orders for an account after ensuring connection.
 async function readOpenOrders(accountId = null, timeoutMs = 30000) {
     await waitForConnected(timeoutMs);
     try {
@@ -253,6 +258,7 @@ async function readOpenOrders(accountId = null, timeoutMs = 30000) {
     }
 }
 
+// Listen for fill events on an account and notify callbacks.
 async function listenForFills(accountRef, callback) {
     let userCallback = null;
     let accountToken = null;
@@ -314,6 +320,7 @@ async function listenForFills(accountRef, callback) {
     };
 }
 
+// Adjust an existing limit order with new parameters (amount/price).
 async function updateOrder(accountName, privateKey, orderId, newParams) {
     try {
         const acc = createAccountClient(accountName, privateKey);
@@ -358,6 +365,7 @@ async function updateOrder(accountName, privateKey, orderId, newParams) {
     }
 }
 
+// Build and optionally broadcast a new limit order using provided values.
 async function createOrder(accountName, privateKey, amountToSell, sellAssetId, minToReceive, receiveAssetId, expiration, dryRun = false) {
     try {
         const acc = createAccountClient(accountName, privateKey);
@@ -399,6 +407,7 @@ async function createOrder(accountName, privateKey, amountToSell, sellAssetId, m
     }
 }
 
+// Cancel a limit order and broadcast the cancellation.
 async function cancelOrder(accountName, privateKey, orderId) {
     try {
         const acc = createAccountClient(accountName, privateKey);

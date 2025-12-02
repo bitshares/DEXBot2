@@ -1,16 +1,19 @@
 /* Constants and default configuration for OrderManager */
+// Order categories used by the OrderManager when classifying grid entries.
 const ORDER_TYPES = Object.freeze({
     SELL: 'sell',
     BUY: 'buy',
     SPREAD: 'spread'
 });
 
+// Life-cycle states assigned to generated or active orders.
 const ORDER_STATES = Object.freeze({
     VIRTUAL: 'virtual',
     ACTIVE: 'active',
     FILLED: 'filled'
 });
 
+// Defaults applied when instantiating an OrderManager with minimal configuration.
 const DEFAULT_CONFIG = {
     marketPrice: "pool",
     minPrice: "5x",

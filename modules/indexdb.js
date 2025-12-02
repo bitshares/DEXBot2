@@ -1,3 +1,4 @@
+// Simple JSON-backed DB that records bot metadata and last-known order grids under profiles/orders.json.
 const fs = require('fs');
 const path = require('path');
 const { ORDER_STATES } = require('./order/constants');
@@ -31,6 +32,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// Encapsulated access to the JSON store that tracks bot metadata and grid snapshots.
 class IndexDB {
   constructor(options = {}) {
     this.profilesPath = options.profilesPath || PROFILES_INDEXDB_FILE;
