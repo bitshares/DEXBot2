@@ -1,6 +1,4 @@
-# Development files
-
-# Bots, Keys, Orders
+# Account files (Bots, Keys, Orders)
 profiles/
 
 # Config files: tracked example files live under examples/ (use profiles/ for real secrets)
