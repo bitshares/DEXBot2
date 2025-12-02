@@ -49,23 +49,23 @@ function listBots(bots) {
         return;
     }
     bots.forEach((bot, index) => {
-        const name = bot.name || `<unnamed-${index}>`;
+        const name = bot.name || `<unnamed-${index + 1}>`;
         const inactiveSuffix = bot.active === false ? ' [inactive]' : '';
         const dryRunSuffix = bot.dryRun ? ' (dryRun)' : '';
-        console.log(`  ${index}: ${name}${inactiveSuffix}${dryRunSuffix} ${bot.assetA || '?'} / ${bot.assetB || '?'}`);
+        console.log(`  ${index + 1}: ${name}${inactiveSuffix}${dryRunSuffix} ${bot.assetA || '?'} / ${bot.assetB || '?'}`);
     });
 }
 
 function selectBotIndex(bots, promptMessage) {
     if (!bots.length) return null;
     listBots(bots);
-    const raw = readline.question(`${promptMessage} [0-${bots.length - 1}]: `).trim();
+    const raw = readline.question(`${promptMessage} [1-${bots.length}]: `).trim();
     const idx = Number(raw);
-    if (Number.isNaN(idx) || idx < 0 || idx >= bots.length) {
+    if (Number.isNaN(idx) || idx < 1 || idx > bots.length) {
         console.log('Invalid selection.');
         return null;
     }
-    return idx;
+    return idx - 1;
 }
 
 function askString(promptText, defaultValue) {
@@ -185,35 +185,16 @@ async function main() {
     let exit = false;
     while (!exit) {
         console.log('\nActions:');
-        console.log('  1) List bots');
+        console.log('  1) Modify bot');
         console.log('  2) New bot');
-        console.log('  3) Copy bot');
-        console.log('  4) Modify bot');
-        console.log('  5) Delete bot');
+        console.log('  3) Delete bot');
+        console.log('  4) Copy bot');
+        console.log('  5) List bots');
         console.log('  6) Exit');
         const selection = readline.question('Choose an action [1-6]: ').trim();
         console.log('');
         switch (selection) {
-            case '1':
-                listBots(config.bots);
-                break;
-            case '2': {
-                const entry = promptBotData();
-                config.bots.push(entry);
-                saveBotsConfig(config, filePath);
-                console.log(`Added bot '${entry.name}' to ${path.basename(filePath)}.`);
-                break;
-            }
-            case '3': {
-                const idx = selectBotIndex(config.bots, 'Select bot to copy');
-                if (idx === null) break;
-                const entry = promptBotData(config.bots[idx]);
-                config.bots.splice(idx + 1, 0, entry);
-                saveBotsConfig(config, filePath);
-                console.log(`Copied bot '${entry.name}' into ${path.basename(filePath)}.`);
-                break;
-            }
-            case '4': {
+            case '1': {
                 const idx = selectBotIndex(config.bots, 'Select bot to modify');
                 if (idx === null) break;
                 const entry = promptBotData(config.bots[idx]);
@@ -222,19 +203,39 @@ async function main() {
                 console.log(`Updated bot '${entry.name}' in ${path.basename(filePath)}.`);
                 break;
             }
-            case '5': {
+            case '2': {
+                const entry = promptBotData();
+                config.bots.push(entry);
+                saveBotsConfig(config, filePath);
+                console.log(`Added bot '${entry.name}' to ${path.basename(filePath)}.`);
+                break;
+            }
+            case '3': {
                 const idx = selectBotIndex(config.bots, 'Select bot to delete');
                 if (idx === null) break;
-                const confirm = askBoolean(`Delete '${config.bots[idx].name || `<unnamed-${idx}>`}?`, false);
+                const placeholderName = config.bots[idx].name || `<unnamed-${idx + 1}>`;
+                const confirm = askBoolean(`Delete '${placeholderName}'?`, false);
                 if (confirm) {
                     const removed = config.bots.splice(idx, 1)[0];
                     saveBotsConfig(config, filePath);
-                    console.log(`Removed bot '${removed.name || `<unnamed-${idx}>`}' from ${path.basename(filePath)}.`);
+                    console.log(`Removed bot '${removed.name || placeholderName}' from ${path.basename(filePath)}.`);
                 } else {
                     console.log('Deletion cancelled.');
                 }
                 break;
             }
+            case '4': {
+                const idx = selectBotIndex(config.bots, 'Select bot to copy');
+                if (idx === null) break;
+                const entry = promptBotData(config.bots[idx]);
+                config.bots.splice(idx + 1, 0, entry);
+                saveBotsConfig(config, filePath);
+                console.log(`Copied bot '${entry.name}' into ${path.basename(filePath)}.`);
+                break;
+            }
+            case '5':
+                listBots(config.bots);
+                break;
             case '6':
                 exit = true;
                 break;
