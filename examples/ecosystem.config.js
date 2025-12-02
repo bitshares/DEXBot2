@@ -29,7 +29,7 @@ module.exports = {
         BOT_NUMBER: "01",
         MARKET: "BTC-USD",
         // If you want, set PREFERRED_ACCOUNT to the account name as known in profiles/bots.json
-        PREFERRED_ACCOUNT: "test-account"
+        PREFERRED_ACCOUNT: "bitshares-account"
       },
       max_restarts: 13,
       min_uptime: 86400000,
