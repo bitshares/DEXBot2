@@ -15,6 +15,10 @@ class OrderManager {
         this.targetSpreadCount = 0;
         this.currentSpreadCount = 0;
         this.outOfSpread = false;
+        this.assets = null; // To be populated in initializeOrderGrid
+        // Promise that resolves when accountTotals (both buy & sell) are populated.
+        this._accountTotalsPromise = null;
+        this._accountTotalsResolve = null;
     }
 
     // Reconcile funds totals based on config, input percentages, and prior committed balances.
@@ -27,7 +31,12 @@ class OrderManager {
                 const p = parsePercentageString(value);
                 if (p !== null) {
                     if (total === null || total === undefined) {
-                        this.logger && this.logger.log && this.logger.log(`Cannot resolve percentage-based botFunds '${value}' because account total is not set. Defaulting to 0`, 'warn');
+                        this.logger && this.logger.log && this.logger.log(`Cannot resolve percentage-based botFunds '${value}' because account total is not set. Attempting on-chain lookup (will default to 0 while fetching).`, 'warn');
+                        // Kick off an async fetch of account balances if possible; do not block here.
+                        if (!this._isFetchingTotals) {
+                            this._isFetchingTotals = true;
+                            this._fetchAccountBalancesAndSetTotals().finally(() => { this._isFetchingTotals = false; });
+                        }
                         return 0;
                     }
                     return total * p;
@@ -55,16 +64,98 @@ class OrderManager {
     setAccountTotals(totals = { buy: null, sell: null }) {
         this.accountTotals = { ...this.accountTotals, ...totals };
         this.resetFunds();
+        // If someone is waiting for account totals, resolve the waiter once both values are available.
+        const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
+        const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
+        if (haveBuy && haveSell && typeof this._accountTotalsResolve === 'function') {
+            try { this._accountTotalsResolve(); } catch (e) { /* ignore */ }
+            this._accountTotalsPromise = null; this._accountTotalsResolve = null;
+        }
     }
 
-    // Create the order grid and ensure at least one batch of active orders exist.
+    // Wait until accountTotals have both buy and sell present, or until timeout elapses.
+    async waitForAccountTotals(timeoutMs = 10000) {
+        const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
+        const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
+        if (haveBuy && haveSell) return; // already satisfied
+
+        if (!this._accountTotalsPromise) {
+            this._accountTotalsPromise = new Promise((resolve) => { this._accountTotalsResolve = resolve; });
+        }
+
+        await Promise.race([
+            this._accountTotalsPromise,
+            new Promise(resolve => setTimeout(resolve, timeoutMs))
+        ]);
+    }
+
+    async _fetchAccountBalancesAndSetTotals() {
+        // Attempt to read balances from the chain for configured account.
+        try {
+            const { BitShares } = require('../bitshares_client');
+            if (!BitShares || !BitShares.db) return;
+
+            // We need an account id or name to query
+            const accountIdOrName = this.accountId || this.account || null;
+            if (!accountIdOrName) return;
+
+            // Ensure assets are initialized so we have ids/precisions
+            try { await this._initializeAssets(); } catch (err) { /* best-effort */ }
+            const assetAId = this.assets && this.assets.assetA && this.assets.assetA.id;
+            const assetBId = this.assets && this.assets.assetB && this.assets.assetB.id;
+            const precisionA = this.assets && this.assets.assetA && this.assets.assetA.precision;
+            const precisionB = this.assets && this.assets.assetB && this.assets.assetB.precision;
+
+            if (!assetAId || !assetBId) return;
+
+            const full = await BitShares.db.get_full_accounts([accountIdOrName], false);
+            if (!full || !Array.isArray(full) || !full[0]) return;
+            const accountData = full[0][1];
+            const balances = accountData && accountData.balances ? accountData.balances : [];
+
+            const findBalanceInt = (assetId) => {
+                const b = balances.find(x => x.asset_type === assetId || x.asset_type === assetId.toString());
+                return b ? Number(b.balance || b.amount || 0) : 0;
+            };
+
+            const rawSell = findBalanceInt(assetAId);
+            const rawBuy = findBalanceInt(assetBId);
+
+            const buyTotal = Number.isFinite(Number(rawBuy)) ? blockchainToFloat(rawBuy, precisionB !== undefined ? precisionB : 8) : null;
+            const sellTotal = Number.isFinite(Number(rawSell)) ? blockchainToFloat(rawSell, precisionA !== undefined ? precisionA : 8) : null;
+
+            this.logger && this.logger.log && this.logger.log('Fetched on-chain balances for accountTotals', 'info');
+            this.setAccountTotals({ buy: buyTotal, sell: sellTotal });
+        } catch (err) {
+            this.logger && this.logger.log && this.logger.log(`Failed to fetch on-chain balances: ${err && err.message ? err.message : err}`, 'warn');
+        }
+    }
+
+    async _initializeAssets() {
+        if (this.assets) return; // Already initialized
+        try {
+            const { lookupAsset } = require('./price');
+            const { BitShares } = require('../bitshares_client');
+            this.assets = {
+                assetA: await lookupAsset(BitShares, this.config.assetA),
+                assetB: await lookupAsset(BitShares, this.config.assetB)
+            };
+            if (!this.assets.assetA || !this.assets.assetB) {
+                throw new Error(`Could not resolve assets ${this.config.assetA}/${this.config.assetB}`);
+            }
+        } catch (err) {
+            this.logger.log(`Asset metadata lookup failed: ${err.message}`, 'error');
+            throw err;
+        }
+    }
+
     async initialize() {
         await this.initializeOrderGrid();
-        await this.synchronizeOrders();
     }
 
     // Derive marketPrice when requested then build the virtual order grid.
     async initializeOrderGrid() {
+        await this._initializeAssets();
         const mpRaw = this.config.marketPrice;
         const mpIsPool = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'pool';
         const mpIsMarket = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'market';
@@ -110,6 +201,35 @@ class OrderManager {
         if (!Number.isFinite(mp)) { throw new Error('Cannot initialize order grid: marketPrice is not a valid number'); }
         if (mp < minP || mp > maxP) { throw new Error(`Refusing to initialize order grid because marketPrice ${mp} is outside configured bounds [${minP}, ${maxP}]`); }
 
+        // If botFunds are expressed as percentages and we have an account id/name
+        // attempt a blocking on-chain fetch so percentages can be resolved before
+        // building the order grid. This will wait up to 10s by default.
+        try {
+            const botFunds = this.config && this.config.botFunds ? this.config.botFunds : {};
+            const needsPercent = (v) => typeof v === 'string' && v.includes('%');
+            if ((needsPercent(botFunds.buy) || needsPercent(botFunds.sell)) && (this.accountId || this.account)) {
+                // If account totals are already present (possibly from a prior
+                // non-blocking fetch), skip the blocking wait to avoid duplicate
+                // fetches and logs.
+                const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
+                const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
+                if (haveBuy && haveSell) {
+                    this.logger && this.logger.log && this.logger.log('Account totals already available; skipping blocking fetch.', 'debug');
+                } else {
+                    const timeoutMs = Number.isFinite(Number(this.config.waitForAccountTotalsMs)) ? Number(this.config.waitForAccountTotalsMs) : 10000;
+                    this.logger && this.logger.log && this.logger.log(`Waiting up to ${timeoutMs}ms for on-chain account totals to resolve percentage-based botFunds...`, 'info');
+                    try {
+                        // Ensure a background fetch has been initiated (resetFunds() may have kicked one off earlier).
+                        if (!this._isFetchingTotals) { this._isFetchingTotals = true; this._fetchAccountBalancesAndSetTotals().finally(() => { this._isFetchingTotals = false; }); }
+                        await this.waitForAccountTotals(timeoutMs);
+                        this.logger && this.logger.log && this.logger.log('Account totals fetch completed (or timed out).', 'info');
+                    } catch (err) {
+                        this.logger && this.logger.log && this.logger.log(`Account totals fetch failed: ${err && err.message ? err.message : err}`, 'warn');
+                    }
+                }
+            }
+        } catch (err) { /* don't let failures block grid creation */ }
+
         const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(this.config);
         const sizedOrders = OrderGridGenerator.calculateOrderSizes(orders, this.config, this.funds.available.sell, this.funds.available.buy);
 
@@ -125,6 +245,180 @@ class OrderManager {
         this.logFundsStatus(); this.logger.logOrderGrid(Array.from(this.orders.values()), this.config.marketPrice);
     }
 
+    loadGrid(grid) {
+        if (!grid || !Array.isArray(grid)) return;
+        this.orders.clear();
+        this.resetFunds();
+        grid.forEach(order => {
+            this.orders.set(order.id, order);
+            if (order.state === 'active') {
+                if (order.type === ORDER_TYPES.BUY) {
+                    this.funds.committed.buy += order.size;
+                    this.funds.available.buy -= order.size;
+                } else if (order.type === ORDER_TYPES.SELL) {
+                    this.funds.committed.sell += order.size;
+                    this.funds.available.sell -= order.size;
+                }
+            }
+        });
+        this.logger.log(`Loaded ${this.orders.size} orders from persisted grid state.`, 'info');
+        this.logFundsStatus();
+    }
+
+
+
+    _parseChainOrder(chainOrder) {
+        if (!chainOrder || !chainOrder.sell_price || !this.assets) return null;
+        const { base, quote } = chainOrder.sell_price;
+        if (!base || !quote || !base.asset_id || !quote.asset_id || base.amount == 0) return null;
+        let price;
+        let type;
+        if (base.asset_id === this.assets.assetA.id && quote.asset_id === this.assets.assetB.id) {
+            price = (quote.amount / base.amount) * Math.pow(10, this.assets.assetA.precision - this.assets.assetB.precision);
+            type = ORDER_TYPES.SELL;
+        } else if (base.asset_id === this.assets.assetB.id && quote.asset_id === this.assets.assetA.id) {
+            price = (base.amount / quote.amount) * Math.pow(10, this.assets.assetB.precision - this.assets.assetA.precision);
+            type = ORDER_TYPES.BUY;
+        } else {
+            return null;
+        }
+        return { orderId: chainOrder.id, price: price, type: type };
+    }
+
+    _findMatchingGridOrder(parsedChainOrder) {
+        if (parsedChainOrder.orderId) {
+            for (const gridOrder of this.orders.values()) {
+                if (gridOrder.orderId === parsedChainOrder.orderId) return gridOrder;
+            }
+        }
+        const PRICE_TOLERANCE = 1e-9;
+        for (const gridOrder of this.orders.values()) {
+            if (gridOrder.state === ORDER_STATES.VIRTUAL && !gridOrder.orderId) {
+                const priceDiff = Math.abs(gridOrder.price - parsedChainOrder.price);
+                if (gridOrder.type === parsedChainOrder.type && priceDiff < PRICE_TOLERANCE) {
+                    return gridOrder;
+                }
+            }
+        }
+        return null;
+    }
+
+    async synchronizeWithChain(chainData, source) {
+        if (!this.assets) {
+            this.logger.log('Asset metadata not available, cannot synchronize.', 'warn');
+            return;
+        }
+        this.logger.log(`Syncing from ${source}`, 'info');
+        switch (source) {
+            case 'createOrder': {
+                const { gridOrderId, chainOrderId } = chainData;
+                const gridOrder = this.orders.get(gridOrderId);
+                if (gridOrder) {
+                    gridOrder.state = ORDER_STATES.ACTIVE;
+                    gridOrder.orderId = chainOrderId;
+                    this.orders.set(gridOrder.id, gridOrder);
+                    this.logger.log(`Order ${gridOrder.id} activated with on-chain ID ${gridOrder.orderId}`, 'info');
+                }
+                break;
+            }
+            case 'listenForFills': {
+                const fillOp = chainData;
+                const orderId = fillOp.order_id;
+                const gridOrder = this._findMatchingGridOrder({ orderId });
+                if (gridOrder && gridOrder.state === ORDER_STATES.ACTIVE) {
+                    gridOrder.state = ORDER_STATES.FILLED;
+                    this.orders.set(gridOrder.id, gridOrder);
+                    this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) marked as FILLED`, 'info');
+                    await this.processFilledOrders([gridOrder]);
+                }
+                break;
+            }
+            case 'cancelOrder': {
+                const orderId = chainData;
+                const gridOrder = this._findMatchingGridOrder({ orderId });
+                if (gridOrder) {
+                    gridOrder.state = ORDER_STATES.VIRTUAL;
+                    gridOrder.orderId = null;
+                    this.orders.set(gridOrder.id, gridOrder);
+                    this.logger.log(`Order ${gridOrder.id} (${orderId}) cancelled and reverted to VIRTUAL`, 'info');
+                }
+                break;
+            }
+            case 'readOpenOrders': {
+                const seenOnChain = new Set();
+                for (const chainOrder of chainData) {
+                    const parsedOrder = this._parseChainOrder(chainOrder);
+                    if (!parsedOrder) continue;
+                    seenOnChain.add(parsedOrder.orderId);
+                    const gridOrder = this._findMatchingGridOrder(parsedOrder);
+                    if (gridOrder && gridOrder.state !== ORDER_STATES.ACTIVE) {
+                        gridOrder.state = ORDER_STATES.ACTIVE;
+                        gridOrder.orderId = parsedOrder.orderId;
+                        this.orders.set(gridOrder.id, gridOrder);
+                        this.logger.log(`Order ${gridOrder.id} found on-chain, marked ACTIVE`, 'debug');
+                    }
+                }
+                for (const gridOrder of this.orders.values()) {
+                    if (gridOrder.state === ORDER_STATES.ACTIVE && !seenOnChain.has(gridOrder.orderId)) {
+                        gridOrder.state = ORDER_STATES.VIRTUAL;
+                        this.logger.log(`Active order ${gridOrder.id} (${gridOrder.orderId}) not on-chain, reverting to VIRTUAL`, 'warn');
+                        gridOrder.orderId = null;
+                        this.orders.set(gridOrder.id, gridOrder);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    async resyncGridFromChain(readOpenOrdersFn, cancelOrderFn) {
+        this.logger.log('Starting full grid resynchronization from blockchain...', 'info');
+        await this.initializeOrderGrid();
+        this.logger.log('Virtual grid has been regenerated.', 'debug');
+        const chainOrders = await readOpenOrdersFn();
+        if (!Array.isArray(chainOrders)) {
+            this.logger.log('Could not fetch open orders for resync.', 'error');
+            return;
+        }
+        this.logger.log(`Found ${chainOrders.length} open orders on-chain.`, 'info');
+        const matchedChainOrderIds = new Set();
+        for (const gridOrder of this.orders.values()) {
+            let bestMatch = null;
+            let smallestDiff = Infinity;
+            for (const chainOrder of chainOrders) {
+                if (matchedChainOrderIds.has(chainOrder.id)) continue;
+                const parsedChainOrder = this._parseChainOrder(chainOrder);
+                if (!parsedChainOrder || parsedChainOrder.type !== gridOrder.type) continue;
+                const priceDiff = Math.abs(parsedChainOrder.price - gridOrder.price);
+                if (priceDiff < smallestDiff) {
+                    smallestDiff = priceDiff;
+                    bestMatch = chainOrder;
+                }
+            }
+            const PRICE_TOLERANCE = 1e-8;
+            if (bestMatch && smallestDiff < PRICE_TOLERANCE * gridOrder.price) {
+                gridOrder.state = ORDER_STATES.ACTIVE;
+                gridOrder.orderId = bestMatch.id;
+                this.orders.set(gridOrder.id, gridOrder);
+                matchedChainOrderIds.add(bestMatch.id);
+                this.logger.log(`Matched grid order ${gridOrder.id} to on-chain order ${bestMatch.id}.`, 'debug');
+            }
+        }
+        for (const chainOrder of chainOrders) {
+            if (!matchedChainOrderIds.has(chainOrder.id)) {
+                this.logger.log(`Cancelling unmatched on-chain order ${chainOrder.id}.`, 'info');
+                try {
+                    await cancelOrderFn(chainOrder.id);
+                } catch (err) {
+                    this.logger.log(`Failed to cancel order ${chainOrder.id}: ${err.message}`, 'error');
+                }
+            }
+        }
+        this.logger.log('Full grid resynchronization complete.', 'info');
+        this.logFundsStatus();
+        this.logger.logOrderGrid(Array.from(this.orders.values()), this.config.marketPrice);
+    }
+
     // Print a summary of available vs committed funds for diagnostics.
     logFundsStatus() {
         const buyName = this.config.assetB || 'quote'; const sellName = this.config.assetA || 'base';
@@ -133,27 +427,33 @@ class OrderManager {
         console.log(`Committed: Buy ${this.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${this.funds.committed.sell.toFixed(8)} ${sellName}`);
     }
 
-    // Ensure the requested number of active orders are activated.
-    async synchronizeOrders() {
-        const activeOrders = Array.from(this.orders.values()).filter(o => o.state === ORDER_STATES.ACTIVE);
-        if (activeOrders.length === 0) { await this.activateInitialOrders(); return; } return;
-    }
-
-    // Activate the initial set of sell/buy orders that surround the market price.
-    async activateInitialOrders() {
-        const virtualSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL).sort((a, b) => a.price - b.price);
-        const virtualBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL).sort((a, b) => b.price - a.price);
+    getInitialOrdersToActivate() {
         const sellCount = Math.max(0, Number(this.config.activeOrders && this.config.activeOrders.sell ? this.config.activeOrders.sell : 1));
         const buyCount = Math.max(0, Number(this.config.activeOrders && this.config.activeOrders.buy ? this.config.activeOrders.buy : 1));
-        for (let i = 0; i < Math.min(sellCount, virtualSells.length); i++) await this.activateOrder(virtualSells[i]);
-        for (let i = 0; i < Math.min(buyCount, virtualBuys.length); i++) await this.activateOrder(virtualBuys[i]);
+
+        // --- Sells ---
+        const allVirtualSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL);
+        // Sort closest to market price first
+        allVirtualSells.sort((a, b) => a.price - b.price);
+        // Take the block of orders that will become active
+        const futureActiveSells = allVirtualSells.slice(0, sellCount);
+        // Sort that block from the outside-in
+        futureActiveSells.sort((a, b) => b.price - a.price);
+
+        // --- Buys ---
+        const allVirtualBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL);
+        // Sort closest to market price first
+        allVirtualBuys.sort((a, b) => b.price - a.price);
+        // Take the block of orders that will become active
+        const futureActiveBuys = allVirtualBuys.slice(0, buyCount);
+        // Sort that block from the outside-in
+        futureActiveBuys.sort((a, b) => a.price - b.price);
+        
+        return [...futureActiveSells, ...futureActiveBuys];
     }
 
     // Filter tracked orders by type and state to ease bookkeeping.
     getOrdersByTypeAndState(type, state) { const ordersArray = Array.from(this.orders.values()); return ordersArray.filter(o => (type === null || o.type === type) && (state === null || o.state === state)); }
-
-    // Flip a virtual order into the ACTIVE state once conditions allow.
-    async activateOrder(order) { if (!order || order.size <= 0) return false; try { const updatedOrder = { ...order, state: ORDER_STATES.ACTIVE }; this.orders.set(order.id, updatedOrder); return true; } catch (error) { this.logger.log(`Error activating order: ${error.message}`, 'error'); return false; } }
 
     // Periodically poll for fills and recalculate orders on demand.
     async fetchOrderUpdates(options = { calculate: false }) {
@@ -177,26 +477,26 @@ class OrderManager {
 
     // Activate virtual spread orders and transition them to buy or sell as needed.
     async activateSpreadOrders(targetType, count) {
-        if (count <= 0) return;
+        if (count <= 0) return 0;
         const spreadOrders = this.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL)
             .filter(o => (targetType === ORDER_TYPES.BUY && o.price < this.config.marketPrice) || (targetType === ORDER_TYPES.SELL && o.price > this.config.marketPrice))
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
         const availableFunds = targetType === ORDER_TYPES.BUY ? this.funds.available.buy : this.funds.available.sell;
-        if (availableFunds <= 0) { this.logger.log(`No available funds to create ${targetType} orders`, 'warn'); return; }
+        if (availableFunds <= 0) { this.logger.log(`No available funds to create ${targetType} orders`, 'warn'); return 0; }
         let desiredCount = Math.min(count, spreadOrders.length);
-        if (desiredCount <= 0) return;
+        if (desiredCount <= 0) return 0;
         const minSize = Number(this.config.minOrderSize || 1e-8);
         const maxByFunds = minSize > 0 ? Math.floor(availableFunds / minSize) : desiredCount;
         const ordersToCreate = Math.max(0, Math.min(desiredCount, maxByFunds || desiredCount));
-        if (ordersToCreate === 0) { this.logger.log(`Insufficient funds to create any ${targetType} orders (available=${availableFunds}, minOrderSize=${minSize})`, 'warn'); return; }
+        if (ordersToCreate === 0) { this.logger.log(`Insufficient funds to create any ${targetType} orders (available=${availableFunds}, minOrderSize=${minSize})`, 'warn'); return 0; }
         const actualOrders = spreadOrders.slice(0, ordersToCreate);
         const fundsPerOrder = availableFunds / actualOrders.length;
-        if (fundsPerOrder < minSize) { this.logger.log(`Available funds insufficient for requested orders after adjustment: fundsPerOrder=${fundsPerOrder} < minOrderSize=${minSize}`, 'warn'); return; }
+        if (fundsPerOrder < minSize) { this.logger.log(`Available funds insufficient for requested orders after adjustment: fundsPerOrder=${fundsPerOrder} < minOrderSize=${minSize}`, 'warn'); return 0; }
         actualOrders.forEach(order => {
             if (fundsPerOrder <= 0) return;
             this.orders.set(order.id, { ...order, type: targetType, size: fundsPerOrder, state: ORDER_STATES.ACTIVE });
             this.currentSpreadCount--;
-            if (targetType === ORDER_TYPES.BUY) { this.funds.available.buy -= fundsPerOrder; this.funds.committed.buy += fundsPerOrder; }
+            if (targetType === ORDER_TYPES.BUY) { this.funds.available.buy -= fundsPerOrder; this.funds.committed.buy += fundsPerOrder; } 
             else { this.funds.available.sell -= fundsPerOrder; this.funds.committed.sell += fundsPerOrder; }
             this.logger.log(`Created ${targetType} order at ${order.price.toFixed(2)} (Amount: ${fundsPerOrder.toFixed(8)})`, 'info');
         });
@@ -242,4 +542,3 @@ function resolveConfiguredPriceBound(value, fallback, marketPrice, mode) {
 }
 
 module.exports = { OrderManager };
-

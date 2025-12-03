@@ -141,6 +141,14 @@ class IndexDB {
     this._persist();
   }
 
+  loadBotGrid(botKey) {
+    if (this.data && this.data.bots && this.data.bots[botKey]) {
+      const botData = this.data.bots[botKey];
+      return botData.grid || null;
+    }
+    return null;
+  }
+
   _serializeOrder(order = {}) {
     const priceValue = Number(order.price !== undefined && order.price !== null ? order.price : 0);
     const sizeValue = Number(order.size !== undefined && order.size !== null ? order.size : 0);

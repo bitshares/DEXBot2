@@ -324,7 +324,8 @@ async function listenForFills(accountRef, callback) {
 async function updateOrder(accountName, privateKey, orderId, newParams) {
     try {
         const acc = createAccountClient(accountName, privateKey);
-        const orders = await readOpenOrders(acc.id);
+        await acc.initPromise;
+        const orders = await readOpenOrders(acc.account.id);
         const order = orders.find(o => o.id === orderId);
         if (!order) throw new Error(`Order ${orderId} not found`);
 
@@ -369,6 +370,7 @@ async function updateOrder(accountName, privateKey, orderId, newParams) {
 async function createOrder(accountName, privateKey, amountToSell, sellAssetId, minToReceive, receiveAssetId, expiration, dryRun = false) {
     try {
         const acc = createAccountClient(accountName, privateKey);
+        await acc.initPromise;
 
         if (!expiration) {
             const now = new Date();
@@ -384,10 +386,12 @@ async function createOrder(accountName, privateKey, amountToSell, sellAssetId, m
 
         const createParams = {
             fee: { amount: 0, asset_id: '1.3.0' },
-            seller: acc.id,
+            seller: acc.account.id,
             amount_to_sell: { amount: amountToSellInt, asset_id: sellAssetId },
             min_to_receive: { amount: minToReceiveInt, asset_id: receiveAssetId },
-            expiration: expiration
+            expiration: expiration,
+            fill_or_kill: false,
+            extensions: []
         };
 
         const tx = acc.newTx();
@@ -398,9 +402,9 @@ async function createOrder(accountName, privateKey, amountToSell, sellAssetId, m
             return tx;
         }
 
-        await tx.broadcast();
+        const result = await tx.broadcast();
         console.log(`Limit order created successfully for account ${accountName}`);
-        return tx;
+        return result;
     } catch (error) {
         console.error('Error creating limit order:', error.message);
         throw error;
@@ -411,7 +415,8 @@ async function createOrder(accountName, privateKey, amountToSell, sellAssetId, m
 async function cancelOrder(accountName, privateKey, orderId) {
     try {
         const acc = createAccountClient(accountName, privateKey);
-        const cancelParams = { fee: { amount: 0, asset_id: '1.3.0' }, order: orderId, fee_paying_account: acc.id };
+        await acc.initPromise;
+        const cancelParams = { fee: { amount: 0, asset_id: '1.3.0' }, order: orderId, fee_paying_account: acc.account.id };
         const tx = acc.newTx();
         tx.limit_order_cancel(cancelParams);
         await tx.broadcast();

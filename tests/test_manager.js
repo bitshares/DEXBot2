@@ -29,11 +29,16 @@ mgr.resetFunds();
 assert.strictEqual(mgr.funds.available.buy, 1000);
 assert.strictEqual(mgr.funds.available.sell, 10);
 
-// activateOrder returns false for non-positive size
-const res = mgr.activateOrder({ id: 'x', size: 0 });
-res.then(v => assert.strictEqual(v, false));
+// activateSpreadOrders should return 0 when asked to create 0 orders
+// activateSpreadOrders should return 0 when asked to create 0 orders
+(async () => {
+    const createdZero = await mgr.activateSpreadOrders('buy', 0);
+    assert.strictEqual(createdZero, 0);
+})();
 
 (async () => {
+    // Provide mock asset metadata to avoid on-chain lookups in unit tests
+    mgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.1', precision: 5 } };
     await mgr.initializeOrderGrid();
     // after initialize there should be orders
     assert(mgr.orders.size > 0, 'initializeOrderGrid should create orders');
