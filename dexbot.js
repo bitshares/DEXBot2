@@ -195,34 +195,65 @@ class DEXBot {
             if (i < buyOrders.length) interleavedOrders.push(buyOrders[i]);
         }
 
-        for (const order of interleavedOrders) {
-            try {
-                this.manager.logger.log(`Placing ${order.type} order: size=${order.size}, price=${order.price}`, 'debug');
-                const { assetA, assetB } = this.manager.assets;
-                let amountToSell, sellAssetId, minToReceive, receiveAssetId;
+        const { assetA, assetB } = this.manager.assets;
 
-                if (order.type === 'sell') {
-                    amountToSell = order.size;
-                    sellAssetId = assetA.id;
-                    minToReceive = order.size * order.price;
-                    receiveAssetId = assetB.id;
-                } else { // buy
-                    amountToSell = order.size;
-                    sellAssetId = assetB.id;
-                    minToReceive = order.size / order.price;
-                    receiveAssetId = assetA.id;
-                }
-
-                const result = await accountOrders.createOrder(
-                    this.account, this.privateKey, amountToSell, sellAssetId,
-                    minToReceive, receiveAssetId, null, false
-                );
-
-                const newOrderId = result[0].trx.operation_results[0][1];
-                await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId: newOrderId }, 'createOrder');
-            } catch (err) {
-                this.manager.logger.log(`Failed to place order ${order.id}: ${err.message}`, 'error');
+        const buildCreateOrderArgs = (order) => {
+            let amountToSell, sellAssetId, minToReceive, receiveAssetId;
+            if (order.type === 'sell') {
+                amountToSell = order.size;
+                sellAssetId = assetA.id;
+                minToReceive = order.size * order.price;
+                receiveAssetId = assetB.id;
+            } else {
+                amountToSell = order.size;
+                sellAssetId = assetB.id;
+                minToReceive = order.size / order.price;
+                receiveAssetId = assetA.id;
             }
+            return { amountToSell, sellAssetId, minToReceive, receiveAssetId };
+        };
+
+        const createAndSyncOrder = async (order) => {
+            this.manager.logger.log(`Placing ${order.type} order: size=${order.size}, price=${order.price}`, 'debug');
+            const args = buildCreateOrderArgs(order);
+            const result = await accountOrders.createOrder(
+                this.account, this.privateKey, args.amountToSell, args.sellAssetId,
+                args.minToReceive, args.receiveAssetId, null, false
+            );
+            const chainOrderId = result && result[0] && result[0].trx && result[0].trx.operation_results && result[0].trx.operation_results[0] && result[0].trx.operation_results[0][1];
+            if (!chainOrderId) {
+                throw new Error('Order creation response missing order_id');
+            }
+            await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId }, 'createOrder');
+        };
+
+        const placeOrderGroup = async (ordersGroup) => {
+            const settled = await Promise.allSettled(ordersGroup.map(order => createAndSyncOrder(order)));
+            settled.forEach((result, index) => {
+                if (result.status === 'rejected') {
+                    const order = ordersGroup[index];
+                    const reason = result.reason;
+                    const errMsg = reason && reason.message ? reason.message : `${reason}`;
+                    this.manager.logger.log(`Failed to place ${order.type} order ${order.id}: ${errMsg}`, 'error');
+                }
+            });
+        };
+
+        const orderGroups = [];
+        for (let i = 0; i < interleavedOrders.length; ) {
+            const current = interleavedOrders[i];
+            const next = interleavedOrders[i + 1];
+            if (next && current.type === 'sell' && next.type === 'buy') {
+                orderGroups.push([current, next]);
+                i += 2;
+            } else {
+                orderGroups.push([current]);
+                i += 1;
+            }
+        }
+
+        for (const group of orderGroups) {
+            await placeOrderGroup(group);
         }
         indexDB.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
     }
