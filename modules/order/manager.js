@@ -303,7 +303,7 @@ class OrderManager {
      * This represents the minimum price change that could occur due to integer rounding
      * on the blockchain when converting float amounts to integer satoshis.
      * 
-     * @param {number} gridPrice - The price in the grid (indexDB)
+     * @param {number} gridPrice - The price in the grid (stored snapshot)
      * @param {number} orderSize - The order size
      * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
      * @returns {number} - Maximum allowable absolute price difference
@@ -345,7 +345,7 @@ class OrderManager {
 
     /**
      * Check if a chain order price is within acceptable tolerance of the grid order price.
-     * @param {Object} gridOrder - The grid order from indexDB
+     * @param {Object} gridOrder - The grid order from stored snapshot
      * @param {Object} chainOrder - The parsed chain order (with price, type, size)
      * @returns {Object} - { isWithinTolerance: boolean, priceDiff: number, tolerance: number }
      */
