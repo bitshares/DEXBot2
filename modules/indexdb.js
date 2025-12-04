@@ -149,6 +149,58 @@ class IndexDB {
     return null;
   }
 
+  /**
+   * Return the total amount of assetA/assetB present in the stored DB grid
+   * for the given bot key or bot name. Sums sizes separately for active and virtual
+   * orders. The grid is stored as snapshots with { type, state, size }.
+   *
+   * @param {String} botKeyOrName - either the internal bot key or the bot name
+   * @returns {Object|null} { assetA: { active, virtual }, assetB: { active, virtual }, meta } or null if not found
+   */
+  getDBAssetBalances(botKeyOrName) {
+    if (!botKeyOrName) return null;
+    // Find entry by key or by matching meta.name (case-insensitive)
+    let key = null;
+    if (this.data && this.data.bots) {
+      if (this.data.bots[botKeyOrName]) key = botKeyOrName;
+      else {
+        const lower = String(botKeyOrName).toLowerCase();
+        for (const k of Object.keys(this.data.bots)) {
+          const meta = this.data.bots[k] && this.data.bots[k].meta;
+          if (meta && meta.name && String(meta.name).toLowerCase() === lower) { key = k; break; }
+        }
+      }
+    }
+    if (!key) return null;
+    const entry = this.data.bots[key];
+    if (!entry) return null;
+    const meta = entry.meta || {};
+    const grid = Array.isArray(entry.grid) ? entry.grid : [];
+
+    const sums = {
+      assetA: { active: 0, virtual: 0 },
+      assetB: { active: 0, virtual: 0 },
+      meta: { key, name: meta.name || null, assetA: meta.assetA || null, assetB: meta.assetB || null }
+    };
+
+    for (const o of grid) {
+      const size = Number(o && o.size) || 0;
+      const state = o && o.state ? String(o.state).toLowerCase() : '';
+      const typ = o && o.type ? String(o.type).toLowerCase() : '';
+
+      if (typ === 'sell') {
+        if (state === 'active') sums.assetA.active += size;
+        else if (state === 'virtual') sums.assetA.virtual += size;
+      } else if (typ === 'buy') {
+        if (state === 'active') sums.assetB.active += size;
+        else if (state === 'virtual') sums.assetB.virtual += size;
+      }
+      // spread/other types are ignored because sizes usually 0 or not meaningful
+    }
+
+    return sums;
+  }
+
   _serializeOrder(order = {}) {
     const priceValue = Number(order.price !== undefined && order.price !== null ? order.price : 0);
     const sizeValue = Number(order.size !== undefined && order.size !== null ? order.size : 0);
