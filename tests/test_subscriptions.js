@@ -1,4 +1,4 @@
-const orders = require('../modules/account_orders');
+const orders = require('../modules/chain_orders');
 
 console.log('Testing listenForFills subscribe/unsubscribe behavior');
 

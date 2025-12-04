@@ -1,4 +1,4 @@
-const { listenForFills } = require('../modules/account_orders');
+const { listenForFills } = require('../modules/chain_orders');
 
 console.log('Starting test for listening to filled orders...');
 let TEST_ACCOUNT = '1.2.1624309';

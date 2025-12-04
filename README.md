@@ -37,7 +37,7 @@ Use the `dexbot` wrapper or run `node dexbot.js` directly.
 - `dexbot drystart [bot_name]` — same as `start` but forces `dryRun=true` for safe simulation.
 - `dexbot stop [bot_name]` — mark a bot (or all bots) inactive; the config file is used the next time the process launches.
 - `dexbot restart [bot_name]` — restart a bot (stop running process first if needed).
-- `dexbot keys` — manage master password and keyring via `modules/account_keys.js`.
+- `dexbot keys` — manage master password and keyring via `modules/chain_keys.js`.
 - `dexbot bots` — open the interactive editor in `modules/account_bots.js` to create or edit bot entries.
 - `dexbot --cli-examples` — print curated CLI snippets for common tasks.
 
@@ -144,8 +144,8 @@ Committed: Buy 8676.13 USD | Sell 0.12420407 BTC
 Below is a short summary of the modules in this repository and what they provide. You can paste these lines elsewhere if you need a quick reference.
 
 - `modules/account_bots.js`: Interactive editor for bot configurations (`profiles/bots.json`). Prompts accept numbers, percentages and multiplier strings (e.g. `5x`).
-- `modules/account_keys.js`: Encrypted master-password storage for private keys (`profiles/keys.json`), plus key management utilities.
-- `modules/account_orders.js`: Account-level order helpers: authenticate/select account, create/update/cancel orders, listen for fills and read open orders.
+- `modules/chain_keys.js`: Encrypted master-password storage for private keys (`profiles/keys.json`), plus key management utilities.
+- `modules/chain_orders.js`: Account-level order helpers: authenticate/select account, create/update/cancel orders, listen for fills and read open orders.
 - `modules/bitshares_client.js`: Shared BitShares client wrapper and helpers (`BitShares`, `createAccountClient`, `waitForConnected`).
 - `modules/bot_instance.js`: PM2-friendly per-bot runner that boots an `OrderManager` for a chosen bot config.
 - `modules/btsdex_event_patch.js`: Small runtime patch for `btsdex` history/account events (improves account history updates when available).

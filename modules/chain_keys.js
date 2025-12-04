@@ -1,4 +1,4 @@
-// Moved from project root: account_keys.js
+// Chain keys manager (renamed from account_keys.js)
 // This module manages encrypted account storage and private key helper functions.
 
 const crypto = require('crypto');
@@ -163,6 +163,10 @@ function loadAccounts() {
         return { masterPasswordHash: '', accounts: {} };
     }
 }
+// Hash password for verification
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
+}
 // Display the saved account names to the console and return their ordering.
 function listKeyNames(accounts) {
     if (!accounts || Object.keys(accounts).length === 0) {
@@ -239,15 +243,10 @@ function saveAccounts(data) {
     fs.writeFileSync(PROFILES_KEYS_FILE, JSON.stringify(data, null, 2));
 }
 
-// Hash password for verification
-function hashPassword(password) {
-    return crypto.createHash('sha256').update(password).digest('hex');
-}
-
 // Export validator for tests and other modules
 // Launch the interactive key manager menu (add/modify/remove keys and update master password).
 async function main() {
-    console.log('BitShares Key Manager');
+    console.log('Chain Key Manager');
     console.log('========================');
 
     let accountsData = loadAccounts();
@@ -359,4 +358,3 @@ async function main() {
 }
 
 module.exports = { validatePrivateKey, loadAccounts, saveAccounts, encrypt, decrypt, hashPassword, main };
-

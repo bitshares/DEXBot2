@@ -2,9 +2,9 @@
 const { BitShares, waitForConnected } = require('./modules/bitshares_client');
 const fs = require('fs');
 const path = require('path');
-const accountOrders = require('./modules/account_orders');
+const accountOrders = require('./modules/chain_orders');
 const { OrderManager } = require('./modules/order');
-const accountKeys = require('./modules/account_keys');
+const accountKeys = require('./modules/chain_keys');
 const accountBots = require('./modules/account_bots');
 const { parseJsonWithComments } = accountBots;
 const { IndexDB, createBotKey } = require('./modules/indexdb');
@@ -20,7 +20,7 @@ const CLI_EXAMPLES_FLAG = '--cli-examples';
 const CLI_EXAMPLES = [
     { title: 'Start a bot from the tracked config', command: 'dexbot start bbot9', notes: 'Targets the named entry in profiles/bots.json.' },
     { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart bbot9', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
-    { title: 'Manage keys', command: 'dexbot keys', notes: 'Runs modules/account_keys.js to add or update master passwords.' },
+    { title: 'Manage keys', command: 'dexbot keys', notes: 'Runs modules/chain_keys.js to add or update master passwords.' },
     { title: 'Edit bot definitions', command: 'dexbot bots', notes: 'Launches the interactive modules/account_bots.js helper for the JSON config.' }
 ];
 const cliArgs = process.argv.slice(2);
@@ -33,7 +33,7 @@ function printCLIUsage() {
     console.log('  drystart <bot>    Same as start but forces dry-run execution.');
     console.log('  restart <bot>     Re-run the named bot, regenerating the grid.');
     console.log('  stop <bot>        Mark the bot inactive in config (stop running instance separately).');
-    console.log('  keys              Launch the account key helper (modules/account_keys.js).');
+    console.log('  keys              Launch the chain key helper (modules/chain_keys.js).');
     console.log('  bots              Launch the interactive bot configurator (modules/account_bots.js).');
     console.log('Options:');
     console.log('  --cli-examples    Print curated CLI snippets.');

@@ -1,5 +1,5 @@
 const bs58check = require('bs58check').default || require('bs58check');
-const { validatePrivateKey } = require('../modules/account_keys');
+const { validatePrivateKey } = require('../modules/chain_keys');
 
 // Generate valid WIFs programmatically so tests don't rely on magic constants
 const payloadUncompressed = Buffer.concat([Buffer.from([0x80]), Buffer.alloc(32, 0x01)]);

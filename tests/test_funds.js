@@ -60,7 +60,7 @@ async function main() {
     console.log(`Account: ${ACCOUNT_NAME} (${account.id})\n`);
 
     // Use centralized helper which returns free + locked (for_sale) amounts per asset
-    const { getOnChainAssetBalances } = require('../modules/account_orders');
+    const { getOnChainAssetBalances } = require('../modules/chain_orders');
     const balancesMap = await getOnChainAssetBalances(account.id); // assetRef -> { assetId, symbol, precision, freeRaw, lockedRaw, free, locked, total }
 
     const rows = [];

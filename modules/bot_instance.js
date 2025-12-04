@@ -10,7 +10,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const ordersModule = require('./account_orders');
+const ordersModule = require('./chain_orders');
 const { BitShares } = require('./bitshares_client');
 const OrderManagerModule = require('./order');
 

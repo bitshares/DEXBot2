@@ -9,7 +9,7 @@ This repository maintains a clear separation between test scripts and runtime/se
 
 How to prepare live data:
 
-1. Use `node modules/account_keys.js` interactively to create or manage encrypted key data; by default, the script writes sensitive information to `profiles/keys.json`, which is ignored.
+1. Use `node modules/chain_keys.js` interactively to create or manage encrypted key data; by default, the script writes sensitive information to `profiles/keys.json`, which is ignored.
 2. To quickly bootstrap your local `profiles/` from the tracked examples in `examples/` (safe defaults), run:
 
 ```bash

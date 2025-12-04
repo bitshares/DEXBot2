@@ -202,7 +202,7 @@ class OrderManager {
 
             // Use centralized helper to fetch on-chain balances (free amounts only) for the two configured assets
             try {
-                const { getOnChainAssetBalances } = require('../account_orders');
+                const { getOnChainAssetBalances } = require('../chain_orders');
                 const lookup = await getOnChainAssetBalances(accountIdOrName, [assetAId, assetBId]);
                 const aInfo = lookup && (lookup[assetAId] || lookup[this.config.assetA]);
                 const bInfo = lookup && (lookup[assetBId] || lookup[this.config.assetB]);

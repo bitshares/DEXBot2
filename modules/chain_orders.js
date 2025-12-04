@@ -81,7 +81,7 @@ function _promptPassword() {
 function authenticate() {
     const accountsData = loadAccounts();
     if (!accountsData.masterPasswordHash) {
-        throw new Error('No master password set. Please run modules/account_keys.js first.');
+        throw new Error('No master password set. Please run modules/chain_keys.js first.');
     }
 
     while (true) {
@@ -189,7 +189,7 @@ function _ensureAccountSubscriber(accountName) {
         if (fills.length > 0) {
             // Call each registered user callback with the fills array
             for (const c of Array.from(userCallbacks)) {
-                try { c(fills); } catch (e) { console.error('account_orders listener error', e.message); }
+                try { c(fills); } catch (e) { console.error('chain_orders listener error', e.message); }
             }
         }
     };
@@ -210,7 +210,7 @@ async function selectAccount() {
     const accountNames = Object.keys(accountsData.accounts);
 
     if (accountNames.length === 0) {
-        throw new Error('No accounts found. Please add accounts using modules/account_keys.js');
+        throw new Error('No accounts found. Please add accounts using modules/chain_keys.js');
     }
 
     console.log('Available accounts:');
@@ -584,4 +584,3 @@ module.exports = {
     
     MasterPasswordError
 };
-
