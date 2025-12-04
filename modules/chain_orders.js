@@ -475,9 +475,7 @@ async function getOnChainAssetBalances(accountRef, assets) {
 }
 
 module.exports = {
-    authenticate: chainKeys.authenticate,
     selectAccount,
-    getPrivateKey: chainKeys.getPrivateKey,
     setPreferredAccount,
     readOpenOrders,
     listenForFills,
@@ -486,5 +484,5 @@ module.exports = {
     cancelOrder,
     getOnChainAssetBalances,
     
-    MasterPasswordError: chainKeys.MasterPasswordError
+    // Note: authentication and key retrieval moved to modules/chain_keys.js
 };
