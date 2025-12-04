@@ -19,7 +19,7 @@ assert(typeof initialSpreadCount === 'object', 'createOrderGrid should return in
 // calculateOrderSizes should attach sizes summing approximately to provided funds
 const sellFunds = 10;
 const buyFunds = 5;
-const sized = OrderGridGenerator.calculateOrderSizes(orders, cfg, sellFunds, buyFunds);
+const sized = OrderGridGenerator.calculateOrderSizes(orders, cfg, sellFunds, buyFunds, 0, 0);
 assert(Array.isArray(sized), 'calculateOrderSizes should return an array');
 
 const sellSizes = sized.filter(o => o.type === 'sell').reduce((s, o) => s + (o.size || 0), 0);

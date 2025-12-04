@@ -382,7 +382,44 @@ class OrderManager {
         } catch (err) { /* don't let failures block grid creation */ }
 
         const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(this.config);
-        const sizedOrders = OrderGridGenerator.calculateOrderSizes(orders, this.config, this.funds.available.sell, this.funds.available.buy);
+        // Determine per-side minimum order sizes (human units) when possible so
+        // the grid generator can avoid allocating orders smaller than the minimum.
+        const minSellSize = this.getMinOrderSize(ORDER_TYPES.SELL);
+        const minBuySize = this.getMinOrderSize(ORDER_TYPES.BUY);
+
+        // Diagnostic: log the min sizes and available funds before allocation
+        const diagMsg = `Allocating sizes: sellFunds=${String(this.funds.available.sell)}, buyFunds=${String(this.funds.available.buy)}, ` +
+            `minSellSize=${String(minSellSize)}, minBuySize=${String(minBuySize)}`;
+        this.logger && this.logger.log && this.logger.log(diagMsg, 'debug');
+
+        let sizedOrders = OrderGridGenerator.calculateOrderSizes(
+            orders, this.config, this.funds.available.sell, this.funds.available.buy, minSellSize, minBuySize
+        );
+
+        // Safety check: if any allocated order is non-zero but below the
+        // configured per-order minimum, abort startup to avoid placing
+        // undersized on-chain orders. This is a deliberate fail-fast
+        // behavior so callers are aware of insufficient funds/config.
+        try {
+            const sellsAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).map(o => Number(o.size || 0));
+            const buysAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.BUY).map(o => Number(o.size || 0));
+            // Treat zero-sized allocations as a failure condition as well.
+            // Any non-finite size or any size strictly less than the per-order
+            // minimum (including zero) will trigger abort.
+            const anySellBelow = minSellSize > 0 && sellsAfter.some(sz => !Number.isFinite(sz) || sz < (minSellSize - 1e-12));
+            const anyBuyBelow = minBuySize > 0 && buysAfter.some(sz => !Number.isFinite(sz) || sz < (minBuySize - 1e-12));
+            if (anySellBelow || anyBuyBelow) {
+                const parts = [];
+                if (anySellBelow) parts.push(`sell.min=${String(minSellSize)}`);
+                if (anyBuyBelow) parts.push(`buy.min=${String(minBuySize)}`);
+                const msg = `Order grid contains orders below minimum size (${parts.join(', ')}). Aborting startup to avoid placing undersized orders.`;
+                this.logger && this.logger.log && this.logger.log(msg, 'error');
+                throw new Error(msg);
+            }
+        } catch (e) {
+            // Ensure the error bubbles up to stop initialization/startup.
+            throw e;
+        }
 
         this.orders.clear(); this.resetFunds();
         sizedOrders.forEach(order => { this.orders.set(order.id, order); if (order.type === ORDER_TYPES.BUY) { this.funds.committed.buy += order.size; this.funds.available.buy -= order.size; } else if (order.type === ORDER_TYPES.SELL) { this.funds.committed.sell += order.size; this.funds.available.sell -= order.size; } });
