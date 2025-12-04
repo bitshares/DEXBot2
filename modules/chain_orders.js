@@ -22,6 +22,13 @@ const chainKeys = require('./chain_keys');
 // Key/auth helpers provided by modules/chain_keys.js
 // (authenticate(), getPrivateKey(), MasterPasswordError)
 
+/**
+ * Fill processing mode:
+ * - 'history': Use fill event data directly to match order_id with account_orders (preferred, faster)
+ * - 'open': Fetch open orders from blockchain and sync (backup method, more API calls)
+ */
+const FILL_PROCESSING_MODE = 'history';
+
 // Resolve asset precision from id or symbol via BitShares DB; returns 0 on failure
 async function _getAssetPrecision(assetRef) {
     if (!assetRef) return 0;
@@ -538,6 +545,14 @@ async function getOnChainAssetBalances(accountRef, assets) {
     }
 }
 
+/**
+ * Get the current fill processing mode.
+ * @returns {string} 'history' or 'open'
+ */
+function getFillProcessingMode() {
+    return FILL_PROCESSING_MODE;
+}
+
 module.exports = {
     selectAccount,
     setPreferredAccount,
@@ -547,6 +562,8 @@ module.exports = {
     createOrder,
     cancelOrder,
     getOnChainAssetBalances,
+    getFillProcessingMode,
+    FILL_PROCESSING_MODE,
     
     // Note: authentication and key retrieval moved to modules/chain_keys.js
 };

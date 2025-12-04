@@ -387,17 +387,32 @@ class DEXBot {
                             const receivesAmount = fillOp.receives ? fillOp.receives.amount : '?';
                             const receivesAsset = fillOp.receives ? fillOp.receives.asset_id : '?';
                             console.log(`\n===== FILL DETECTED =====`);
+                            console.log(`Order ID: ${fillOp.order_id}`);
                             console.log(`Pays: ${paysAmount} (asset ${paysAsset})`);
                             console.log(`Receives: ${receivesAmount} (asset ${receivesAsset})`);
                             console.log(`is_maker: ${fillOp.is_maker}`);
                             console.log(`Block: ${fill.block_num}, Time: ${fill.block_time}`);
                             console.log(`=========================\n`);
 
-                            // Fetch fresh open orders from blockchain and sync by orderId
-                            const chainOpenOrders = await chainOrders.readOpenOrders(this.account);
-                            const syncResult = this.manager.syncFromOpenOrders(chainOpenOrders, fillOp);
+                            // Process fill based on configured mode
+                            const fillMode = chainOrders.getFillProcessingMode();
+                            let syncResult;
+                            
+                            if (fillMode === 'history') {
+                                // Use fill event data directly - match by order_id (preferred, faster)
+                                this.manager.logger.log(`Processing fill using 'history' mode (order_id matching)`, 'info');
+                                syncResult = this.manager.syncFromFillHistory(fillOp);
+                                // History mode doesn't detect price mismatches - no ordersNeedingCorrection
+                                syncResult.ordersNeedingCorrection = [];
+                            } else {
+                                // Fallback: Fetch open orders from blockchain and sync (backup method)
+                                this.manager.logger.log(`Processing fill using 'open' mode (blockchain sync)`, 'info');
+                                const chainOpenOrders = await chainOrders.readOpenOrders(this.account);
+                                syncResult = this.manager.syncFromOpenOrders(chainOpenOrders, fillOp);
+                            }
                             
                             // Correct any orders with price mismatches (orderId matched but price outside tolerance)
+                            // Only applicable in 'open' mode
                             if (syncResult.ordersNeedingCorrection && syncResult.ordersNeedingCorrection.length > 0) {
                                 this.manager.logger.log(`Correcting ${syncResult.ordersNeedingCorrection.length} order(s) with price mismatch...`, 'info');
                                 const correctionResult = await this.manager.correctAllPriceMismatches(

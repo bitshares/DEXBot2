@@ -919,6 +919,110 @@ class OrderManager {
     }
 
     /**
+     * Process a fill event directly from history/subscription data.
+     * Uses order_id from the fill event to match with orders in the grid.
+     * This is the preferred method (faster, no extra API calls).
+     * 
+     * The fill event contains:
+     * - order_id: The chain order ID that was filled (e.g., '1.7.12345')
+     * - pays: { amount, asset_id } - What the maker paid out
+     * - receives: { amount, asset_id } - What the maker received
+     * - is_maker: boolean - Whether this account was the maker
+     * 
+     * @param {Object} fillOp - Fill operation data (fillEvent.op[1])
+     * @returns {Object} - { filledOrders: [], updatedOrders: [], partialFill: boolean }
+     */
+    syncFromFillHistory(fillOp) {
+        if (!fillOp || !fillOp.order_id) {
+            this.logger.log('syncFromFillHistory: No valid fill operation provided', 'debug');
+            return { filledOrders: [], updatedOrders: [], partialFill: false };
+        }
+        
+        const orderId = fillOp.order_id;
+        const paysAmount = fillOp.pays ? Number(fillOp.pays.amount) : 0;
+        const paysAssetId = fillOp.pays ? fillOp.pays.asset_id : null;
+        const receivesAmount = fillOp.receives ? Number(fillOp.receives.amount) : 0;
+        const receivesAssetId = fillOp.receives ? fillOp.receives.asset_id : null;
+        
+        this.logger.log(`syncFromFillHistory: Processing fill for order_id=${orderId}`, 'info');
+        this.logger.log(`  Pays: ${paysAmount} (${paysAssetId}), Receives: ${receivesAmount} (${receivesAssetId})`, 'info');
+        
+        const filledOrders = [];
+        const updatedOrders = [];
+        let partialFill = false;
+        
+        // Find the grid order by orderId
+        let matchedGridOrder = null;
+        for (const gridOrder of this.orders.values()) {
+            if (gridOrder.orderId === orderId && gridOrder.state === ORDER_STATES.ACTIVE) {
+                matchedGridOrder = gridOrder;
+                break;
+            }
+        }
+        
+        if (!matchedGridOrder) {
+            this.logger.log(`syncFromFillHistory: No matching grid order found for order_id=${orderId}`, 'warn');
+            return { filledOrders, updatedOrders, partialFill };
+        }
+        
+        this.logger.log(`syncFromFillHistory: Matched order_id=${orderId} to grid order ${matchedGridOrder.id} (type=${matchedGridOrder.type})`, 'info');
+        
+        // Determine the fill amount based on order type and which asset was paid
+        // For SELL orders: pays is assetA (what we're selling)
+        // For BUY orders: pays is assetB (what we're selling to buy assetA)
+        const orderType = matchedGridOrder.type;
+        const currentSize = Number(matchedGridOrder.size || 0);
+        
+        // Get asset precisions for conversion
+        const assetAPrecision = this.assets?.assetA?.precision || 5;
+        const assetBPrecision = this.assets?.assetB?.precision || 5;
+        const assetAId = this.assets?.assetA?.id;
+        const assetBId = this.assets?.assetB?.id;
+        
+        // Calculate the filled amount in human-readable units
+        let filledAmount = 0;
+        if (orderType === ORDER_TYPES.SELL) {
+            // SELL order: size is in assetA, pays is assetA
+            if (paysAssetId === assetAId) {
+                filledAmount = blockchainToFloat(paysAmount, assetAPrecision);
+            }
+        } else {
+            // BUY order: size is in assetB, pays is assetB
+            if (paysAssetId === assetBId) {
+                filledAmount = blockchainToFloat(paysAmount, assetBPrecision);
+            }
+        }
+        
+        const newSize = Math.max(0, currentSize - filledAmount);
+        
+        this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} filled ${filledAmount.toFixed(8)}, size ${currentSize.toFixed(8)} -> ${newSize.toFixed(8)}`, 'info');
+        
+        // Check if fully filled or partially filled
+        // Use blockchain integer comparison for precision
+        const precision = (orderType === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
+        const newSizeInt = floatToBlockchainInt(newSize, precision);
+        
+        if (newSizeInt <= 0) {
+            // Fully filled
+            this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED`, 'info');
+            const filledOrder = { ...matchedGridOrder };
+            matchedGridOrder.state = ORDER_STATES.FILLED;
+            matchedGridOrder.size = 0;
+            this._updateOrder(matchedGridOrder);
+            filledOrders.push(filledOrder);
+        } else {
+            // Partially filled
+            this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED, remaining=${newSize.toFixed(8)}`, 'info');
+            this._applyChainSizeToGridOrder(matchedGridOrder, newSize);
+            this._updateOrder(matchedGridOrder);
+            updatedOrders.push(matchedGridOrder);
+            partialFill = true;
+        }
+        
+        return { filledOrders, updatedOrders, partialFill };
+    }
+
+    /**
      * Correct an order on the blockchain to match the grid price.
      * This uses limit_order_update to change the price without canceling.
      * The orderId remains the same after the update.
