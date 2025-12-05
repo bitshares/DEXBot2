@@ -14,7 +14,7 @@
  * the opposite side to maintain grid coverage.
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG } = require('./constants');
-const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, parseChainOrder, findBestMatchByPrice, findMatchingGridOrder, findMatchingGridOrderByFill, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
+const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findBestMatchByPrice, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByFill, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
 const Logger = require('./logger');
 const OrderGridGenerator = require('./order_grid');
 
@@ -286,57 +286,6 @@ class OrderManager {
             this.logger.log(`Asset metadata lookup failed: ${err.message}`, 'error');
             throw err;
         }
-    }
-
-    /**
-     * Calculate the minimum order size for a given order type.
-     * Uses minOrderSizeFactor * (smallest unit based on asset precision).
-     * If the factor is disabled or the asset precision cannot be determined,
-     * this function now returns 0 (no implicit fallback).
-     * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
-     * @returns {number} - Minimum order size in human-readable units (or 0 if unavailable)
-     */
-    // getMinOrderSize logic lives in utils.getMinOrderSize.
-    // Callers should use getMinOrderSize(orderType, this.assets, MIN_ORDER_SIZE_FACTOR) directly.
-
-    /**
-     * Calculate the maximum allowable price difference between grid and blockchain
-     * based on asset precisions and order size.
-     * 
-     * The tolerance is calculated as: (1/precisionA + 1/precisionB) / orderSize
-     * This represents the minimum price change that could occur due to integer rounding
-     * on the blockchain when converting float amounts to integer satoshis.
-     * 
-     * @param {number} gridPrice - The price in the grid (stored snapshot)
-     * @param {number} orderSize - The order size
-     * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
-     * @returns {number} - Maximum allowable absolute price difference
-     */
-    // calculatePriceTolerance is provided by the shared utils module.
-    // Manager code should call the utils helper directly (including assets).
-
-    /**
-     * Check if a chain order price is within acceptable tolerance of the grid order price.
-     * @param {Object} gridOrder - The grid order from stored snapshot
-     * @param {Object} chainOrder - The parsed chain order (with price, type, size)
-     * @returns {Object} - { isWithinTolerance: boolean, priceDiff: number, tolerance: number }
-     */
-    checkPriceWithinTolerance(gridOrder, chainOrder) {
-        const gridPrice = Number(gridOrder.price);
-        const chainPrice = Number(chainOrder.price);
-        const orderSize = Number(chainOrder.size || gridOrder.size || 0);
-        
-        const priceDiff = Math.abs(gridPrice - chainPrice);
-        const tolerance = calculatePriceTolerance(gridPrice, orderSize, gridOrder.type, this.assets);
-        
-        return {
-            isWithinTolerance: priceDiff <= tolerance,
-            priceDiff,
-            tolerance,
-            gridPrice,
-            chainPrice,
-            orderSize
-        };
     }
 
     async initialize() {
@@ -636,7 +585,7 @@ class OrderManager {
             
             if (chainOrder) {
                 // Order still exists on chain - check price tolerance
-                const toleranceCheck = this.checkPriceWithinTolerance(gridOrder, chainOrder);
+                const toleranceCheck = checkPriceWithinTolerance(gridOrder, chainOrder, this.assets);
                 
                 if (!toleranceCheck.isWithinTolerance) {
                     // Price difference exceeds tolerance - need to correct order on blockchain
@@ -953,7 +902,7 @@ class OrderManager {
             }
             case 'cancelOrder': {
                 const orderId = chainData;
-                const gridOrder = findMatchingGridOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
+                const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
                 if (gridOrder) {
                     gridOrder.state = ORDER_STATES.VIRTUAL;
                     gridOrder.orderId = null;
@@ -971,7 +920,7 @@ class OrderManager {
                         continue;
                     }
                     seenOnChain.add(parsedOrder.orderId);
-                    const gridOrder = findMatchingGridOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
+                    const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
                     if (gridOrder) {
                         const wasActive = gridOrder.state === ORDER_STATES.ACTIVE;
                         const oldOrderId = gridOrder.orderId;
@@ -988,7 +937,7 @@ class OrderManager {
                         }
                         
                         // Check price tolerance - if chain price differs too much, flag for correction
-                        const toleranceCheck = this.checkPriceWithinTolerance(gridOrder, parsedOrder);
+                        const toleranceCheck = checkPriceWithinTolerance(gridOrder, parsedOrder, this.assets);
                         
                         if (!toleranceCheck.isWithinTolerance) {
                             this.logger.log(

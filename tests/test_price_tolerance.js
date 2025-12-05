@@ -26,3 +26,21 @@ assert.ok(Math.abs(tUtils - t) < 1e-12, `utils should return same value (got ${t
 
 console.log('price_tolerance tests passed');
 
+// --- Additional tests for checkPriceWithinTolerance helper ---
+const { checkPriceWithinTolerance } = utils;
+
+// grid order (buy) at price 1820, typical order size 73.88
+const grid = { price: 1820, size: 73.88, type: 'buy' };
+// chain order price slightly different — should be within tolerance
+const chainClose = { price: 1820.5, size: 73.88 };
+const closeResult = checkPriceWithinTolerance(grid, chainClose, assetsExample);
+assert.strictEqual(typeof closeResult.isWithinTolerance === 'boolean', true, 'result should have boolean isWithinTolerance');
+assert.ok(closeResult.isWithinTolerance, `expected close chain price to be within tolerance (diff=${closeResult.priceDiff}, tol=${closeResult.tolerance})`);
+
+// chain order with large price diff — shouldn't be within tolerance
+const chainFar = { price: 1900, size: 73.88 };
+const farResult = checkPriceWithinTolerance(grid, chainFar, assetsExample);
+assert.strictEqual(farResult.isWithinTolerance, false, `expected large price diff to be outside tolerance (diff=${farResult.priceDiff}, tol=${farResult.tolerance})`);
+
+console.log('checkPriceWithinTolerance tests passed');
+

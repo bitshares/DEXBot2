@@ -143,6 +143,35 @@ function calculatePriceTolerance(gridPrice, orderSize, orderType, assets = null)
     return tolerance;
 }
 
+/**
+ * Check whether a chain order price is within the allowable tolerance
+ * of a grid order price. Returns an object matching the previous
+ * OrderManager.checkPriceWithinTolerance shape so consumers can use
+ * the helper interchangeably.
+ *
+ * @param {Object} gridOrder - Grid order snapshot ({ price, size, type })
+ * @param {Object} chainOrder - Parsed chain order ({ price, size })
+ * @param {Object|null} assets - Optional assets object to calculate tolerance
+ * @returns {Object} { isWithinTolerance, priceDiff, tolerance, gridPrice, chainPrice, orderSize }
+ */
+function checkPriceWithinTolerance(gridOrder, chainOrder, assets = null) {
+    const gridPrice = Number(gridOrder && gridOrder.price);
+    const chainPrice = Number(chainOrder && chainOrder.price);
+    const orderSize = Number((chainOrder && chainOrder.size) || (gridOrder && gridOrder.size) || 0);
+
+    const priceDiff = Math.abs(gridPrice - chainPrice);
+    const tolerance = calculatePriceTolerance(gridPrice, orderSize, gridOrder && gridOrder.type, assets);
+
+    return {
+        isWithinTolerance: priceDiff <= tolerance,
+        priceDiff,
+        tolerance,
+        gridPrice,
+        chainPrice,
+        orderSize
+    };
+}
+
 // --- New helpers extracted from OrderManager for reuse and testing ---
 const { ORDER_TYPES, ORDER_STATES } = require('./constants');
 
@@ -207,7 +236,7 @@ function findBestMatchByPrice(chainOrder, candidateIds, ordersMap, calcTolerance
  * Find a matching grid order for a parsed chain order using manager-like indices.
  * opts: { orders: Map, ordersByState: {virtual,active,filled}, assets, calcToleranceFn, logger }
  */
-function findMatchingGridOrder(parsedChainOrder, opts) {
+function findMatchingGridOrderByOpenOrder(parsedChainOrder, opts) {
     const { orders, ordersByState, assets, calcToleranceFn, logger } = opts || {};
     if (!parsedChainOrder || !orders) return null;
 
@@ -216,14 +245,14 @@ function findMatchingGridOrder(parsedChainOrder, opts) {
         for (const gridOrder of orders.values()) {
             if (gridOrder.orderId === parsedChainOrder.orderId) return gridOrder;
         }
-        logger?.log?.(`_findMatchingGridOrder: orderId ${parsedChainOrder.orderId} NOT found in grid, falling back to price matching (chain price=${parsedChainOrder.price?.toFixed(6)}, type=${parsedChainOrder.type})`, 'info');
+        logger?.log?.(`_findMatchingGridOrderByOpenOrder: orderId ${parsedChainOrder.orderId} NOT found in grid, falling back to price matching (chain price=${parsedChainOrder.price?.toFixed(6)}, type=${parsedChainOrder.type})`, 'info');
     }
 
-    // Try Virtual orders by price
-    const virtualIds = (ordersByState && ordersByState[ORDER_STATES.VIRTUAL]) || new Set();
-    for (const id of virtualIds) {
-        const gridOrder = orders.get(id);
-        if (!gridOrder || gridOrder.orderId) continue;
+    // Try ALL orders by price (virtual, active, spread) — match first order within tolerance
+    // This widens the search so orders in any state can be matched by price if they
+    // are sufficiently close to the parsed chain order price.
+    for (const gridOrder of orders.values()) {
+        if (!gridOrder) continue;
         const priceDiff = Math.abs(gridOrder.price - parsedChainOrder.price);
         const orderSize = (gridOrder.size && Number.isFinite(Number(gridOrder.size))) ? Number(gridOrder.size) : null;
         const tolerance = calcToleranceFn ? calcToleranceFn(gridOrder.price, orderSize, gridOrder.type) : 0;
@@ -361,10 +390,11 @@ module.exports = {
     floatToBlockchainInt,
     resolveRelativePrice, 
     calculatePriceTolerance,
+    checkPriceWithinTolerance,
     // new helpers
     parseChainOrder,
     findBestMatchByPrice,
-    findMatchingGridOrder,
+    findMatchingGridOrderByOpenOrder,
     findMatchingGridOrderByFill,
     applyChainSizeToGridOrder,
     correctOrderPriceOnChain,
