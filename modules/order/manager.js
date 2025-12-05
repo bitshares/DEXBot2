@@ -13,25 +13,19 @@
  * the "spread" zone. When orders are filled, new orders are created on
  * the opposite side to maintain grid coverage.
  */
-const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG } = require('./constants');
-const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findBestMatchByPrice, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
+const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS } = require('./constants');
+const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
 const Logger = require('./logger');
-const OrderGridGenerator = require('./grid');
+// OrderGridGenerator functions (initialize/recalculate) are intended to be
+// called directly via require('./grid').initializeGrid(manager) by callers.
 
-// Constants for manager operations
-const SYNC_DELAY_MS = 500;
-const ACCOUNT_TOTALS_TIMEOUT_MS = 10000;
+// Constants for manager operations are provided by modules/order/constants.js
 // Size comparisons are performed by converting human-readable floats
 // to blockchain integer amounts using floatToBlockchainInt(...) and
 // comparing integers. This provides exact, deterministic behavior that
 // matches on-chain granularity and avoids arbitrary tolerances.
-// Factor to multiply the smallest representable unit (based on asset precision)
-// to determine the minimum order size. E.g., factor=50 with precision=4 => minSize=0.005
-const MIN_ORDER_SIZE_FACTOR = 50;
-// Minimum spread factor to multiply the configured incrementPercent when
-// automatically adjusting targetSpreadPercent. E.g., a factor of 2 means
-// targetSpreadPercent will be at least 2 * incrementPercent.
-const MIN_SPREAD_FACTOR = 2;
+// MIN_ORDER_SIZE_FACTOR and MIN_SPREAD_FACTOR moved to modules/order/constants.js
+// and exposed via GRID_LIMITS (e.g. GRID_LIMITS.MIN_ORDER_SIZE_FACTOR)
 
 /**
  * OrderManager class - manages grid-based trading strategy
@@ -87,7 +81,7 @@ class OrderManager {
         this.targetSpreadCount = 0;
         this.currentSpreadCount = 0;
         this.outOfSpread = false;
-        this.assets = null; // To be populated in initializeOrderGrid
+        this.assets = null; // To be populated in initializeGrid
         // Promise that resolves when accountTotals (both buy & sell) are populated.
         this._accountTotalsPromise = null;
         this._accountTotalsResolve = null;
@@ -140,11 +134,15 @@ class OrderManager {
         this.orders.set(order.id, order);
     }
 
-    // Helper: Find best matching grid order by price tolerance
-    _findBestMatchByPrice(chainOrder, candidates) {
-        // Delegate to utils helper. Provide a tolerance callback bound to this manager.
-        const calcTol = (gridPrice, orderSize, orderType) => calculatePriceTolerance(gridPrice, orderSize, orderType, this.assets);
-        return findBestMatchByPrice(chainOrder, candidates, this.orders, calcTol);
+    // Note: findBestMatchByPrice is available from utils; callers should
+    // invoke utils.findBestMatchByPrice(chainOrder, candidates, this.orders, this._calcTolerance.bind(this))
+    // when needed. The inline helper was removed to avoid duplicating wrapper logic.
+
+    // Manager-level shared tolerance computation. Centralizes the
+    // calculatePriceTolerance(...) call so hot-paths do not redefine
+    // identical closures repeatedly.
+    _calcTolerance(gridPrice, orderSize, orderType) {
+        return calculatePriceTolerance(gridPrice, orderSize, orderType, this.assets);
     }
 
     // Reconcile funds totals based on config, input percentages, and prior committed balances.
@@ -200,7 +198,7 @@ class OrderManager {
     }
 
     // Wait until accountTotals have both buy and sell present, or until timeout elapses.
-    async waitForAccountTotals(timeoutMs = ACCOUNT_TOTALS_TIMEOUT_MS) {
+    async waitForAccountTotals(timeoutMs = TIMING.ACCOUNT_TOTALS_TIMEOUT_MS) {
         const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
         const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
         if (haveBuy && haveSell) return; // already satisfied
@@ -288,9 +286,9 @@ class OrderManager {
         }
     }
 
-    async initialize() {
-        await this.initializeOrderGrid();
-    }
+    // Initialization is provided by OrderGridGenerator.initializeGrid(manager)
+    // to avoid duplicating grid logic in the manager. Callers should use
+    // OrderGridGenerator.initializeGrid(manager) directly.
 
     /**
      * Initialize the virtual order grid.
@@ -306,174 +304,8 @@ class OrderManager {
      * @throws {Error} If marketPrice is invalid or outside bounds
      * @throws {Error} If any allocated order is below minimum size
      */
-    async initializeOrderGrid() {
-        await this._initializeAssets();
-        const mpRaw = this.config.marketPrice;
-        const mpIsPool = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'pool';
-        const mpIsMarket = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'market';
-
-        if (!Number.isFinite(Number(mpRaw)) || mpIsPool || mpIsMarket) {
-            try {
-                const { derivePoolPrice, deriveMarketPrice, derivePrice } = require('./price');
-                const { BitShares } = require('../bitshares_client');
-                const symA = this.config.assetA;
-                const symB = this.config.assetB;
-
-                if ((mpIsPool || this.config.pool) && symA && symB) {
-                    try {
-                        const p = await derivePrice(BitShares, symA, symB, 'pool');
-                        if (p !== null) this.config.marketPrice = p;
-                    } catch (e) { this.logger && this.logger.log && this.logger.log(`Pool price lookup failed: ${e && e.message ? e.message : e}`, 'warn'); }
-                } else if ((mpIsMarket || this.config.market) && symA && symB) {
-                    try {
-                        const m = await derivePrice(BitShares, symA, symB, 'market');
-                        if (m !== null) this.config.marketPrice = m;
-                    } catch (e) { this.logger && this.logger.log && this.logger.log(`Market price lookup failed: ${e.message}`, 'warn'); }
-                }
-
-                try {
-                    // final attempt to derive price. Respect explicit pool/market preference earlier;
-                    // otherwise use the centralized derivePrice helper which will prefer pool->market->limit-orders.
-                    if (!Number.isFinite(Number(this.config.marketPrice))) {
-                        // honor explicit priceMode config or environment PRICE_MODE (start flag)
-                        const modePref = (this.config && this.config.priceMode) ? String(this.config.priceMode).toLowerCase() : (process && process.env && process.env.PRICE_MODE ? String(process.env.PRICE_MODE).toLowerCase() : 'auto');
-                        const tryP = await derivePrice(BitShares, symA, symB, modePref);
-                        if (tryP !== null) {
-                            this.config.marketPrice = tryP;
-                            console.log('Derived marketPrice from on-chain (derivePrice)', this.config.assetA + '/' + this.config.assetB, tryP);
-                        }
-                    }
-                } catch (e) { this.logger && this.logger.log && this.logger.log(`auto-derive marketPrice failed: ${e && e.message ? e.message : e}`, 'warn'); }
-            } catch (err) {
-                this.logger && this.logger.log && this.logger.log(`auto-derive marketPrice failed: ${err.message}`, 'warn');
-            }
-        }
-
-        const mp = Number(this.config.marketPrice);
-        const fallbackMin = Number(DEFAULT_CONFIG.minPrice);
-        const fallbackMax = Number(DEFAULT_CONFIG.maxPrice);
-        const rawMin = this.config.minPrice !== undefined ? this.config.minPrice : DEFAULT_CONFIG.minPrice;
-        const rawMax = this.config.maxPrice !== undefined ? this.config.maxPrice : DEFAULT_CONFIG.maxPrice;
-        const minP = resolveConfiguredPriceBound(rawMin, fallbackMin, mp, 'min');
-        const maxP = resolveConfiguredPriceBound(rawMax, fallbackMax, mp, 'max');
-        this.config.minPrice = minP;
-        this.config.maxPrice = maxP;
-        if (!Number.isFinite(mp)) { throw new Error('Cannot initialize order grid: marketPrice is not a valid number'); }
-        if (mp < minP || mp > maxP) { throw new Error(`Refusing to initialize order grid because marketPrice ${mp} is outside configured bounds [${minP}, ${maxP}]`); }
-
-        // If botFunds are expressed as percentages and we have an account id/name
-        // attempt a blocking on-chain fetch so percentages can be resolved before
-        // building the order grid. This will wait up to 10s by default.
-        try {
-            const botFunds = this.config && this.config.botFunds ? this.config.botFunds : {};
-            const needsPercent = (v) => typeof v === 'string' && v.includes('%');
-            if ((needsPercent(botFunds.buy) || needsPercent(botFunds.sell)) && (this.accountId || this.account)) {
-                // If account totals are already present (possibly from a prior
-                // non-blocking fetch), skip the blocking wait to avoid duplicate
-                // fetches and logs.
-                const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
-                const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
-                if (haveBuy && haveSell) {
-                    this.logger && this.logger.log && this.logger.log('Account totals already available; skipping blocking fetch.', 'debug');
-                } else {
-                    const timeoutMs = Number.isFinite(Number(this.config.waitForAccountTotalsMs)) ? Number(this.config.waitForAccountTotalsMs) : 10000;
-                    this.logger && this.logger.log && this.logger.log(`Waiting up to ${timeoutMs}ms for on-chain account totals to resolve percentage-based botFunds...`, 'info');
-                    try {
-                        // Ensure a background fetch has been initiated (resetFunds() may have kicked one off earlier).
-                        if (!this._isFetchingTotals) { this._isFetchingTotals = true; this._fetchAccountBalancesAndSetTotals().finally(() => { this._isFetchingTotals = false; }); }
-                        await this.waitForAccountTotals(timeoutMs);
-                        this.logger && this.logger.log && this.logger.log('Account totals fetch completed (or timed out).', 'info');
-                    } catch (err) {
-                        this.logger && this.logger.log && this.logger.log(`Account totals fetch failed: ${err && err.message ? err.message : err}`, 'warn');
-                    }
-                }
-            }
-        } catch (err) { /* don't let failures block grid creation */ }
-
-        const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(this.config);
-        // Determine per-side minimum order sizes (human units) when possible so
-        // the grid generator can avoid allocating orders smaller than the minimum.
-        const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, this.assets, MIN_ORDER_SIZE_FACTOR);
-        const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, this.assets, MIN_ORDER_SIZE_FACTOR);
-
-        // Diagnostic: log the min sizes and available funds before allocation
-        const diagMsg = `Allocating sizes: sellFunds=${String(this.funds.available.sell)}, buyFunds=${String(this.funds.available.buy)}, ` +
-            `minSellSize=${String(minSellSize)}, minBuySize=${String(minBuySize)}`;
-        this.logger && this.logger.log && this.logger.log(diagMsg, 'debug');
-
-        // Pass asset precisions so the grid generator can perform exact
-        // integer-based min-size checks when needed.
-        const precA = this.assets?.assetA?.precision;
-        const precB = this.assets?.assetB?.precision;
-        let sizedOrders = OrderGridGenerator.calculateOrderSizes(
-            orders, this.config, this.funds.available.sell, this.funds.available.buy, minSellSize, minBuySize, precA, precB
-        );
-
-        // Safety check: if any allocated order is non-zero but below the
-        // configured per-order minimum, abort startup to avoid placing
-        // undersized on-chain orders. This is a deliberate fail-fast
-        // behavior so callers are aware of insufficient funds/config.
-        try {
-            const sellsAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).map(o => Number(o.size || 0));
-            const buysAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.BUY).map(o => Number(o.size || 0));
-            // Treat zero-sized allocations as a failure condition as well.
-            // Any non-finite size or any size strictly less than the per-order
-            // minimum (including zero) will trigger abort.
-            // Use integer comparisons (blockchain units) when precision available
-            let anySellBelow = false;
-            let anyBuyBelow = false;
-            if (minSellSize > 0) {
-                if (precA !== undefined && precA !== null && Number.isFinite(precA)) {
-                    const minSellInt = floatToBlockchainInt(minSellSize, precA);
-                    anySellBelow = sellsAfter.some(sz => !Number.isFinite(sz) || floatToBlockchainInt(sz, precA) < minSellInt);
-                } else {
-                    anySellBelow = sellsAfter.some(sz => !Number.isFinite(sz) || sz < (minSellSize - 1e-8));
-                }
-            }
-            if (minBuySize > 0) {
-                if (precB !== undefined && precB !== null && Number.isFinite(precB)) {
-                    const minBuyInt = floatToBlockchainInt(minBuySize, precB);
-                    anyBuyBelow = buysAfter.some(sz => !Number.isFinite(sz) || floatToBlockchainInt(sz, precB) < minBuyInt);
-                } else {
-                    anyBuyBelow = buysAfter.some(sz => !Number.isFinite(sz) || sz < (minBuySize - 1e-8));
-                }
-            }
-            if (anySellBelow || anyBuyBelow) {
-                const parts = [];
-                if (anySellBelow) parts.push(`sell.min=${String(minSellSize)}`);
-                if (anyBuyBelow) parts.push(`buy.min=${String(minBuySize)}`);
-                const msg = `Order grid contains orders below minimum size (${parts.join(', ')}). Aborting startup to avoid placing undersized orders.`;
-                this.logger && this.logger.log && this.logger.log(msg, 'error');
-                throw new Error(msg);
-            }
-        } catch (e) {
-            // Ensure the error bubbles up to stop initialization/startup.
-            throw e;
-        }
-
-        this.orders.clear();
-        Object.values(this._ordersByState).forEach(set => set.clear());
-        Object.values(this._ordersByType).forEach(set => set.clear());
-        this.resetFunds();
-        sizedOrders.forEach(order => { 
-            this._updateOrder(order);
-            if (order.type === ORDER_TYPES.BUY) { 
-                this.funds.committed.buy += order.size; 
-                this.funds.available.buy -= order.size; 
-            } else if (order.type === ORDER_TYPES.SELL) { 
-                this.funds.committed.sell += order.size; 
-                this.funds.available.sell -= order.size; 
-            } 
-        });
-
-        this.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell; this.currentSpreadCount = this.targetSpreadCount;
-        this.config.activeOrders = this.config.activeOrders || { buy: 1, sell: 1 };
-        this.config.activeOrders.buy = Number.isFinite(Number(this.config.activeOrders.buy)) ? Number(this.config.activeOrders.buy) : 1;
-        this.config.activeOrders.sell = Number.isFinite(Number(this.config.activeOrders.sell)) ? Number(this.config.activeOrders.sell) : 1;
-
-        this.logger.log(`Initialized order grid with ${orders.length} orders`, 'info'); this.logger.log(`Configured activeOrders: buy=${this.config.activeOrders.buy}, sell=${this.config.activeOrders.sell}`, 'info');
-        this.logFundsStatus(); this.logger.logOrderGrid(Array.from(this.orders.values()), this.config.marketPrice);
-    }
+    
+        
 
     /**
      * Load a persisted grid snapshot and restore state.
@@ -502,7 +334,7 @@ class OrderManager {
             }
         });
         this.logger.log(`Loaded ${this.orders.size} orders from persisted grid state.`, 'info');
-        this.logFundsStatus();
+        this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
     }
 
 
@@ -552,10 +384,9 @@ class OrderManager {
         }
         
         this.logger.log(`syncFromOpenOrders: Processing ${chainOrders.length} open orders from blockchain`, 'info');
-        // Cache asset precisions and a local tolerance function for hot paths
+        // Cache asset precisions for hot paths
         const assetAPrecision = this.assets?.assetA?.precision;
         const assetBPrecision = this.assets?.assetB?.precision;
-        const calcTol = (gridPrice, orderSize, orderType) => calculatePriceTolerance(gridPrice, orderSize, orderType, this.assets);
         
         // Parse all chain orders
         const parsedChainOrders = new Map();
@@ -666,17 +497,17 @@ class OrderManager {
                 // Compute tolerance using the same formula used elsewhere in the manager
                 let tolerance = null;
                 try {
-                    if (orderSize !== null && orderSize > 0) {
-                        tolerance = calcTol(gridOrder.price, orderSize, gridOrder.type);
-                    }
+                        if (orderSize !== null && orderSize > 0) {
+                            tolerance = this._calcTolerance(gridOrder.price, orderSize, gridOrder.type);
+                        }
                 } catch (e) {
                     tolerance = null;
                 }
 
                 // Ensure we have a usable tolerance from calculatePriceTolerance (it provides a fallback)
-                if (!tolerance || !Number.isFinite(tolerance)) {
-                    tolerance = calcTol(gridOrder.price, orderSize, gridOrder.type);
-                }
+                    if (!tolerance || !Number.isFinite(tolerance)) {
+                        tolerance = this._calcTolerance(gridOrder.price, orderSize, gridOrder.type);
+                    }
 
                 if (priceDiff <= tolerance && priceDiff < bestPriceDiff) {
                     bestMatch = gridOrder;
@@ -864,7 +695,7 @@ class OrderManager {
             }
             
             // Small delay between corrections to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, SYNC_DELAY_MS));
+            await new Promise(resolve => setTimeout(resolve, TIMING.SYNC_DELAY_MS));
         }
         
         this.logger.log(`Price correction complete: ${corrected} corrected, ${failed} failed`, 'info');
@@ -879,10 +710,9 @@ class OrderManager {
             return { newOrders: [], ordersNeedingCorrection: [] };
         }
         this.logger.log(`Syncing from ${source}`, 'info');
-        // Cache asset precisions and local calcTol helper for hot paths
+        // Cache asset precisions for hot paths
         const assetAPrecision = this.assets?.assetA?.precision;
         const assetBPrecision = this.assets?.assetB?.precision;
-        const calcTol = (p, s, t) => calculatePriceTolerance(p, s, t, this.assets);
         let newOrders = [];
         // Reset the instance-level correction list for readOpenOrders case
         if (source === 'readOpenOrders') {
@@ -902,7 +732,7 @@ class OrderManager {
             }
             case 'cancelOrder': {
                 const orderId = chainData;
-                const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
+                const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: this._calcTolerance.bind(this), logger: this.logger });
                 if (gridOrder) {
                     gridOrder.state = ORDER_STATES.VIRTUAL;
                     gridOrder.orderId = null;
@@ -920,7 +750,7 @@ class OrderManager {
                         continue;
                     }
                     seenOnChain.add(parsedOrder.orderId);
-                    const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: calcTol, logger: this.logger });
+                    const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: this._calcTolerance.bind(this), logger: this.logger });
                     if (gridOrder) {
                         const wasActive = gridOrder.state === ORDER_STATES.ACTIVE;
                         const oldOrderId = gridOrder.orderId;
@@ -1011,76 +841,9 @@ class OrderManager {
      * @param {Function} readOpenOrdersFn - Async function to fetch open orders
      * @param {Function} cancelOrderFn - Async function to cancel an order
      */
-    async recalculateGrid(readOpenOrdersFn, cancelOrderFn) {
-        this.logger.log('Starting full grid resynchronization from blockchain...', 'info');
-        await this.initializeOrderGrid();
-        this.logger.log('Virtual grid has been regenerated.', 'debug');
-        const chainOrders = await readOpenOrdersFn();
-        if (!Array.isArray(chainOrders)) {
-            this.logger.log('Could not fetch open orders for resync.', 'error');
-            return;
-        }
-        this.logger.log(`Found ${chainOrders.length} open orders on-chain.`, 'info');
-        // Cache tolerance helper for inner loops
-        const assetAPrecision = this.assets?.assetA?.precision;
-        const assetBPrecision = this.assets?.assetB?.precision;
-        const calcTol = (p, s, t) => calculatePriceTolerance(p, s, t, this.assets);
-        const matchedChainOrderIds = new Set();
-        for (const gridOrder of this.orders.values()) {
-            let bestMatch = null;
-            let smallestDiff = Infinity;
-            for (const chainOrder of chainOrders) {
-                if (matchedChainOrderIds.has(chainOrder.id)) continue;
-                const parsedChainOrder = parseChainOrder(chainOrder, this.assets);
-                if (!parsedChainOrder || parsedChainOrder.type !== gridOrder.type) continue;
-                const priceDiff = Math.abs(parsedChainOrder.price - gridOrder.price);
-                if (priceDiff < smallestDiff) {
-                    smallestDiff = priceDiff;
-                    bestMatch = chainOrder;
-                }
-            }
-            // Use calculatePriceTolerance to determine whether the best match is acceptable
-            if (bestMatch) {
-                const orderSize = (gridOrder.size && Number.isFinite(Number(gridOrder.size))) ? Number(gridOrder.size) : null;
-                const tolerance = calcTol(gridOrder.price, orderSize, gridOrder.type);
-                if (smallestDiff <= tolerance) {
-                    gridOrder.state = ORDER_STATES.ACTIVE;
-                    gridOrder.orderId = bestMatch.id;
-                    // Parse the matched chain order again to get reported size and reconcile funds
-                    try {
-                        const parsed = parseChainOrder(bestMatch, this.assets);
-                        if (parsed && parsed.size !== null && parsed.size !== undefined && Number.isFinite(Number(parsed.size))) {
-                            applyChainSizeToGridOrder(this, gridOrder, parsed.size);
-                        }
-                    } catch (e) { /* best-effort */ }
-                    this._updateOrder(gridOrder);
-                    matchedChainOrderIds.add(bestMatch.id);
-                    this.logger.log(`Matched grid order ${gridOrder.id} to on-chain order ${bestMatch.id}.`, 'debug');
-                }
-            }
-        }
-        for (const chainOrder of chainOrders) {
-            if (!matchedChainOrderIds.has(chainOrder.id)) {
-                this.logger.log(`Cancelling unmatched on-chain order ${chainOrder.id}.`, 'info');
-                try {
-                    await cancelOrderFn(chainOrder.id);
-                } catch (err) {
-                    this.logger.log(`Failed to cancel order ${chainOrder.id}: ${err.message}`, 'error');
-                }
-            }
-        }
-        this.logger.log('Full grid resynchronization complete.', 'info');
-        this.logFundsStatus();
-        this.logger.logOrderGrid(Array.from(this.orders.values()), this.config.marketPrice);
-    }
+    
 
-    // Print a summary of available vs committed funds for diagnostics.
-    logFundsStatus() {
-        const buyName = this.config.assetB || 'quote'; const sellName = this.config.assetA || 'base';
-        console.log('\n===== FUNDS STATUS =====');
-        console.log(`Available: Buy ${this.funds.available.buy.toFixed(8)} ${buyName} | Sell ${this.funds.available.sell.toFixed(8)} ${sellName}`);
-        console.log(`Committed: Buy ${this.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${this.funds.committed.sell.toFixed(8)} ${sellName}`);
-    }
+    // Funds/status display moved to Logger; use this.logger.logFundsStatus(this)
 
     /**
      * Get the initial set of orders to place on-chain.
@@ -1099,8 +862,8 @@ class OrderManager {
         const buyCount = Math.max(0, Number(this.config.activeOrders && this.config.activeOrders.buy ? this.config.activeOrders.buy : 1));
         
         // Get minimum order sizes for each type
-        const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, this.assets, MIN_ORDER_SIZE_FACTOR);
-        const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, this.assets, MIN_ORDER_SIZE_FACTOR);
+        const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
+        const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
 
         // --- Sells ---
         const allVirtualSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL);
@@ -1233,7 +996,7 @@ class OrderManager {
             this.outOfSpread = false; 
         } 
         const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount); 
-        this.logFundsStatus();
+        this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
         return newOrders;
     }
 
@@ -1296,7 +1059,7 @@ class OrderManager {
             this.logger.log(`No SPREAD orders available for ${targetType} (total spreads: ${allSpreadOrders.length}, eligible at ${targetType === ORDER_TYPES.BUY ? 'below' : 'above'} market price ${this.config.marketPrice}: ${spreadOrders.length})`, 'warn');
             return [];
         }
-        const minSize = getMinOrderSize(targetType, this.assets, MIN_ORDER_SIZE_FACTOR);
+        const minSize = getMinOrderSize(targetType, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
         const maxByFunds = minSize > 0 ? Math.floor(availableFunds / minSize) : desiredCount;
         const ordersToCreate = Math.max(0, Math.min(desiredCount, maxByFunds || desiredCount));
         if (ordersToCreate === 0) { this.logger.log(`Insufficient funds to create any ${targetType} orders (available=${availableFunds}, minOrderSize=${minSize})`, 'warn'); return []; }
@@ -1335,40 +1098,7 @@ class OrderManager {
      * Log a comprehensive status summary to the console.
      * Displays: market, funds, order counts, spread info.
      */
-    displayStatus() {
-        const market = this.marketName || this.config.market || 'unknown';
-        const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE);
-        const virtualOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.VIRTUAL);
-        const filledOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.FILLED);
-        console.log('\n===== STATUS =====');
-        console.log(`Market: ${market}`);
-        const buyName = this.config.assetB || 'quote'; const sellName = this.config.assetA || 'base';
-        console.log(`Available Funds: Buy ${this.funds.available.buy.toFixed(8)} ${buyName} | Sell ${this.funds.available.sell.toFixed(8)} ${sellName}`);
-        console.log(`Committed Funds: Buy ${this.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${this.funds.committed.sell.toFixed(8)} ${sellName}`);
-        console.log(`Start Funds: Buy ${this.funds.total.buy.toFixed(8)} ${buyName} | Sell ${this.funds.total.sell.toFixed(8)} ${sellName}`);
-        console.log(`Orders: Virtual ${virtualOrders.length} | Active ${activeOrders.length} | Filled ${filledOrders.length}`);
-        console.log(`Spreads: ${this.currentSpreadCount}/${this.targetSpreadCount}`);
-        console.log(`Current Spread: ${this.calculateCurrentSpread().toFixed(2)}%`);
-        console.log(`Spread Condition: ${this.outOfSpread ? 'TOO WIDE' : 'Normal'}`);
-    }
-}
-
-/**
- * Normalize a configured price bound value.
- * Handles relative strings like '5x' (5x the market price for max,
- * 1/5x for min), plain numbers, and fallback defaults.
- * 
- * @param {string|number} value - Configured value ('5x', 1000, etc.)
- * @param {number} fallback - Default value if parsing fails
- * @param {number} marketPrice - Current market price for relative calculations
- * @param {string} mode - 'min' or 'max' for relative direction
- * @returns {number} Resolved price bound
- */
-function resolveConfiguredPriceBound(value, fallback, marketPrice, mode) {
-    const relative = resolveRelativePrice(value, marketPrice, mode);
-    if (Number.isFinite(relative)) return relative;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : fallback;
+    // Full status display moved to Logger; use this.logger.displayStatus(this)
 }
 
 module.exports = { OrderManager };

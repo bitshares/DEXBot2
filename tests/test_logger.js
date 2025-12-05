@@ -19,6 +19,26 @@ logger.log('debug message', 'debug');
 const sampleOrders = [ { price: 100, type: 'buy', state: 'virtual', size: 1 }, { price: 200, type: 'sell', state: 'virtual', size: 2 } ];
 logger.logOrderGrid(sampleOrders, 150);
 
+// Test logFundsStatus and displayStatus using a small manager-like stub
+const mgrStub = {
+	marketName: 'TEST/PAIR',
+	config: { assetA: 'BASE', assetB: 'QUOTE', market: 'TEST/PAIR' },
+	funds: { available: { buy: 1.2345, sell: 2.3456 }, committed: { buy: 0.5, sell: 0.25 }, total: { buy: 10, sell: 20 } },
+	currentSpreadCount: 2,
+	targetSpreadCount: 3,
+	outOfSpread: false,
+	getOrdersByTypeAndState: (type, state) => {
+		if (state === 'active') return [1,2];
+		if (state === 'virtual') return [1,2,3,4];
+		if (state === 'filled') return [];
+		return [];
+	},
+	calculateCurrentSpread: () => 3.1415
+};
+
+logger.logFundsStatus(mgrStub);
+logger.displayStatus(mgrStub);
+
 // Restore console.log
 console.log = origLog;
 

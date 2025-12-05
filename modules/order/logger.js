@@ -50,6 +50,39 @@ class Logger {
         });
         console.log('===============================================\n');
     }
+
+    // Print a summary of available vs committed funds for diagnostics.
+    // Accepts a manager instance and reads its funds & config to display names.
+    logFundsStatus(manager) {
+        if (!manager) return;
+        const buyName = manager.config?.assetB || 'quote';
+        const sellName = manager.config?.assetA || 'base';
+        console.log('\n===== FUNDS STATUS =====');
+        console.log(`Available: Buy ${manager.funds.available.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.available.sell.toFixed(8)} ${sellName}`);
+        console.log(`Committed: Buy ${manager.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.committed.sell.toFixed(8)} ${sellName}`);
+    }
+
+    // Print a comprehensive status summary using manager state.
+    displayStatus(manager) {
+        if (!manager) return;
+        const market = manager.marketName || manager.config?.market || 'unknown';
+        const activeOrders = manager.getOrdersByTypeAndState(null, 'active');
+        const virtualOrders = manager.getOrdersByTypeAndState(null, 'virtual');
+        const filledOrders = manager.getOrdersByTypeAndState(null, 'filled');
+        console.log('\n===== STATUS =====');
+        console.log(`Market: ${market}`);
+        const buyName = manager.config?.assetB || 'quote';
+        const sellName = manager.config?.assetA || 'base';
+        console.log(`Available Funds: Buy ${manager.funds.available.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.available.sell.toFixed(8)} ${sellName}`);
+        console.log(`Committed Funds: Buy ${manager.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.committed.sell.toFixed(8)} ${sellName}`);
+        console.log(`Start Funds: Buy ${manager.funds.total.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.total.sell.toFixed(8)} ${sellName}`);
+        console.log(`Orders: Virtual ${virtualOrders.length} | Active ${activeOrders.length} | Filled ${filledOrders.length}`);
+        console.log(`Spreads: ${manager.currentSpreadCount}/${manager.targetSpreadCount}`);
+        // calculateCurrentSpread may exist on manager
+        const spread = typeof manager.calculateCurrentSpread === 'function' ? manager.calculateCurrentSpread() : 0;
+        console.log(`Current Spread: ${Number(spread).toFixed(2)}%`);
+        console.log(`Spread Condition: ${manager.outOfSpread ? 'TOO WIDE' : 'Normal'}`);
+    }
 }
 
 module.exports = Logger;

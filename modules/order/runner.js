@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { OrderManager } = require('./manager');
+const OrderGridGenerator = require('./grid');
 
 /**
  * Run a standalone order grid calculation for testing.
@@ -87,7 +88,7 @@ async function runOrderManagerCalculation() {
     } catch (err) { throw err; }
 
     const manager = new OrderManager(runtimeConfig);
-    await manager.initialize();
+    await OrderGridGenerator.initializeGrid(manager);
 
     const cycles = Number(process.env.CALC_CYCLES || 3);
     const delayMs = Number(process.env.CALC_DELAY_MS || 500);
@@ -95,7 +96,7 @@ async function runOrderManagerCalculation() {
     for (let cycle = 1; cycle <= cycles; cycle++) {
         manager.logger.log(`\n----- Cycle ${cycle}/${cycles} -----`, 'info');
         await manager.fetchOrderUpdates({ calculate: true });
-        manager.displayStatus();
+        manager.logger && manager.logger.displayStatus && manager.logger.displayStatus(manager);
         if (cycle < cycles) await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 }

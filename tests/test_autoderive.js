@@ -50,7 +50,7 @@ async function runAutoderiveForBot(botCfg) {
     bsModule.BitShares = mock;
 
     // Create and initialize the OrderManager which triggers auto-derive.
-    const { OrderManager } = require('../modules/order');
+    const { OrderManager, order_grid: OrderGridGenerator } = require('../modules/order');
     const cfg = Object.assign({}, botCfg, {
         marketPrice: botCfg.marketPrice || 'market',
         minPrice: Number(botCfg.minPrice) || 1e-12,
@@ -58,7 +58,7 @@ async function runAutoderiveForBot(botCfg) {
     });
 
     const manager = new OrderManager(cfg);
-    await manager.initializeOrderGrid();
+    await OrderGridGenerator.initializeGrid(manager);
 
     try {
         const derived = Number(manager.config.marketPrice);

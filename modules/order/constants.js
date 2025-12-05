@@ -29,5 +29,17 @@ const DEFAULT_CONFIG = {
     activeOrders: { buy: 24, sell: 24 },
 };
 
-module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG };
+// Timing constants used by OrderManager and helpers
+const TIMING = Object.freeze({
+    SYNC_DELAY_MS: 500,
+    ACCOUNT_TOTALS_TIMEOUT_MS: 10000
+});
+
+// Grid limits and scaling constants
+const GRID_LIMITS = Object.freeze({
+    MIN_SPREAD_FACTOR: 2,
+    MIN_ORDER_SIZE_FACTOR: 50
+});
+
+module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS };
 
