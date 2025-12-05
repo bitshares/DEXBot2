@@ -156,7 +156,7 @@ Below is a short summary of the modules in this repository and what they provide
   - `modules/order/logger.js`: Colored console logger and `logOrderGrid()` helper.
   - `modules/order/manager.js`: `OrderManager` class — derives market price, resolves bounds, builds and manages the grid.
   - `modules/order/grid.js`: Grid generation and sizing algorithms.
-  - `modules/order/price.js`: Helpers to derive market price from pool/market/ticker.
+  - `modules/order/utils.js`: Helpers to derive market price from pool/market/ticker are now included here.
   - `modules/order/runner.js`: Runner for calculation passes and dry-runs.
   - `modules/order/utils.js`: Utility functions (percent parsing, multiplier parsing, blockchain float/int conversion).
 

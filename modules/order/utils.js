@@ -1,26 +1,20 @@
 /**
- * Utility helpers for OrderManager calculations and conversions
- * 
- * This module provides:
- * - Percentage string parsing ('50%' -> 0.5)
- * - Blockchain integer <-> human float conversions
- * - Relative price multiplier parsing ('5x' -> 5)
+ * modules/order/utils.js
+ *
+ * Centralized utility helpers used by the order subsystem.
+ * Grouped for readability and maintenance: parsing, conversions, tolerance,
+ * matching, reconciliation, and price derivation.
  */
 
-/**
- * Check if a value is a percentage string (ends with '%')
- * @param {*} v - Value to check
- * @returns {boolean} True if percentage string
- */
+const { ORDER_TYPES, ORDER_STATES } = require('./constants');
+
+// ---------------------------------------------------------------------------
+// Parsing helpers
+// ---------------------------------------------------------------------------
 function isPercentageString(v) {
     return typeof v === 'string' && v.trim().endsWith('%');
 }
 
-/**
- * Parse a percentage string to a decimal fraction.
- * @param {string} v - Percentage string (e.g., '50%')
- * @returns {number|null} Decimal fraction (0.5) or null if invalid
- */
 function parsePercentageString(v) {
     if (!isPercentageString(v)) return null;
     const num = parseFloat(v.trim().slice(0, -1));
@@ -28,53 +22,10 @@ function parsePercentageString(v) {
     return num / 100.0;
 }
 
-/**
- * Convert a blockchain integer amount to human-readable float.
- * Blockchain stores amounts as integers (satoshis), this converts
- * to the human-readable decimal value.
- * 
- * @example blockchainToFloat(12345678, 4) -> 1234.5678
- * 
- * @param {number} intValue - Integer amount from blockchain
- * @param {number} precision - Asset precision (decimal places)
- * @returns {number} Human-readable float value
- */
-function blockchainToFloat(intValue, precision) {
-    if (intValue === null || intValue === undefined) return 0;
-    const p = Number(precision || 0);
-    return Number(intValue) / Math.pow(10, p);
-}
-
-/**
- * Convert a human-readable float to blockchain integer.
- * Reverses blockchainToFloat - converts decimals to satoshis.
- * 
- * @example floatToBlockchainInt(1234.5678, 4) -> 12345678
- * 
- * @param {number} floatValue - Human-readable amount
- * @param {number} precision - Asset precision (decimal places)
- * @returns {number} Integer amount for blockchain
- */
-function floatToBlockchainInt(floatValue, precision) {
-    const p = Number(precision || 0);
-    // Return a JS Number integer representing the blockchain integer (not BigInt)
-    return Math.round(Number(floatValue) * Math.pow(10, p));
-}
-
-/**
- * Check if a value is a relative multiplier string (e.g., '5x')
- * @param {*} value - Value to check
- * @returns {boolean} True if multiplier string
- */
 function isRelativeMultiplierString(value) {
     return typeof value === 'string' && /^[\s]*[0-9]+(?:\.[0-9]+)?x[\s]*$/i.test(value);
 }
 
-/**
- * Parse a relative multiplier string to a number.
- * @param {string} value - Multiplier string (e.g., '5x')
- * @returns {number|null} Numeric multiplier or null if invalid
- */
 function parseRelativeMultiplierString(value) {
     if (!isRelativeMultiplierString(value)) return null;
     const cleaned = value.trim().toLowerCase();
@@ -82,21 +33,7 @@ function parseRelativeMultiplierString(value) {
     return Number.isNaN(numeric) ? null : numeric;
 }
 
-/**
- * Resolve a relative price multiplier to an absolute price.
- * Used to configure min/max price bounds relative to market price.
- * 
- * @example
- * resolveRelativePrice('5x', 100, 'max') -> 500 (100 * 5)
- * resolveRelativePrice('5x', 100, 'min') -> 20  (100 / 5)
- * 
- * @param {string} value - Multiplier string (e.g., '5x')
- * @param {number} marketPrice - Current market price
- * @param {string} mode - 'min' (divide) or 'max' (multiply)
- * @returns {number|null} Absolute price or null if invalid
- */
 function resolveRelativePrice(value, marketPrice, mode = 'min') {
-    // Interpret relative multipliers like '5x' as min/max bounds around the market price.
     const multiplier = parseRelativeMultiplierString(value);
     if (multiplier === null || !Number.isFinite(marketPrice) || multiplier === 0) return null;
     if (mode === 'min') return marketPrice / multiplier;
@@ -104,23 +41,25 @@ function resolveRelativePrice(value, marketPrice, mode = 'min') {
     return null;
 }
 
-/**
- * Calculate the maximum allowable price difference between grid and blockchain
- * based on asset precisions and order size.
- *
- * This mirrors the OrderManager.calculatePriceTolerance logic but is a plain
- * function so it can be reused across the codebase for a single canonical
- * implementation.
- *
- * @param {number} gridPrice - The price in the grid (stored snapshot)
- * @param {number} orderSize - The order size (human units)
- * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL (optional)
- * @param {Object|null} assets - Optional assets metadata { assetA: {precision}, assetB: {precision} }
- * @returns {number} - Maximum allowable absolute price difference
- */
+// ---------------------------------------------------------------------------
+// Blockchain conversions
+// ---------------------------------------------------------------------------
+function blockchainToFloat(intValue, precision) {
+    if (intValue === null || intValue === undefined) return 0;
+    const p = Number(precision || 0);
+    return Number(intValue) / Math.pow(10, p);
+}
+
+function floatToBlockchainInt(floatValue, precision) {
+    const p = Number(precision || 0);
+    return Math.round(Number(floatValue) * Math.pow(10, p));
+}
+
+// ---------------------------------------------------------------------------
+// Price tolerance and checks
+// ---------------------------------------------------------------------------
 function calculatePriceTolerance(gridPrice, orderSize, orderType, assets = null) {
     if (!assets || !gridPrice || !orderSize) {
-        // Fallback to the same reasonable default used in OrderManager
         return gridPrice ? gridPrice * 0.001 : 0;
     }
 
@@ -132,7 +71,6 @@ function calculatePriceTolerance(gridPrice, orderSize, orderType, assets = null)
         orderSizeA = orderSize;
         orderSizeB = orderSize * gridPrice;
     } else {
-        // default assume buy semantics if not explicitly sell
         orderSizeB = orderSize;
         orderSizeA = orderSize / gridPrice;
     }
@@ -143,17 +81,6 @@ function calculatePriceTolerance(gridPrice, orderSize, orderType, assets = null)
     return tolerance;
 }
 
-/**
- * Check whether a chain order price is within the allowable tolerance
- * of a grid order price. Returns an object matching the previous
- * OrderManager.checkPriceWithinTolerance shape so consumers can use
- * the helper interchangeably.
- *
- * @param {Object} gridOrder - Grid order snapshot ({ price, size, type })
- * @param {Object} chainOrder - Parsed chain order ({ price, size })
- * @param {Object|null} assets - Optional assets object to calculate tolerance
- * @returns {Object} { isWithinTolerance, priceDiff, tolerance, gridPrice, chainPrice, orderSize }
- */
 function checkPriceWithinTolerance(gridOrder, chainOrder, assets = null) {
     const gridPrice = Number(gridOrder && gridOrder.price);
     const chainPrice = Number(chainOrder && chainOrder.price);
@@ -172,14 +99,9 @@ function checkPriceWithinTolerance(gridOrder, chainOrder, assets = null) {
     };
 }
 
-// --- New helpers extracted from OrderManager for reuse and testing ---
-const { ORDER_TYPES, ORDER_STATES } = require('./constants');
-
-/**
- * Parse a raw blockchain order into { orderId, price, type, size }
- * @param {Object} chainOrder
- * @param {Object} assets
- */
+// ---------------------------------------------------------------------------
+// Chain order parsing + matching helpers
+// ---------------------------------------------------------------------------
 function parseChainOrder(chainOrder, assets) {
     if (!chainOrder || !chainOrder.sell_price || !assets) return null;
     const { base, quote } = chainOrder.sell_price;
@@ -209,14 +131,6 @@ function parseChainOrder(chainOrder, assets) {
     return { orderId: chainOrder.id, price, type, size };
 }
 
-/**
- * Scan candidate order ids and find the best match by price within tolerance.
- * @param {Object} chainOrder - { price, type, size }
- * @param {Iterable} candidateIds - iterable of grid order ids
- * @param {Map} ordersMap - Map of orderId->order object
- * @param {Function} calcToleranceFn - function(gridPrice, orderSize, orderType)
- * @returns {{match: Object|null, priceDiff: number}}
- */
 function findBestMatchByPrice(chainOrder, candidateIds, ordersMap, calcToleranceFn) {
     let bestMatch = null; let smallestDiff = Infinity;
     for (const gridOrderId of candidateIds) {
@@ -232,15 +146,10 @@ function findBestMatchByPrice(chainOrder, candidateIds, ordersMap, calcTolerance
     return { match: bestMatch, priceDiff: smallestDiff };
 }
 
-/**
- * Find a matching grid order for a parsed chain order using manager-like indices.
- * opts: { orders: Map, ordersByState: {virtual,active,filled}, assets, calcToleranceFn, logger }
- */
 function findMatchingGridOrderByOpenOrder(parsedChainOrder, opts) {
     const { orders, ordersByState, assets, calcToleranceFn, logger } = opts || {};
     if (!parsedChainOrder || !orders) return null;
 
-    // OrderId match first
     if (parsedChainOrder.orderId) {
         for (const gridOrder of orders.values()) {
             if (gridOrder.orderId === parsedChainOrder.orderId) return gridOrder;
@@ -248,9 +157,6 @@ function findMatchingGridOrderByOpenOrder(parsedChainOrder, opts) {
         logger?.log?.(`_findMatchingGridOrderByOpenOrder: orderId ${parsedChainOrder.orderId} NOT found in grid, falling back to price matching (chain price=${parsedChainOrder.price?.toFixed(6)}, type=${parsedChainOrder.type})`, 'info');
     }
 
-    // Try ALL orders by price (virtual, active, spread) — match first order within tolerance
-    // This widens the search so orders in any state can be matched by price if they
-    // are sufficiently close to the parsed chain order price.
     for (const gridOrder of orders.values()) {
         if (!gridOrder) continue;
         const priceDiff = Math.abs(gridOrder.price - parsedChainOrder.price);
@@ -259,7 +165,6 @@ function findMatchingGridOrderByOpenOrder(parsedChainOrder, opts) {
         if (gridOrder.type === parsedChainOrder.type && priceDiff <= tolerance) return gridOrder;
     }
 
-    // ACTIVE orders: find closest within tolerance
     if (parsedChainOrder.price !== undefined && parsedChainOrder.type) {
         const activeIds = (ordersByState && ordersByState[ORDER_STATES.ACTIVE]) || new Set();
         return findBestMatchByPrice(parsedChainOrder, activeIds, orders, calcToleranceFn).match;
@@ -267,10 +172,6 @@ function findMatchingGridOrderByOpenOrder(parsedChainOrder, opts) {
     return null;
 }
 
-/**
- * Match a fill operation to a grid order using manager context
- * opts: { orders: Map, assets, calcToleranceFn, logger }
- */
 function findMatchingGridOrderByHistory(fillOp, opts) {
     const { orders, assets, calcToleranceFn, logger } = opts || {};
     if (!fillOp) return null;
@@ -305,16 +206,15 @@ function findMatchingGridOrderByHistory(fillOp, opts) {
 
     logger?.log?.(`Fill analysis: type=${fillType}, price=${fillPrice.toFixed(4)}`, 'debug');
 
-    // Find by price among ACTIVE orders
     const activeIds = [];
     for (const [id, order] of orders.entries()) if (order.state === ORDER_STATES.ACTIVE) activeIds.push(id);
     const result = findBestMatchByPrice({ type: fillType, price: fillPrice }, activeIds, orders, calcToleranceFn);
     return result.match;
 }
 
-/** Apply on-chain reported size to a tracked grid order, including funds reconciliation.
- * manager must provide: logger, _adjustFunds(delta), _updateOrder(order), assets
- */
+// ---------------------------------------------------------------------------
+// Chain reconciliation helpers
+// ---------------------------------------------------------------------------
 function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
     if (!manager || !gridOrder) return;
     if (gridOrder.state !== ORDER_STATES.ACTIVE) {
@@ -329,16 +229,11 @@ function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
     const newInt = floatToBlockchainInt(newSize, precision);
     if (oldInt === newInt) { gridOrder.size = newSize; return; }
     manager.logger?.log?.(`Order ${gridOrder.id} size adjustment: ${oldSize.toFixed(8)} -> ${newSize.toFixed(8)} (delta: ${delta.toFixed(8)})`, 'info');
-    // Adjust funds using manager helper
     try { manager._adjustFunds(gridOrder.type, delta); } catch (e) { /* best-effort */ }
     gridOrder.size = newSize;
     try { manager._updateOrder(gridOrder); } catch (e) { /* best-effort */ }
 }
 
-/**
- * Correct an order on-chain to match grid price. Uses accountOrders.updateOrder
- * manager is used for logging and available helpers.
- */
 async function correctOrderPriceOnChain(manager, correctionInfo, accountName, privateKey, accountOrders) {
     const { gridOrder, chainOrderId, expectedPrice, size, type } = correctionInfo;
     manager.logger?.log?.(`Correcting order ${gridOrder.id} (${chainOrderId}): updating to price ${expectedPrice.toFixed(8)}`, 'info');
@@ -366,10 +261,6 @@ async function correctOrderPriceOnChain(manager, correctionInfo, accountName, pr
     }
 }
 
-/**
- * Compute minimum order size based on asset precision and factor.
- * Mirrors manager.getMinOrderSize but decoupled.
- */
 function getMinOrderSize(orderType, assets, factor = 50) {
     const f = Number(factor);
     if (!f || !Number.isFinite(f) || f <= 0) return 0;
@@ -383,21 +274,255 @@ function getMinOrderSize(orderType, assets, factor = 50) {
     return Number(f) * smallestUnit;
 }
 
+// ---------------------------------------------------------------------------
+// Price derivation helpers (moved from modules/order/price.js)
+// ---------------------------------------------------------------------------
+const lookupAsset = async (BitShares, s) => {
+    try { const a = await BitShares.assets[s.toLowerCase()]; if (a && a.id) return a; } catch (e) {}
+    try { const r = await BitShares.db.lookup_asset_symbols([s]); if (r && r[0] && r[0].id) return r[0]; } catch (e) {}
+    try { const g = await BitShares.db.get_assets([s]); if (g && g[0] && g[0].id) return g[0]; } catch (e) {}
+    return null;
+};
+
+const deriveMarketPrice = async (BitShares, symA, symB) => {
+    try {
+        const aMeta = await lookupAsset(BitShares, symA);
+        const bMeta = await lookupAsset(BitShares, symB);
+        if (!aMeta || !bMeta) throw new Error('Could not discover assets for market lookup');
+
+        const baseId = aMeta.id; const quoteId = bMeta.id;
+        let mid = null;
+        try {
+            if (BitShares.db && typeof BitShares.db.get_order_book === 'function') {
+                const ob = await BitShares.db.get_order_book(baseId, quoteId, 5);
+                const bestBid = ob.bids && ob.bids.length ? Number(ob.bids[0].price) : null;
+                const bestAsk = ob.asks && ob.asks.length ? Number(ob.asks[0].price) : null;
+                if (bestBid !== null && bestAsk !== null) mid = (bestBid + bestAsk) / 2;
+            }
+        } catch (e) {}
+
+        if (mid === null) {
+            try {
+                if (BitShares.db && typeof BitShares.db.get_ticker === 'function') {
+                    const t = await BitShares.db.get_ticker(baseId, quoteId);
+                    if (t && (t.latest || t.latest === 0)) mid = Number(t.latest);
+                    if (!mid && t && t.latest_price) mid = Number(t.latest_price);
+                }
+            } catch (err) {}
+        }
+
+        if (mid !== null && Number.isFinite(mid) && mid !== 0) return 1 / mid;
+        return null;
+    } catch (err) {
+        return null;
+    }
+};
+
+const derivePoolPrice = async (BitShares, symA, symB) => {
+    try {
+        const aMeta = await lookupAsset(BitShares, symA);
+        const bMeta = await lookupAsset(BitShares, symB);
+        if (!aMeta || !bMeta) throw new Error('Could not discover assets for pool lookup');
+
+        let chosen = null;
+        try {
+            if (BitShares.db && typeof BitShares.db.get_liquidity_pool_by_asset_ids === 'function') {
+                const pool = await BitShares.db.get_liquidity_pool_by_asset_ids(aMeta.id, bMeta.id);
+                if (pool && pool.id) chosen = pool;
+            }
+        } catch (e) {}
+
+        try {
+            if (!chosen && BitShares.db && typeof BitShares.db.get_liquidity_pools === 'function') {
+                const pools = await BitShares.db.get_liquidity_pools();
+                if (Array.isArray(pools)) {
+                    const matches = pools.filter(p => {
+                        const ids = (p.asset_ids || []).map(x => String(x));
+                        return ids.includes(String(aMeta.id)) && ids.includes(String(bMeta.id));
+                    });
+                    if (matches.length > 0) {
+                        chosen = matches.sort((x, y) => (Number(y.total_reserve || 0) - Number(x.total_reserve || 0)))[0];
+                        try {
+                            if (chosen && !Array.isArray(chosen.reserves) && chosen.id && BitShares.db && typeof BitShares.db.get_objects === 'function') {
+                                const objs = await BitShares.db.get_objects([chosen.id]);
+                                if (Array.isArray(objs) && objs[0]) chosen = objs[0];
+                            }
+                        } catch (e) {}
+                    }
+                }
+            }
+        } catch (e) {}
+
+        if (!chosen) {
+            try {
+                if (BitShares.db && typeof BitShares.db.get_order_book === 'function') {
+                    const ob = await BitShares.db.get_order_book(aMeta.id, bMeta.id, 100);
+                    const bids = (ob.bids || []).slice(0, 50);
+                    const asks = (ob.asks || []).slice(0, 50);
+                    const weightAvg = (arr) => {
+                        if (!arr || arr.length === 0) return null;
+                        let num = 0, den = 0;
+                        arr.forEach(p => {
+                            const price = Number(p.price || 0);
+                            const amount = Number(p.size || p.base_amount || p.quantity || 1);
+                            num += price * amount; den += amount;
+                        });
+                        return den ? num / den : null;
+                    };
+                    const bidAvg = weightAvg(bids);
+                    const askAvg = weightAvg(asks);
+                    if (bidAvg !== null && askAvg !== null) {
+                        const mid = (bidAvg + askAvg) / 2;
+                        return (mid !== 0 && Number.isFinite(mid)) ? 1 / mid : null;
+                    }
+                    if (bidAvg !== null) return (bidAvg !== 0 && Number.isFinite(bidAvg)) ? 1 / bidAvg : null;
+                    if (askAvg !== null) return (askAvg !== 0 && Number.isFinite(askAvg)) ? 1 / askAvg : null;
+                }
+            } catch (e) {}
+            return null;
+        }
+
+        try {
+            let foundAmountA = null; let foundAmountB = null; let precisionA = null; let precisionB = null;
+            if (Array.isArray(chosen.reserves) && chosen.reserves.length >= 2) {
+                const rA = chosen.reserves.find(r => r && String(r.asset_id) === String(aMeta.id));
+                const rB = chosen.reserves.find(r => r && String(r.asset_id) === String(bMeta.id));
+                if (rA && rB) {
+                    foundAmountA = Number(rA.amount || 0);
+                    foundAmountB = Number(rB.amount || 0);
+                    try { if (rA.asset_id && rB.asset_id && BitShares.db && typeof BitShares.db.get_assets === 'function') {
+                        const assetsMeta = await BitShares.db.get_assets([rA.asset_id, rB.asset_id]);
+                        if (assetsMeta && assetsMeta[0] && typeof assetsMeta[0].precision === 'number') precisionA = assetsMeta[0].precision;
+                        if (assetsMeta && assetsMeta[1] && typeof assetsMeta[1].precision === 'number') precisionB = assetsMeta[1].precision;
+                    } } catch (e) {}
+                }
+            }
+            if (foundAmountA === null || foundAmountB === null) {
+                const reserveA = Number(chosen.reserve_a || chosen.reserve_base || 0);
+                const reserveB = Number(chosen.reserve_b || chosen.reserve_quote || 0);
+                if (Number.isFinite(reserveA) && Number.isFinite(reserveB) && reserveA !== 0) {
+                    foundAmountA = reserveA; foundAmountB = reserveB; precisionA = precisionA; precisionB = precisionB;
+                }
+            }
+            if (foundAmountA === null || foundAmountB === null) return null;
+            const floatA = Number.isFinite(precisionA) ? (foundAmountA / Math.pow(10, precisionA)) : foundAmountA;
+            const floatB = Number.isFinite(precisionB) ? (foundAmountB / Math.pow(10, precisionB)) : foundAmountB;
+            if (Number.isFinite(floatA) && Number.isFinite(floatB) && floatA !== 0) return (floatB !== 0 && Number.isFinite(floatB)) ? floatB / floatA : null;
+        } catch (e) {}
+
+        return null;
+    } catch (err) {
+        return null;
+    }
+};
+
+// derivePrice: pooled -> market -> aggregated limit orders
+const derivePrice = async (BitShares, symA, symB, mode) => {
+    mode = (mode === undefined || mode === null) ? 'auto' : String(mode).toLowerCase();
+    if (mode === 'pool') {
+        try { const p = await derivePoolPrice(BitShares, symA, symB); if (p && Number.isFinite(p) && p > 0) return p; } catch (e) { return null; }
+        return null;
+    }
+    if (mode === 'market') {
+        try { const m = await deriveMarketPrice(BitShares, symA, symB); if (m && Number.isFinite(m) && m > 0) return m; } catch (e) { return null; }
+        return null;
+    }
+    try {
+        try {
+            const p = await derivePoolPrice(BitShares, symA, symB);
+            if (p && Number.isFinite(p) && p > 0) return p;
+        } catch (e) {}
+
+        try {
+            const m = await deriveMarketPrice(BitShares, symA, symB);
+            if (m && Number.isFinite(m) && m > 0) return m;
+        } catch (e) {}
+
+        try {
+            const aMeta = await lookupAsset(BitShares, symA);
+            const bMeta = await lookupAsset(BitShares, symB);
+            if (!aMeta || !bMeta) return null;
+            const aId = aMeta.id; const bId = bMeta.id;
+
+            let orders = await (BitShares.db && typeof BitShares.db.get_limit_orders === 'function' ? BitShares.db.get_limit_orders(aId, bId, 100) : null).catch(() => null);
+            if (!orders || !orders.length) {
+                const rev = await (BitShares.db && typeof BitShares.db.get_limit_orders === 'function' ? BitShares.db.get_limit_orders(bId, aId, 100) : null).catch(() => null);
+                orders = rev || [];
+            }
+            if (!orders || !orders.length) return null;
+
+            const parseOrder = async (order) => {
+                if (!order || !order.sell_price) return null;
+                const { base, quote } = order.sell_price;
+                const basePrec = await (BitShares.assets && BitShares.assets[base.asset_id] ? (BitShares.assets[base.asset_id].precision || 0) : (async () => { try { const a = await BitShares.db.get_assets([base.asset_id]); return (a && a[0] && typeof a[0].precision === 'number') ? a[0].precision : 0; } catch (e) { return 0; } })());
+                const basePrecision = typeof basePrec === 'number' ? basePrec : await basePrec;
+                const quotePrec = await (BitShares.assets && BitShares.assets[quote.asset_id] ? (BitShares.assets[quote.asset_id].precision || 0) : (async () => { try { const a = await BitShares.db.get_assets([quote.asset_id]); return (a && a[0] && typeof a[0].precision === 'number') ? a[0].precision : 0; } catch (e) { return 0; } })());
+                const quotePrecision = typeof quotePrec === 'number' ? quotePrec : await quotePrec;
+
+                const baseAmt = Number(base.amount || 0);
+                const quoteAmt = Number(quote.amount || 0);
+                if (!baseAmt || !quoteAmt) return null;
+                const price = (quoteAmt / baseAmt) * Math.pow(10, basePrecision - quotePrecision);
+                const size = Number(order.for_sale || 0) / Math.pow(10, basePrecision || 0);
+                return { price, size, baseId: String(base.asset_id), quoteId: String(quote.asset_id) };
+            };
+
+            let sumNum = 0, sumDen = 0;
+            for (const o of orders) {
+                const p = await parseOrder(o);
+                if (!p) continue;
+                let priceInDesired = null;
+                if (p.baseId === String(aId) && p.quoteId === String(bId)) priceInDesired = p.price;
+                else if (p.baseId === String(bId) && p.quoteId === String(aId)) { if (p.price !== 0) priceInDesired = 1 / p.price; }
+                else continue;
+                if (!Number.isFinite(priceInDesired) || priceInDesired <= 0) continue;
+                const weight = Math.max(1e-12, p.size);
+                sumNum += priceInDesired * weight;
+                sumDen += weight;
+            }
+            if (!sumDen) return null;
+            return sumNum / sumDen;
+        } catch (e) {}
+
+        return null;
+    } catch (err) {
+        return null;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
 module.exports = {
+    // Parsing
     isPercentageString,
     parsePercentageString,
+    isRelativeMultiplierString,
+    parseRelativeMultiplierString,
+    resolveRelativePrice,
+
+    // Conversions
     blockchainToFloat,
     floatToBlockchainInt,
-    resolveRelativePrice, 
+
+    // Tolerance & checks
     calculatePriceTolerance,
     checkPriceWithinTolerance,
-    // new helpers
+
+    // Parsing + matching
     parseChainOrder,
     findBestMatchByPrice,
     findMatchingGridOrderByOpenOrder,
     findMatchingGridOrderByHistory,
+
+    // Reconciliation
     applyChainSizeToGridOrder,
     correctOrderPriceOnChain,
-    getMinOrderSize
-};
+    getMinOrderSize,
 
+    // Price derivation
+    lookupAsset,
+    deriveMarketPrice,
+    derivePoolPrice,
+    derivePrice
+};
