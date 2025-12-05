@@ -1,5 +1,5 @@
 /**
- * OrderGridGenerator - Generates the virtual order grid structure
+ * Grid - Generates the virtual order grid structure
  * 
  * This module creates the foundational grid of virtual orders based on:
  * - Market price (center of the grid)
@@ -20,7 +20,7 @@ const { floatToBlockchainInt, resolveRelativePrice } = require('./utils');
 // Grid sizing limits are centralized in modules/order/constants.js -> GRID_LIMITS
 
 /**
- * OrderGridGenerator - Static class for grid creation and sizing
+ * Grid - Static class for grid creation and sizing
  * 
  * Grid creation algorithm:
  * 1. Calculate price levels from marketPrice to maxPrice (sells) and minPrice (buys)
@@ -30,7 +30,7 @@ const { floatToBlockchainInt, resolveRelativePrice } = require('./utils');
  * 
  * @class
  */
-class OrderGridGenerator {
+class Grid {
     /**
      * Create the order grid structure.
      * Generates sell orders from market to max, buy orders from market to min.
@@ -222,7 +222,33 @@ function resolveConfiguredPriceBound(value, fallback, marketPrice, mode) {
  *
  * @param {Object} manager - OrderManager instance (will be mutated)
  */
-OrderGridGenerator.initializeGrid = async function(manager) {
+// Restore a persisted grid snapshot onto a manager instance
+// Usage: Grid.loadGrid(manager, gridArray)
+Grid.loadGrid = function(manager, grid) {
+    if (!Array.isArray(grid)) return;
+    // Clear manager state and indices then load the grid entries
+    manager.orders.clear();
+    Object.values(manager._ordersByState).forEach(set => set.clear());
+    Object.values(manager._ordersByType).forEach(set => set.clear());
+    manager.resetFunds();
+    grid.forEach(order => {
+        manager._updateOrder(order);
+        if (order.state === 'active') {
+            if (order.type === ORDER_TYPES.BUY) {
+                manager.funds.committed.buy += order.size;
+                manager.funds.available.buy -= order.size;
+            } else if (order.type === ORDER_TYPES.SELL) {
+                manager.funds.committed.sell += order.size;
+                manager.funds.available.sell -= order.size;
+            }
+        }
+    });
+    manager.logger.log(`Loaded ${manager.orders.size} orders from persisted grid state.`, 'info');
+    manager.logger && manager.logger.logFundsStatus && manager.logger.logFundsStatus(manager);
+};
+
+// Initialize grid (keeps same API semantics as before)
+Grid.initializeGrid = async function(manager) {
     if (!manager) throw new Error('initializeGrid requires a manager instance');
     await manager._initializeAssets();
     const mpRaw = manager.config.marketPrice;
@@ -298,7 +324,7 @@ OrderGridGenerator.initializeGrid = async function(manager) {
     } catch (err) { /* don't let failures block grid creation */ }
 
     const { getMinOrderSize } = require('./utils');
-    const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(manager.config);
+    const { orders, initialSpreadCount } = Grid.createOrderGrid(manager.config);
     const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
     const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
 
@@ -308,7 +334,7 @@ OrderGridGenerator.initializeGrid = async function(manager) {
 
     const precA = manager.assets?.assetA?.precision;
     const precB = manager.assets?.assetB?.precision;
-    let sizedOrders = OrderGridGenerator.calculateOrderSizes(
+    let sizedOrders = Grid.calculateOrderSizes(
         orders, manager.config, manager.funds.available.sell, manager.funds.available.buy, minSellSize, minBuySize, precA, precB
     );
 
@@ -376,10 +402,10 @@ OrderGridGenerator.initializeGrid = async function(manager) {
  * @param {Function} readOpenOrdersFn - async function to fetch open orders
  * @param {Function} cancelOrderFn - async function to cancel an order
  */
-OrderGridGenerator.recalculateGrid = async function(manager, readOpenOrdersFn, cancelOrderFn) {
+Grid.recalculateGrid = async function(manager, readOpenOrdersFn, cancelOrderFn) {
     if (!manager) throw new Error('recalculateGrid requires a manager instance');
     manager.logger.log('Starting full grid resynchronization from blockchain...', 'info');
-    await OrderGridGenerator.initializeGrid(manager);
+    await Grid.initializeGrid(manager);
     manager.logger.log('Virtual grid has been regenerated.', 'debug');
     const chainOrders = await readOpenOrdersFn();
     if (!Array.isArray(chainOrders)) {
@@ -440,6 +466,5 @@ OrderGridGenerator.recalculateGrid = async function(manager, readOpenOrdersFn, c
     manager.logger.logOrderGrid(Array.from(manager.orders.values()), manager.config.marketPrice);
 };
 
-// Expose the generator as module export
-
-module.exports = OrderGridGenerator;
+// Expose the grid generator as module export
+module.exports = Grid;

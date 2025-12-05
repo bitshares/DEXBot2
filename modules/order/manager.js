@@ -16,7 +16,7 @@
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS } = require('./constants');
 const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
 const Logger = require('./logger');
-// OrderGridGenerator functions (initialize/recalculate) are intended to be
+// Grid functions (initialize/recalculate) are intended to be
 // called directly via require('./grid').initializeGrid(manager) by callers.
 
 // Constants for manager operations are provided by modules/order/constants.js
@@ -283,9 +283,9 @@ class OrderManager {
         }
     }
 
-    // Initialization is provided by OrderGridGenerator.initializeGrid(manager)
+    // Initialization is provided by Grid.initializeGrid(manager)
     // to avoid duplicating grid logic in the manager. Callers should use
-    // OrderGridGenerator.initializeGrid(manager) directly.
+    // Grid.initializeGrid(manager) directly.
 
     /**
      * Initialize the virtual order grid.
@@ -294,7 +294,7 @@ class OrderManager {
      * 2. Derives marketPrice from pool/orderbook if not specified
      * 3. Resolves min/max price bounds (handles '5x' relative notation)
      * 4. Waits for account balances if botFunds are percentage-based
-     * 5. Creates the grid using OrderGridGenerator
+    * 5. Creates the grid using Grid
      * 6. Allocates order sizes based on available funds
      * 7. Validates that no orders are below minimum size
      * 
@@ -311,28 +311,7 @@ class OrderManager {
      * 
      * @param {Array} grid - Array of order objects from profiles/orders.json
      */
-    loadGrid(grid) {
-        if (!grid || !Array.isArray(grid)) return;
-        this.orders.clear();
-        // Clear indices
-        Object.values(this._ordersByState).forEach(set => set.clear());
-        Object.values(this._ordersByType).forEach(set => set.clear());
-        this.resetFunds();
-        grid.forEach(order => {
-            this._updateOrder(order);
-            if (order.state === 'active') {
-                if (order.type === ORDER_TYPES.BUY) {
-                    this.funds.committed.buy += order.size;
-                    this.funds.available.buy -= order.size;
-                } else if (order.type === ORDER_TYPES.SELL) {
-                    this.funds.committed.sell += order.size;
-                    this.funds.available.sell -= order.size;
-                }
-            }
-        });
-        this.logger.log(`Loaded ${this.orders.size} orders from persisted grid state.`, 'info');
-        this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
-    }
+    // NOTE: loadGrid was moved to Grid.loadGrid to centralize grid persistence
 
 
 

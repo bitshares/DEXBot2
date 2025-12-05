@@ -1,7 +1,7 @@
 const assert = require('assert');
 console.log('Running manager tests');
 
-const { OrderManager, order_grid: OrderGridGenerator } = require('../modules/order/index.js');
+const { OrderManager, grid: Grid } = require('../modules/order/index.js');
 
 // Initialize manager in a deterministic way (no chain lookups)
 const cfg = {
@@ -39,7 +39,7 @@ assert.strictEqual(mgr.funds.available.sell, 10);
 (async () => {
     // Provide mock asset metadata to avoid on-chain lookups in unit tests
     mgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.1', precision: 5 } };
-    await OrderGridGenerator.initializeGrid(mgr);
+    await Grid.initializeGrid(mgr);
     // after initialize there should be orders
     assert(mgr.orders.size > 0, 'initializeGrid should create orders');
 

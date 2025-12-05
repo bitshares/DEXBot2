@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { OrderManager } = require('./manager');
-const OrderGridGenerator = require('./grid');
+const Grid = require('./grid');
 
 /**
  * Run a standalone order grid calculation for testing.
@@ -88,7 +88,7 @@ async function runOrderManagerCalculation() {
     } catch (err) { throw err; }
 
     const manager = new OrderManager(runtimeConfig);
-    await OrderGridGenerator.initializeGrid(manager);
+    await Grid.initializeGrid(manager);
 
     const cycles = Number(process.env.CALC_CYCLES || 3);
     const delayMs = Number(process.env.CALC_DELAY_MS || 500);

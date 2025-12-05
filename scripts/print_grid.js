@@ -1,4 +1,4 @@
-const OrderGridGenerator = require('../modules/order/grid');
+const Grid = require('../modules/order/grid');
 const { DEFAULT_CONFIG } = require('../modules/order/constants');
 
 function printGridSample() {
@@ -11,7 +11,7 @@ function printGridSample() {
     weightDistribution: DEFAULT_CONFIG.weightDistribution
   };
 
-  const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(config);
+  const { orders, initialSpreadCount } = Grid.createOrderGrid(config);
 
   const sell = orders.filter(o => o.type === 'sell').map(o => o.price);
   const buy = orders.filter(o => o.type === 'buy').map(o => o.price);

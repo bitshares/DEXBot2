@@ -1,7 +1,7 @@
 const assert = require('assert');
 console.log('Running order_grid tests');
 
-const OrderGridGenerator = require('../modules/order/index.js').order_grid;
+const Grid = require('../modules/order/index.js').grid;
 
 const cfg = {
     marketPrice: 100,
@@ -12,7 +12,7 @@ const cfg = {
     weightDistribution: { sell: 1, buy: 1 }
 };
 
-const { orders, initialSpreadCount } = OrderGridGenerator.createOrderGrid(cfg);
+const { orders, initialSpreadCount } = Grid.createOrderGrid(cfg);
 assert(Array.isArray(orders), 'createOrderGrid should return an orders array');
 assert(typeof initialSpreadCount === 'object', 'createOrderGrid should return initialSpreadCount');
 
@@ -21,7 +21,7 @@ const sellFunds = 10;
 const buyFunds = 5;
 // Use a default precision for test determinism and compare integer totals
 const PRECISION = 8;
-const sized = OrderGridGenerator.calculateOrderSizes(orders, cfg, sellFunds, buyFunds, 0, 0, PRECISION, PRECISION);
+const sized = Grid.calculateOrderSizes(orders, cfg, sellFunds, buyFunds, 0, 0, PRECISION, PRECISION);
 assert(Array.isArray(sized), 'calculateOrderSizes should return an array');
 
 const { floatToBlockchainInt } = require('../modules/order/utils');

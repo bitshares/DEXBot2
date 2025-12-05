@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const chainOrders = require('./modules/chain_orders');
 const chainKeys = require('./modules/chain_keys');
-const { OrderManager, order_grid: OrderGridGenerator } = require('./modules/order');
+const { OrderManager, grid: Grid } = require('./modules/order');
 const accountKeys = require('./modules/chain_keys');
 const accountBots = require('./modules/account_bots');
 const { parseJsonWithComments } = accountBots;
@@ -213,7 +213,7 @@ class DEXBot {
             console.warn('Could not fetch account totals before initializing grid:', errFetch && errFetch.message ? errFetch.message : errFetch);
         }
 
-        await OrderGridGenerator.initializeGrid(this.manager);
+        await Grid.initializeGrid(this.manager);
 
         if (this.config.dryRun) {
             this.manager.logger.log('Dry run enabled, skipping on-chain order placement.', 'info');
@@ -452,7 +452,7 @@ class DEXBot {
                 this.manager.logger.log('Grid regeneration triggered. Performing full grid resync...', 'info');
                 const readFn = () => chainOrders.readOpenOrders(this.accountId);
                 const cancelFn = (orderId) => chainOrders.cancelOrder(this.account, this.privateKey, orderId);
-                await OrderGridGenerator.recalculateGrid(this.manager, readFn, cancelFn);
+                await Grid.recalculateGrid(this.manager, readFn, cancelFn);
                 accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
 
                 if (fs.existsSync(this.triggerFile)) {
@@ -513,7 +513,7 @@ class DEXBot {
                 await this.placeInitialOrders();
             } else {
                 this.manager.logger.log('Found active session. Loading and syncing existing grid.', 'info');
-                this.manager.loadGrid(persistedGrid);
+                Grid.loadGrid(this.manager, persistedGrid);
                 const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
                 
                 // Correct any orders with price mismatches at startup
@@ -857,7 +857,7 @@ async function restartBotByName(botName) {
             const manager = new OrderManager(bot);
             // Populate assets/marketPrice and compute the virtual grid (best-effort)
             try {
-                await OrderGridGenerator.initializeGrid(manager);
+                await Grid.initializeGrid(manager);
             } catch (e) {
                 // Initialization may fail if on-chain lookups are unavailable; log and continue with whatever grid was built.
                 console.warn(`Grid initialization for '${bot.name}' failed: ${e && e.message ? e.message : e}`);
