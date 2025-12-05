@@ -5,7 +5,7 @@ const { OrderManager } = require('./manager');
 const utils = require('./utils');
 const constants = require('./constants');
 const logger = require('./logger');
-const order_grid = require('./order_grid');
+const order_grid = require('./grid');
 
 module.exports = {
   OrderManager,

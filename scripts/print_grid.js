@@ -1,4 +1,4 @@
-const OrderGridGenerator = require('../modules/order/order_grid');
+const OrderGridGenerator = require('../modules/order/grid');
 const { DEFAULT_CONFIG } = require('../modules/order/constants');
 
 function printGridSample() {

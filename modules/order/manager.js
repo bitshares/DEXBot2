@@ -16,7 +16,7 @@
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG } = require('./constants');
 const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findBestMatchByPrice, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
 const Logger = require('./logger');
-const OrderGridGenerator = require('./order_grid');
+const OrderGridGenerator = require('./grid');
 
 // Constants for manager operations
 const SYNC_DELAY_MS = 500;
