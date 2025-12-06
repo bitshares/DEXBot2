@@ -366,7 +366,9 @@ async function updateOrder(accountName, privateKey, orderId, newParams) {
         await tx.broadcast();
 
         console.log(`Order ${orderId} updated successfully`);
-        return tx;
+        // Return a simple success object instead of the tx Proxy to avoid any
+        // accidental method calls on the finalized transaction
+        return { success: true, orderId };
     } catch (error) {
         console.error('Error updating order:', error.message);
         throw error;
@@ -418,7 +420,8 @@ async function createOrder(accountName, privateKey, amountToSell, sellAssetId, m
 
         if (dryRun) {
             console.log(`Dry run: Limit order prepared for account ${accountName} (not broadcasted)`);
-            return tx;
+            // Return simplified object instead of tx Proxy
+            return { dryRun: true, params: createParams };
         }
 
         const result = await tx.broadcast();
@@ -446,7 +449,8 @@ async function cancelOrder(accountName, privateKey, orderId) {
         tx.limit_order_cancel(cancelParams);
         await tx.broadcast();
         console.log(`Order ${orderId} cancelled successfully`);
-        return tx;
+        // Return simple success object instead of tx Proxy
+        return { success: true, orderId };
     } catch (error) {
         console.error('Error cancelling order:', error.message);
         throw error;

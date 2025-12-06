@@ -154,6 +154,11 @@ class DEXBot {
         this.manager = null;
         this.isResyncing = false;
         this.triggerFile = path.join(PROFILES_DIR, `recalculate.${config.botKey}.trigger`);
+        // Track recently processed fills to avoid duplicate processing
+        this._recentlyProcessedFills = new Map(); // orderId -> timestamp
+        this._fillDedupeWindowMs = 5000; // 5 second window to prevent duplicate processing
+        this._processingFill = false; // Lock to prevent concurrent fill processing
+        this._pendingFills = []; // Queue for fills that arrive while processing
     }
 
     async initialize(masterPassword = null) {
@@ -349,6 +354,148 @@ class DEXBot {
     }
 
     /**
+     * Update orders on-chain using the "rotate furthest" strategy.
+     * 
+     * 1. Place new orders for activated virtual orders (ordersToPlace)
+     * 2. For each rotation: UPDATE the existing order to new price/size (using limit_order_update)
+     * 
+     * @param {Object} rebalanceResult - { ordersToPlace: [], ordersToRotate: [] }
+     */
+    async updateOrdersOnChain(rebalanceResult) {
+        const { ordersToPlace, ordersToRotate } = rebalanceResult;
+        
+        if (this.config.dryRun) {
+            if (ordersToPlace && ordersToPlace.length > 0) {
+                this.manager.logger.log(`Dry run: would place ${ordersToPlace.length} new orders on-chain`, 'info');
+            }
+            if (ordersToRotate && ordersToRotate.length > 0) {
+                this.manager.logger.log(`Dry run: would update ${ordersToRotate.length} orders on-chain`, 'info');
+            }
+            return;
+        }
+
+        const { assetA, assetB } = this.manager.assets;
+
+        const buildCreateOrderArgs = (order) => {
+            let amountToSell, sellAssetId, minToReceive, receiveAssetId;
+            if (order.type === 'sell') {
+                amountToSell = order.size;
+                sellAssetId = assetA.id;
+                minToReceive = order.size * order.price;
+                receiveAssetId = assetB.id;
+            } else {
+                amountToSell = order.size;
+                sellAssetId = assetB.id;
+                minToReceive = order.size / order.price;
+                receiveAssetId = assetA.id;
+            }
+            return { amountToSell, sellAssetId, minToReceive, receiveAssetId };
+        };
+
+        // Step 1: Place new orders for activated virtual orders
+        if (ordersToPlace && ordersToPlace.length > 0) {
+            for (const order of ordersToPlace) {
+                try {
+                    this.manager.logger.log(`Placing new ${order.type} order on-chain: price=${order.price.toFixed(4)}, size=${order.size.toFixed(8)}`, 'info');
+                    const args = buildCreateOrderArgs(order);
+                    const result = await chainOrders.createOrder(
+                        this.account, this.privateKey, args.amountToSell, args.sellAssetId,
+                        args.minToReceive, args.receiveAssetId, null, false
+                    );
+                    
+                    const chainOrderId = result && result[0] && result[0].trx && result[0].trx.operation_results && result[0].trx.operation_results[0] && result[0].trx.operation_results[0][1];
+                    
+                    if (chainOrderId) {
+                        await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId }, 'createOrder');
+                        this.manager.logger.log(`Placed ${order.type} order ${order.id} -> ${chainOrderId}`, 'info');
+                    } else {
+                        this.manager.logger.log(`Order ${order.id} placement response missing order_id`, 'warn');
+                    }
+                } catch (err) {
+                    this.manager.logger.log(`Failed to place ${order.type} order ${order.id}: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        // Step 2: Update orders (use limit_order_update to change price/size in place)
+        if (ordersToRotate && ordersToRotate.length > 0) {
+            this.manager.logger.log(`Processing ${ordersToRotate.length} order rotation(s)`, 'info');
+            
+            // Deduplicate by orderId - only process each chain order once
+            const seenOrderIds = new Set();
+            const uniqueRotations = ordersToRotate.filter(r => {
+                const orderId = r?.oldOrder?.orderId;
+                if (!orderId || seenOrderIds.has(orderId)) {
+                    if (orderId) this.manager.logger.log(`Skipping duplicate rotation for ${orderId}`, 'debug');
+                    return false;
+                }
+                seenOrderIds.add(orderId);
+                return true;
+            });
+            
+            for (const rotation of uniqueRotations) {
+                try {
+                    const { oldOrder, newPrice, newSize, newGridId, type } = rotation;
+                    
+                    if (!oldOrder.orderId) {
+                        this.manager.logger.log(`Cannot update order without orderId`, 'warn');
+                        continue;
+                    }
+                    
+                    // Calculate new amounts for the update
+                    // For BUY: amountToSell is in assetB (quote), minToReceive is in assetA (base)
+                    // For SELL: amountToSell is in assetA (base), minToReceive is in assetB (quote)
+                    let newAmountToSell, newMinToReceive;
+                    if (type === 'sell') {
+                        newAmountToSell = newSize;
+                        newMinToReceive = newSize * newPrice;
+                    } else {
+                        newAmountToSell = newSize;
+                        newMinToReceive = newSize / newPrice;
+                    }
+                    
+                    this.manager.logger.log(`Updating ${type} order ${oldOrder.orderId}: price ${oldOrder.price.toFixed(4)} -> ${newPrice.toFixed(4)}, size ${oldOrder.size.toFixed(8)} -> ${newSize.toFixed(8)}`, 'info');
+                    
+                    // Use limit_order_update to modify the order in place
+                    const updateResult = await chainOrders.updateOrder(
+                        this.account, 
+                        this.privateKey, 
+                        oldOrder.orderId,
+                        {
+                            amountToSell: newAmountToSell,
+                            minToReceive: newMinToReceive
+                        }
+                    );
+                    
+                    if (updateResult) {
+                        // Update the grid: old position becomes VIRTUAL, new position becomes ACTIVE with same orderId
+                        this.manager.completeOrderRotation(oldOrder);
+                        
+                        // The orderId stays the same, just update the grid position it's associated with
+                        await this.manager.synchronizeWithChain({ gridOrderId: newGridId, chainOrderId: oldOrder.orderId }, 'createOrder');
+                        
+                        this.manager.logger.log(`Rotation complete: ${oldOrder.orderId} moved from ${oldOrder.price.toFixed(4)} to ${newPrice.toFixed(4)}`, 'info');
+                    } else {
+                        this.manager.logger.log(`Order ${oldOrder.orderId} update returned null (no change needed)`, 'info');
+                    }
+                    
+                } catch (err) {
+                    const orderId = rotation?.oldOrder?.orderId || 'unknown';
+                    const oldPrice = rotation?.oldOrder?.price?.toFixed(4) || '?';
+                    const newPriceVal = rotation?.newPrice?.toFixed(4) || '?';
+                    
+                    // Handle "not found" errors gracefully - order was filled between detection and rotation
+                    if (err.message && err.message.includes('not found')) {
+                        this.manager.logger.log(`Order ${orderId} @ ${oldPrice} no longer exists (filled?) - cannot rotate to ${newPriceVal}`, 'warn');
+                    } else {
+                        this.manager.logger.log(`Failed to rotate order ${orderId} @ ${oldPrice} -> ${newPriceVal}: ${err.message}`, 'error');
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Start the bot's main operation loop.
      * This method:
      * 1. Initializes the account connection and OrderManager
@@ -371,14 +518,44 @@ class DEXBot {
         // Start listening for fills BEFORE any order operations to avoid missing fills
         await chainOrders.listenForFills(this.account || undefined, async (fills) => {
             if (this.manager && !this.isResyncing && !this.config.dryRun) {
-                for (const fill of fills) {
-                    if (fill && fill.op && fill.op[0] === 4) {
+                // Queue fills if already processing to prevent concurrent operations
+                if (this._processingFill) {
+                    this._pendingFills.push(...fills);
+                    this.manager.logger.log(`Fill processing in progress, queued ${fills.length} fill(s)`, 'debug');
+                    return;
+                }
+                this._processingFill = true;
+                
+                try {
+                    const allFills = [...fills, ...this._pendingFills];
+                    this._pendingFills = [];
+                    
+                    for (const fill of allFills) {
+                        if (fill && fill.op && fill.op[0] === 4) {
                             const fillOp = fill.op[1];
                             // Skip taker fills (is_maker = false means this is not our order being filled)
                             // is_maker = true means our limit order was filled (we are the maker/liquidity provider)
                             if (fillOp.is_maker === false) {
                                 this.manager.logger.log(`Skipping taker fill (is_maker=false)`, 'debug');
                                 continue;
+                            }
+                            
+                            // Deduplicate fills - prevent processing the same fill event twice
+                            const fillKey = `${fillOp.order_id}:${fill.block_num}`;
+                            const now = Date.now();
+                            if (this._recentlyProcessedFills.has(fillKey)) {
+                                const lastProcessed = this._recentlyProcessedFills.get(fillKey);
+                                if (now - lastProcessed < this._fillDedupeWindowMs) {
+                                    this.manager.logger.log(`Skipping duplicate fill for ${fillOp.order_id} (processed ${now - lastProcessed}ms ago)`, 'debug');
+                                    continue;
+                                }
+                            }
+                            this._recentlyProcessedFills.set(fillKey, now);
+                            // Clean up old entries to prevent memory leak
+                            for (const [key, timestamp] of this._recentlyProcessedFills) {
+                                if (now - timestamp > this._fillDedupeWindowMs * 2) {
+                                    this._recentlyProcessedFills.delete(key);
+                                }
                             }
                             
                             // Log nicely formatted fill info
@@ -413,8 +590,11 @@ class DEXBot {
                             
                             // Correct any orders with price mismatches (orderId matched but price outside tolerance)
                             // Only applicable in 'open' mode
+                            let correctedOrderIds = new Set();
                             if (syncResult.ordersNeedingCorrection && syncResult.ordersNeedingCorrection.length > 0) {
                                 this.manager.logger.log(`Correcting ${syncResult.ordersNeedingCorrection.length} order(s) with price mismatch...`, 'info');
+                                // Track which orderIds are being corrected so we don't also try to rotate them
+                                correctedOrderIds = new Set(syncResult.ordersNeedingCorrection.map(c => c.chainOrderId).filter(Boolean));
                                 const correctionResult = await OrderUtils.correctAllPriceMismatches(
                                     this.manager, this.account, this.privateKey, chainOrders
                                 );
@@ -423,16 +603,36 @@ class DEXBot {
                                 }
                             }
                             
-                            // Process any fully filled orders (create new orders on opposite side)
+                            // Process any fully filled orders using the "rotate furthest" strategy:
+                            // - Activate closest virtual orders on same side (need on-chain placement)
+                            // - Rotate furthest active orders on opposite side (cancel + recreate at new price)
                             if (syncResult.filledOrders && syncResult.filledOrders.length > 0) {
-                                const newOrders = await this.manager.processFilledOrders(syncResult.filledOrders);
-                                if (newOrders && newOrders.length > 0) {
-                                    await this.placeNewOrders(newOrders);
+                                const rebalanceResult = await this.manager.processFilledOrders(syncResult.filledOrders, correctedOrderIds);
+                                // rebalanceResult now contains { ordersToPlace, ordersToRotate }
+                                const hasOrdersToPlace = rebalanceResult && rebalanceResult.ordersToPlace && rebalanceResult.ordersToPlace.length > 0;
+                                const hasOrdersToRotate = rebalanceResult && rebalanceResult.ordersToRotate && rebalanceResult.ordersToRotate.length > 0;
+                                
+                                if (hasOrdersToPlace || hasOrdersToRotate) {
+                                    await this.updateOrdersOnChain(rebalanceResult);
                                 }
                             }
                             
                             // Always persist snapshot after processing fills
                             accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
+                        }
+                    }
+                } catch (err) {
+                    this.manager?.logger?.log(`Error processing fill: ${err.message}`, 'error');
+                } finally {
+                    this._processingFill = false;
+                    // Process any fills that arrived while we were busy
+                    if (this._pendingFills.length > 0) {
+                        const pending = this._pendingFills;
+                        this._pendingFills = [];
+                        // Re-invoke the listener with pending fills
+                        setTimeout(() => {
+                            chainOrders.listenForFills(this.account, () => {}); // dummy to trigger
+                        }, 100);
                     }
                 }
             }

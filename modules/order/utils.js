@@ -26,7 +26,14 @@ async function correctAllPriceMismatches(manager, accountName, privateKey, accou
     let failed = 0;
 
     // Copy the list because it may be mutated during processing
-    const ordersToCorrect = Array.isArray(manager.ordersNeedingPriceCorrection) ? [...manager.ordersNeedingPriceCorrection] : [];
+    // Deduplicate by chainOrderId to avoid double-correction attempts
+    const allOrders = Array.isArray(manager.ordersNeedingPriceCorrection) ? [...manager.ordersNeedingPriceCorrection] : [];
+    const seen = new Set();
+    const ordersToCorrect = allOrders.filter(c => {
+        if (!c.chainOrderId || seen.has(c.chainOrderId)) return false;
+        seen.add(c.chainOrderId);
+        return true;
+    });
 
     for (const correctionInfo of ordersToCorrect) {
         const result = await correctOrderPriceOnChain(manager, correctionInfo, accountName, privateKey, accountOrders);
@@ -263,6 +270,14 @@ function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
 
 async function correctOrderPriceOnChain(manager, correctionInfo, accountName, privateKey, accountOrders) {
     const { gridOrder, chainOrderId, expectedPrice, size, type } = correctionInfo;
+    
+    // Skip if already removed from correction list (processed in another call)
+    const stillNeeded = manager.ordersNeedingPriceCorrection?.some(c => c.chainOrderId === chainOrderId);
+    if (!stillNeeded) {
+        manager.logger?.log?.(`Order ${gridOrder.id} (${chainOrderId}) correction already processed, skipping`, 'info');
+        return { success: true, error: null, skipped: true };
+    }
+    
     manager.logger?.log?.(`Correcting order ${gridOrder.id} (${chainOrderId}): updating to price ${expectedPrice.toFixed(8)}`, 'info');
     try {
         let amountToSell, minToReceive;
@@ -283,6 +298,15 @@ async function correctOrderPriceOnChain(manager, correctionInfo, accountName, pr
         manager.logger?.log?.(`Order ${gridOrder.id} (${chainOrderId}) price corrected to ${expectedPrice.toFixed(8)}`, 'info');
         return { success: true, error: null };
     } catch (error) {
+        // Remove from list regardless of outcome to prevent retry loops
+        manager.ordersNeedingPriceCorrection = manager.ordersNeedingPriceCorrection.filter(c => c.chainOrderId !== chainOrderId);
+        
+        // Handle "not found" gracefully - order was filled between detection and correction
+        if (error.message && error.message.includes('not found')) {
+            manager.logger?.log?.(`Order ${gridOrder.id} (${chainOrderId}) no longer exists on chain - was it filled?`, 'warn');
+            return { success: false, error: error.message, orderGone: true };
+        }
+        
         manager.logger?.log?.(`Failed to correct order ${gridOrder.id}: ${error.message}`, 'error');
         return { success: false, error: error.message };
     }

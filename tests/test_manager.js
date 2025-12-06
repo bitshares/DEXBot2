@@ -112,3 +112,80 @@ assert.strictEqual(mgr.funds.available.sell, 10);
         console.log('spread selection tests passed');
     })();
 })();
+
+// --- Test the "rotate furthest" rebalance strategy ---
+(async () => {
+    const { constants } = require('../modules/order/index.js');
+    const ORDER_TYPES = constants.ORDER_TYPES;
+    const ORDER_STATES = constants.ORDER_STATES;
+
+    const rotateMgr = new OrderManager({
+        assetA: 'BASE',
+        assetB: 'QUOTE',
+        marketPrice: 100,
+        minPrice: 50,
+        maxPrice: 200,
+        incrementPercent: 10,
+        targetSpreadPercent: 20,
+        botFunds: { buy: 1000, sell: 10 },
+        activeOrders: { buy: 3, sell: 3 }
+    });
+
+    rotateMgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.1', precision: 5 } };
+    rotateMgr.setAccountTotals({ buy: 1000, sell: 10 });
+    rotateMgr.resetFunds();
+
+    // Clear orders and indices
+    rotateMgr.orders = new Map();
+    rotateMgr._ordersByState = {
+        [ORDER_STATES.VIRTUAL]: new Set(),
+        [ORDER_STATES.ACTIVE]: new Set(),
+        [ORDER_STATES.FILLED]: new Set()
+    };
+    rotateMgr._ordersByType = {
+        [ORDER_TYPES.BUY]: new Set(),
+        [ORDER_TYPES.SELL]: new Set(),
+        [ORDER_TYPES.SPREAD]: new Set()
+    };
+
+    // Set up a grid scenario:
+    // Active SELL orders at 110, 120, 130 (furthest from market is 130)
+    // Active BUY orders at 90, 80, 70 (furthest from market is 70)
+    // Virtual SELL at 105 (closest to market)
+    // Virtual BUY at 95 (closest to market)
+    // SPREAD placeholders at 102 and 98
+
+    const testOrders = [
+        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.1' },
+        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.2' },
+        { id: 'sell3', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.3' },
+        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.4' },
+        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.5' },
+        { id: 'buy3', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.6' },
+        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
+        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
+        { id: 'spread1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 102, size: 0 },
+        { id: 'spread2', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 98, size: 0 }
+    ];
+
+    testOrders.forEach(o => rotateMgr._updateOrder(o));
+    rotateMgr.funds.available.buy = 500;
+    rotateMgr.funds.available.sell = 5;
+    rotateMgr.funds.committed.buy = 300;
+    rotateMgr.funds.committed.sell = 3;
+
+    // Test activateClosestVirtualOrdersForPlacement: should activate the closest virtual order for on-chain placement
+    const activatedBuys = await rotateMgr.activateClosestVirtualOrdersForPlacement(ORDER_TYPES.BUY, 1);
+    assert.strictEqual(activatedBuys.length, 1, 'Should activate 1 buy');
+    assert.strictEqual(activatedBuys[0].id, 'vbuy1', 'Should activate the closest virtual buy (95)');
+    assert.strictEqual(activatedBuys[0].state, ORDER_STATES.ACTIVE, 'Should be marked as ACTIVE');
+
+    // Test prepareFurthestOrdersForRotation: should select the furthest active order for rotation
+    const rotations = await rotateMgr.prepareFurthestOrdersForRotation(ORDER_TYPES.SELL, 1);
+    assert.strictEqual(rotations.length, 1, 'Should prepare 1 sell order for rotation');
+    assert.strictEqual(rotations[0].oldOrder.id, 'sell3', 'Should rotate the furthest sell (130)');
+    // The new price should come from the closest spread placeholder above market (102)
+    assert.strictEqual(rotations[0].newPrice, 102, 'New order should be at spread price 102');
+
+    console.log('rotate furthest strategy tests passed');
+})();
