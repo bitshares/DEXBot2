@@ -46,9 +46,9 @@ function readPassword(prompt) {
     return new Promise((resolve) => {
         // cleanup restores terminal and removes listener
         const cleanup = () => {
-            try { stdin.removeListener('data', onData); } catch (e) {}
-            try { if (stdin.isTTY) stdin.setRawMode(false); } catch (e) {}
-            try { stdin.pause(); } catch (e) {}
+            try { stdin.removeListener('data', onData); } catch (e) { }
+            try { if (stdin.isTTY) stdin.setRawMode(false); } catch (e) { }
+            try { stdin.pause(); } catch (e) { }
         };
 
         // onData iterates through chunk characters so pasted text is handled correctly
@@ -284,7 +284,7 @@ function listKeyNames(accounts) {
     }
     console.log('Stored keys:');
     return Object.keys(accounts).map((name, index) => {
-            console.log(`  ${index + 1}. ${name}`);
+        console.log(`  ${index + 1}. ${name}`);
         return name;
     });
 }
@@ -382,13 +382,27 @@ async function main() {
         masterPassword = password1;
         console.log('Master password set successfully.');
     } else {
-        const enteredPassword = await readPassword('Enter master password: ');
-        if (hashPassword(enteredPassword) !== accountsData.masterPasswordHash) {
-            console.log('Incorrect master password!');
-            return;
+
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (true) {
+            attempts++;
+            // Match 'dexbot start' style: no attempt count in prompt
+            const enteredPassword = await readPassword('Enter master password: ');
+            if (hashPassword(enteredPassword) === accountsData.masterPasswordHash) {
+                masterPassword = enteredPassword;
+                console.log('Authenticated successfully.');
+                break;
+            }
+
+            if (attempts >= maxAttempts) {
+                // Match the error thrown by authenticate() but just log and return here since we are in main()
+                console.log(`Incorrect master password after ${maxAttempts} attempts.`);
+                return;
+            }
+
+            console.log('Master password not correct. Please try again.');
         }
-        masterPassword = enteredPassword;
-        console.log('Authenticated successfully.');
     }
 
     while (true) {
@@ -402,7 +416,7 @@ async function main() {
         console.log('7. Exit');
 
         const choice = readlineSync.question('Choose an option: ');
-            console.log('');
+        console.log('');
 
         if (choice === '1') {
             const accountName = readlineSync.question('Enter account name: ');
