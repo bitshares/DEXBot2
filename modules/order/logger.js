@@ -6,6 +6,15 @@
  * - Color coding for order types (buy=green, sell=red, spread=yellow)
  * - Color coding for order states (virtual=gray, active=green, filled=magenta)
  * - Formatted order grid display
+ * - Fund status display (logFundsStatus)
+ * 
+ * Fund display (logFundsStatus) shows:
+ * - available: max(0, chainFree - virtuel) + pendingProceeds
+ * - total.chain: chainFree + committed.chain (on-chain balance)
+ * - total.grid: committed.grid + virtuel (grid allocation)
+ * - virtuel: VIRTUAL order sizes (reserved for future placement)
+ * - committed.grid: ACTIVE order sizes (internal tracking)
+ * - committed.chain: ACTIVE orders with orderId (confirmed on-chain)
  * 
  * @class
  */
@@ -51,8 +60,18 @@ class Logger {
         console.log('===============================================\n');
     }
 
-    // Print a summary of available vs committed funds for diagnostics.
-    // Accepts a manager instance and reads its funds & config to display names.
+    /**
+     * Print a summary of fund status for diagnostics.
+     * Displays the complete fund structure from manager.funds:
+     * - available: Free funds for new orders (chainFree - virtuel + pendingProceeds)
+     * - total.chain: Total on-chain balance (chainFree + committed.chain)
+     * - total.grid: Total grid allocation (committed.grid + virtuel)
+     * - virtuel: VIRTUAL order sizes (reserved for future on-chain placement)
+     * - committed.grid: ACTIVE order sizes (internal grid tracking)
+     * - committed.chain: ACTIVE orders with orderId (confirmed on blockchain)
+     * 
+     * @param {OrderManager} manager - OrderManager instance to read funds from
+     */
     logFundsStatus(manager) {
         if (!manager) return;
         const buyName = manager.config?.assetB || 'quote';

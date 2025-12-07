@@ -6,6 +6,13 @@
  * - Verifying configuration produces expected grid
  * - Testing price derivation from pool/market
  * - Debugging order sizing and fund allocation
+ * - Validating fund calculations (available, virtuel, committed)
+ * 
+ * Fund model overview (see manager.js for full details):
+ * - available = max(0, chainFree - virtuel) + pendingProceeds
+ * - virtuel = sum of VIRTUAL order sizes (reserved for placement)
+ * - committed.grid = sum of ACTIVE order sizes
+ * - committed.chain = sum of ACTIVE orders with orderId on-chain
  * 
  * Usage: CALC_CYCLES=5 CALC_DELAY_MS=1000 node -e \"require('./runner').runOrderManagerCalculation()\"
  */

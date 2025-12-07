@@ -12,6 +12,27 @@
  * regular incrementPercent intervals. Orders near the market price form
  * the "spread" zone. When orders are filled, new orders are created on
  * the opposite side to maintain grid coverage.
+ * 
+ * FUND CALCULATION MODEL:
+ * The manager tracks funds using a dual-source model (chain + grid):
+ * 
+ * Source data:
+ * - chainFree (accountTotals.buyFree/sellFree): Free balance on chain (not locked in orders)
+ * - virtuel: Sum of VIRTUAL order sizes (grid positions not yet placed on-chain)
+ * - committed.grid: Sum of ACTIVE order sizes (internal grid tracking)
+ * - committed.chain: Sum of ACTIVE orders that have an orderId (confirmed on-chain)
+ * - pendingProceeds: Temporary proceeds from fills awaiting rotation consumption
+ * 
+ * Calculated values:
+ * - available = max(0, chainFree - virtuel) + pendingProceeds
+ * - total.chain = chainFree + committed.chain
+ * - total.grid = committed.grid + virtuel
+ * 
+ * Fund flow lifecycle:
+ * 1. Startup: chainFree fetched from chain, virtuel = sum of grid VIRTUAL orders
+ * 2. Order placement (VIRTUAL → ACTIVE): virtuel decreases, committed increases
+ * 3. Order fill: pendingProceeds set with fill value, available increases temporarily
+ * 4. After rotation: pendingProceeds cleared as funds are consumed by new orders
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS } = require('./constants');
 const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
@@ -31,15 +52,38 @@ const Logger = require('./logger');
  * OrderManager class - manages grid-based trading strategy
  * 
  * Key concepts:
- * - Virtual orders: Grid positions not yet placed on-chain
- * - Active orders: Orders that exist on the blockchain
- * - Filled orders: Orders that have been fully executed
- * - Spread orders: Orders in the zone around market price
+ * - Virtual orders: Grid positions not yet placed on-chain (reserved in virtuel)
+ * - Active orders: Orders placed on blockchain (tracked in committed.grid/chain)
+ * - Filled orders: Orders that have been fully executed (size=0, state=FILLED)
+ * - Spread orders: Placeholder orders in the zone around market price
  * 
- * Funds tracking:
- * - available: Funds not yet committed to orders
- * - committed: Funds locked in active orders
- * - total: Starting balance for percentage calculations
+ * Funds structure (this.funds):
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │ available    = max(0, chainFree - virtuel) + pendingProceeds           │
+ * │               Free funds that can be used for new orders or rotations  │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ total.chain  = chainFree + committed.chain                             │
+ * │               Total on-chain balance (free + locked in orders)         │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ total.grid   = committed.grid + virtuel                                │
+ * │               Total grid allocation (active + virtual orders)          │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ virtuel      = Sum of VIRTUAL order sizes                              │
+ * │               Reserved funds for grid positions not yet on-chain       │
+ * │               (alias: reserved for backwards compatibility)            │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ committed.grid  = Sum of ACTIVE order sizes (internal tracking)        │
+ * │ committed.chain = Sum of ACTIVE orders with orderId (on-chain)         │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │ pendingProceeds = Temporary fill proceeds awaiting rotation            │
+ * │                   Cleared after rotation consumes the funds            │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ * 
+ * Fund lifecycle:
+ * 1. Startup: chainFree from chain, virtuel from grid VIRTUAL orders
+ * 2. Order placement (VIRTUAL → ACTIVE): virtuel↓, committed↑
+ * 3. Order fill: pendingProceeds set, available↑ temporarily
+ * 4. Rotation complete: pendingProceeds cleared, funds consumed
  * 
  * Price tolerance:
  * - Chain orders may have slightly different prices due to integer rounding
@@ -114,14 +158,21 @@ class OrderManager {
         return 0;
     }
 
-    // Recalculate funds based on current order states
-    // Streamlined model:
-    // - available = chainFree - reserved (virtual orders)
-    // - total.chain = chainFree + committed.chain
-    // - total.grid = committed.grid + virtuel
-    // - virtuel = sum of VIRTUAL orders (alias: reserved)
-    // - committed.grid = sum of ACTIVE orders
-    // - committed.chain = sum of ACTIVE orders with orderId on-chain
+    /**
+     * Recalculate all fund values based on current order states.
+     * 
+     * This method iterates all orders and computes:
+     * - committed.grid: Sum of ACTIVE order sizes (internal tracking)
+     * - committed.chain: Sum of ACTIVE orders with orderId (confirmed on-chain)
+     * - virtuel: Sum of VIRTUAL order sizes (reserved for future placement)
+     * 
+     * Then calculates derived values:
+     * - available = max(0, chainFree - virtuel) + pendingProceeds
+     * - total.chain = chainFree + committed.chain
+     * - total.grid = committed.grid + virtuel
+     * 
+     * Called automatically by _updateOrder() whenever order state changes.
+     */
     recalculateFunds() {
         if (!this.funds) this.resetFunds();
 
@@ -193,7 +244,11 @@ class OrderManager {
     // NOTE: _calcTolerance shim removed — callers should call
     // calculatePriceTolerance(gridPrice, orderSize, orderType, this.assets)
 
-    // Initialize funds structure with streamlined model
+    /**
+     * Initialize the funds structure with zeroed values.
+     * Sets up accountTotals (buyFree/sellFree from chain) and the funds object
+     * with available, total, virtuel, committed, and pendingProceeds.
+     */
     resetFunds() {
         this.accountTotals = this.accountTotals || (this.config.accountTotals ? { ...this.config.accountTotals } : { buy: null, sell: null, buyFree: null, sellFree: null });
 
@@ -215,9 +270,16 @@ class OrderManager {
         this.funds.reserved = this.funds.virtuel;
     }
 
-    // Accept new on-chain balances and recalculate funds
-    // totals.buyFree/sellFree = free balance on chain (not in orders)
-    // totals.buy/sell = total balance including orders (for backwards compat)
+    /**
+     * Update on-chain balance information and recalculate funds.
+     * Called when fetching balances from blockchain or after order changes.
+     * 
+     * @param {Object} totals - Balance information from chain
+     * @param {number|null} totals.buy - Total buy asset balance (free + locked)
+     * @param {number|null} totals.sell - Total sell asset balance (free + locked)
+     * @param {number|null} totals.buyFree - Free buy asset balance (not in orders)
+     * @param {number|null} totals.sellFree - Free sell asset balance (not in orders)
+     */
     setAccountTotals(totals = { buy: null, sell: null, buyFree: null, sellFree: null }) {
         this.accountTotals = { ...this.accountTotals, ...totals };
 

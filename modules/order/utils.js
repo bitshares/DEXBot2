@@ -4,6 +4,14 @@
  * Centralized utility helpers used by the order subsystem.
  * Grouped for readability and maintenance: parsing, conversions, tolerance,
  * matching, reconciliation, and price derivation.
+ * 
+ * Key functions that interact with fund tracking:
+ * - applyChainSizeToGridOrder: Updates order size from chain data, adjusts funds
+ * - correctOrderPriceOnChain: Corrects price mismatches, may affect committed funds
+ * - getMinOrderSize: Calculates minimum order size based on asset precision
+ * 
+ * Fund-aware functions call manager._adjustFunds() or manager.recalculateFunds()
+ * to keep the funds structure consistent with order state changes.
  */
 
 const { ORDER_TYPES, ORDER_STATES, TIMING } = require('./constants');

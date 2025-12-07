@@ -8,11 +8,18 @@
  * - Target spread percentage (zone around market price)
  * 
  * The grid consists of:
- * - SELL orders above market price
- * - BUY orders below market price  
- * - SPREAD orders in the zone closest to market price
+ * - SELL orders above market price (size in base asset / assetA)
+ * - BUY orders below market price (size in quote asset / assetB)
+ * - SPREAD orders in the zone closest to market price (placeholders)
  * 
  * Orders are sized based on available funds and weight distribution.
+ * Initial grid orders are created in VIRTUAL state - their sizes contribute
+ * to the manager's funds.virtuel (reserved) until placed on-chain.
+ * 
+ * Fund interaction:
+ * - Grid creation: All orders start as VIRTUAL, sizes added to funds.virtuel
+ * - Grid loading (loadGrid): ACTIVE orders increment funds.committed
+ * - Order activation: funds.virtuel decreases, funds.committed increases
  */
 const { ORDER_TYPES, DEFAULT_CONFIG, GRID_LIMITS } = require('./constants');
 const { floatToBlockchainInt, resolveRelativePrice } = require('./utils');
