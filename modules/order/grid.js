@@ -74,18 +74,26 @@ class Grid {
         const calculatedNOrders = Math.ceil(Math.log(1 + (targetSpreadPercent / 100)) / Math.log(stepUp));
         const nOrders = Math.max(2, calculatedNOrders); // Minimum 2 spread orders
 
-        const calculateLevels = (start, min) => {
-            const levels = [];
-            for (let current = start; current >= min; current *= stepDown) {
-                levels.push(current);
-            }
-            return levels;
-        };
+        // Generate Sells detected OUTWARDS from market (Price increasing)
+        // Start at a half-step up to center the market price in the first gap
+        const sellLevels = [];
+        let currentSell = marketPrice * Math.sqrt(stepUp);
+        while (currentSell <= maxPrice) {
+            sellLevels.push(currentSell);
+            currentSell *= stepUp;
+        }
+        // Reverse so sellLevels are Max -> Min (closest to market is at end)
+        sellLevels.reverse();
 
-        const sellLevels = calculateLevels(maxPrice, marketPrice);
-        // Start the buy side one step below the last sell level (or marketPrice) using stepDown
-        const buyStart = (sellLevels[sellLevels.length - 1] || marketPrice) * stepDown;
-        const buyLevels = calculateLevels(buyStart, minPrice);
+        // Generate Buys detected OUTWARDS from market (Price decreasing)
+        // Start at a half-step down to center the market price
+        const buyLevels = [];
+        let currentBuy = marketPrice * Math.sqrt(stepDown);
+        while (currentBuy >= minPrice) {
+            buyLevels.push(currentBuy);
+            currentBuy *= stepDown;
+        }
+        // buyLevels are already High -> Low (closest to market is at start)
 
         const buySpread = Math.floor(nOrders / 2);
         const sellSpread = nOrders - buySpread;
