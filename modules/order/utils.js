@@ -388,9 +388,9 @@ const derivePoolPrice = async (BitShares, symA, symB) => {
             // Attempt to find pool by scanning list_liquidity_pools
             // Method signature: list_liquidity_pools(lower_bound, limit)
             let startId = '1.19.0';
-            const limit = 200;
+            const limit = 250;
             let batchCount = 0;
-            const maxBatches = 20; // Scan up to 2000 pools to find the pair
+            const maxBatches = 40; // Scan up to 10000 pools to find the pair
 
             let allMatches = [];
 
