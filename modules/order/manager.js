@@ -114,26 +114,73 @@ class OrderManager {
         return 0;
     }
 
-    // Helper: Adjust funds for order size changes
-    _adjustFunds(type, delta) {
+    // Recalculate funds based on current order states
+    // Streamlined model:
+    // - available = chainFree - reserved (virtual orders)
+    // - total.chain = chainFree + committed.chain
+    // - total.grid = committed.grid + virtuel
+    // - virtuel = sum of VIRTUAL orders (alias: reserved)
+    // - committed.grid = sum of ACTIVE orders
+    // - committed.chain = sum of ACTIVE orders with orderId on-chain
+    recalculateFunds() {
         if (!this.funds) this.resetFunds();
-        const side = type === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        this.funds.committed[side] = Math.max(0, (this.funds.committed[side] || 0) + delta);
-        this.funds.available[side] = Math.max(0, (this.funds.available[side] || 0) - delta);
+
+        let gridBuy = 0, gridSell = 0;
+        let chainBuy = 0, chainSell = 0;
+        let virtuelBuy = 0, virtuelSell = 0;
+
+        for (const order of this.orders.values()) {
+            const size = Number(order.size) || 0;
+            if (size <= 0) continue;
+
+            if (order.type === ORDER_TYPES.BUY) {
+                if (order.state === ORDER_STATES.ACTIVE) {
+                    gridBuy += size;
+                    if (order.orderId) chainBuy += size;
+                } else if (order.state === ORDER_STATES.VIRTUAL) {
+                    virtuelBuy += size;
+                }
+            } else if (order.type === ORDER_TYPES.SELL) {
+                if (order.state === ORDER_STATES.ACTIVE) {
+                    gridSell += size;
+                    if (order.orderId) chainSell += size;
+                } else if (order.state === ORDER_STATES.VIRTUAL) {
+                    virtuelSell += size;
+                }
+            }
+        }
+
+        // Get chain free balances (stored via setAccountTotals)
+        const chainFreeBuy = this.accountTotals?.buyFree || 0;
+        const chainFreeSell = this.accountTotals?.sellFree || 0;
+
+        // Set committed
+        this.funds.committed.grid = { buy: gridBuy, sell: gridSell };
+        this.funds.committed.chain = { buy: chainBuy, sell: chainSell };
+
+        // Set virtuel (virtual orders) - alias: reserved
+        this.funds.virtuel = { buy: virtuelBuy, sell: virtuelSell };
+        this.funds.reserved = this.funds.virtuel; // backwards compat alias
+
+        // Set totals
+        this.funds.total.chain = { buy: chainFreeBuy + chainBuy, sell: chainFreeSell + chainSell };
+        this.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
+
+        // Set available = chainFree - reserved (virtual orders)
+        this.funds.available.buy = Math.max(0, chainFreeBuy - virtuelBuy);
+        this.funds.available.sell = Math.max(0, chainFreeSell - virtuelSell);
     }
 
-    // Helper: Update order in map and indices
     _updateOrder(order) {
         const existing = this.orders.get(order.id);
         if (existing) {
-            // Remove from old indices
             this._ordersByState[existing.state]?.delete(order.id);
             this._ordersByType[existing.type]?.delete(order.id);
         }
-        // Add to new indices
         this._ordersByState[order.state]?.add(order.id);
         this._ordersByType[order.type]?.add(order.id);
         this.orders.set(order.id, order);
+        this.recalculateFunds(); // Sync funds whenever order state/size changes
     }
 
     // Note: findBestMatchByPrice is available from utils; callers should pass
@@ -142,61 +189,48 @@ class OrderManager {
 
     // NOTE: _calcTolerance shim removed — callers should call
     // calculatePriceTolerance(gridPrice, orderSize, orderType, this.assets)
-    // or pass a small bound closure when a function is required by utils.
 
-    // Reconcile funds totals based on config, input percentages, and prior committed balances.
+    // Initialize funds structure with streamlined model
     resetFunds() {
-        this.accountTotals = this.accountTotals || (this.config.accountTotals ? { ...this.config.accountTotals } : { buy: null, sell: null });
-
-        const buyTotal = (this.accountTotals && typeof this.accountTotals.buy === 'number') ? this.accountTotals.buy : (typeof this.config.botFunds.buy === 'number' ? this.config.botFunds.buy : null);
-        const sellTotal = (this.accountTotals && typeof this.accountTotals.sell === 'number') ? this.accountTotals.sell : (typeof this.config.botFunds.sell === 'number' ? this.config.botFunds.sell : null);
-
-        const availableBuy = this._resolveConfigValue(this.config.botFunds.buy, buyTotal);
-        const availableSell = this._resolveConfigValue(this.config.botFunds.sell, sellTotal);
+        this.accountTotals = this.accountTotals || (this.config.accountTotals ? { ...this.config.accountTotals } : { buy: null, sell: null, buyFree: null, sellFree: null });
 
         this.funds = {
-            available: { buy: availableBuy, sell: availableSell },
-            committed: { buy: 0, sell: 0 },
-            total: { buy: buyTotal || availableBuy, sell: sellTotal || availableSell }
+            available: { buy: 0, sell: 0 },
+            total: {
+                chain: { buy: 0, sell: 0 },
+                grid: { buy: 0, sell: 0 }
+            },
+            virtuel: { buy: 0, sell: 0 },
+            reserved: { buy: 0, sell: 0 }, // backwards compat alias
+            committed: {
+                grid: { buy: 0, sell: 0 },
+                chain: { buy: 0, sell: 0 }
+            }
         };
+        // Make reserved an alias for virtuel
+        this.funds.reserved = this.funds.virtuel;
     }
 
-    // Accept new on-chain totals and recalculate available funds.
-    // Only updates available funds based on new totals while preserving committed tracking.
-    setAccountTotals(totals = { buy: null, sell: null }) {
+    // Accept new on-chain balances and recalculate funds
+    // totals.buyFree/sellFree = free balance on chain (not in orders)
+    // totals.buy/sell = total balance including orders (for backwards compat)
+    setAccountTotals(totals = { buy: null, sell: null, buyFree: null, sellFree: null }) {
         this.accountTotals = { ...this.accountTotals, ...totals };
-        
-        const buyTotal = (this.accountTotals && typeof this.accountTotals.buy === 'number') ? this.accountTotals.buy : null;
-        const sellTotal = (this.accountTotals && typeof this.accountTotals.sell === 'number') ? this.accountTotals.sell : null;
 
-        const newAvailableBuy = this._resolveConfigValue(this.config.botFunds.buy, buyTotal);
-        const newAvailableSell = this._resolveConfigValue(this.config.botFunds.sell, sellTotal);
+        if (!this.funds) this.resetFunds();
 
-        // Update available funds, accounting for already committed amounts
-        if (this.funds) {
-            this.funds.available.buy = Math.max(0, newAvailableBuy - this.funds.committed.buy);
-            this.funds.available.sell = Math.max(0, newAvailableSell - this.funds.committed.sell);
-            this.funds.total.buy = buyTotal || newAvailableBuy;
-            this.funds.total.sell = sellTotal || newAvailableSell;
-        } else {
-            // First time initialization
-            this.funds = {
-                available: { buy: newAvailableBuy, sell: newAvailableSell },
-                committed: { buy: 0, sell: 0 },
-                total: { buy: buyTotal || newAvailableBuy, sell: sellTotal || newAvailableSell }
-            };
-        }
+        // Recalculate with new chain data
+        this.recalculateFunds();
 
         // If someone is waiting for account totals, resolve the waiter once both values are available.
-        const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
-        const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
+        const haveBuy = this.accountTotals && this.accountTotals.buyFree !== null && this.accountTotals.buyFree !== undefined && Number.isFinite(Number(this.accountTotals.buyFree));
+        const haveSell = this.accountTotals && this.accountTotals.sellFree !== null && this.accountTotals.sellFree !== undefined && Number.isFinite(Number(this.accountTotals.sellFree));
         if (haveBuy && haveSell && typeof this._accountTotalsResolve === 'function') {
             try { this._accountTotalsResolve(); } catch (e) { /* ignore */ }
             this._accountTotalsPromise = null; this._accountTotalsResolve = null;
         }
     }
 
-    // Wait until accountTotals have both buy and sell present, or until timeout elapses.
     async waitForAccountTotals(timeoutMs = TIMING.ACCOUNT_TOTALS_TIMEOUT_MS) {
         const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
         const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
@@ -231,16 +265,20 @@ class OrderManager {
 
             if (!assetAId || !assetBId) return;
 
-            // Use centralized helper to fetch on-chain balances (free amounts only) for the two configured assets
+            // Use centralized helper to fetch on-chain balances for the two configured assets
             try {
                 const { getOnChainAssetBalances } = require('../chain_orders');
                 const lookup = await getOnChainAssetBalances(accountIdOrName, [assetAId, assetBId]);
                 const aInfo = lookup && (lookup[assetAId] || lookup[this.config.assetA]);
                 const bInfo = lookup && (lookup[assetBId] || lookup[this.config.assetB]);
-                const sellTotal = aInfo && typeof aInfo.free === 'number' ? aInfo.free : null;
-                const buyTotal = bInfo && typeof bInfo.free === 'number' ? bInfo.free : null;
+                // Total = free + locked (in orders)
+                const sellTotal = aInfo && typeof aInfo.total === 'number' ? aInfo.total : null;
+                const buyTotal = bInfo && typeof bInfo.total === 'number' ? bInfo.total : null;
+                // Free = available balance not in orders
+                const sellFree = aInfo && typeof aInfo.free === 'number' ? aInfo.free : sellTotal;
+                const buyFree = bInfo && typeof bInfo.free === 'number' ? bInfo.free : buyTotal;
                 this.logger && this.logger.log && this.logger.log('Fetched on-chain balances for accountTotals (via helper)', 'info');
-                this.setAccountTotals({ buy: buyTotal, sell: sellTotal });
+                this.setAccountTotals({ buy: buyTotal, sell: sellTotal, buyFree, sellFree });
             } catch (err) {
                 // fall back to raw chain query in the unlikely event helper fails
                 const full = await BitShares.db.get_full_accounts([accountIdOrName], false);
@@ -259,8 +297,9 @@ class OrderManager {
                 const buyTotal = Number.isFinite(Number(rawBuy)) ? blockchainToFloat(rawBuy, precisionB !== undefined ? precisionB : 8) : null;
                 const sellTotal = Number.isFinite(Number(rawSell)) ? blockchainToFloat(rawSell, precisionA !== undefined ? precisionA : 8) : null;
 
+                // In fallback mode, balance IS the free amount (no order breakdown available)
                 this.logger && this.logger.log && this.logger.log('Fetched on-chain balances for accountTotals (fallback raw)', 'info');
-                this.setAccountTotals({ buy: buyTotal, sell: sellTotal });
+                this.setAccountTotals({ buy: buyTotal, sell: sellTotal, buyFree: buyTotal, sellFree: sellTotal });
             }
         } catch (err) {
             this.logger && this.logger.log && this.logger.log(`Failed to fetch on-chain balances: ${err && err.message ? err.message : err}`, 'warn');
@@ -305,52 +344,71 @@ class OrderManager {
             this.logger.log('syncFromOpenOrders: No valid chain orders provided', 'debug');
             return { filledOrders: [], updatedOrders: [], ordersNeedingCorrection: [] };
         }
-        
+
         this.logger.log(`syncFromOpenOrders: Processing ${chainOrders.length} open orders from blockchain`, 'info');
+
+        // DEBUG: Check assets
+        if (this.assets) {
+            this.logger.log(`DEBUG: Assets loaded: A=${this.assets.assetA?.symbol}(${this.assets.assetA?.id}), B=${this.assets.assetB?.symbol}(${this.assets.assetB?.id})`, 'info');
+        } else {
+            this.logger.log(`DEBUG: ERROR - this.assets is missing!`, 'error');
+        }
+
         // Cache asset precisions for hot paths
         const assetAPrecision = this.assets?.assetA?.precision;
         const assetBPrecision = this.assets?.assetB?.precision;
-        
+
         // Parse all chain orders
         const parsedChainOrders = new Map();
         const rawChainOrders = new Map(); // Keep raw orders for correction
+        let debugLogged = false;
         for (const chainOrder of chainOrders) {
+            if (!debugLogged) {
+                this.logger.log(`DEBUG: First chain order raw: ${JSON.stringify(chainOrder)}`, 'info');
+                debugLogged = true;
+            }
             const parsed = parseChainOrder(chainOrder, this.assets);
             if (parsed) {
                 parsedChainOrders.set(parsed.orderId, parsed);
                 rawChainOrders.set(parsed.orderId, chainOrder);
+            } else {
+                this.logger.log(`DEBUG: Failed to parse chain order ${chainOrder.id}`, 'warn');
             }
         }
-        
+        this.logger.log(`DEBUG: Parsed ${parsedChainOrders.size} valid chain orders.`, 'info');
+
         const filledOrders = [];
         const updatedOrders = [];
         const ordersNeedingCorrection = [];
         const chainOrderIdsOnGrid = new Set();
-        
+
         // Clear previous correction list
         this.ordersNeedingPriceCorrection = [];
-        
+
         // First pass: Match by orderId and check price tolerance
         for (const gridOrder of this.orders.values()) {
-            if (gridOrder.state !== ORDER_STATES.ACTIVE) continue;
+            // allow matching virtual orders if they have an ID (e.g. loaded from persistence)
             if (!gridOrder.orderId) continue;
-            
+
             const chainOrder = parsedChainOrders.get(gridOrder.orderId);
-            
+
             if (chainOrder) {
                 // Order still exists on chain - check price tolerance
+                // Mark as ACTIVE now that we confirmed it's on chain
+                gridOrder.state = ORDER_STATES.ACTIVE;
+
                 const toleranceCheck = checkPriceWithinTolerance(gridOrder, chainOrder, this.assets);
-                
+
                 if (!toleranceCheck.isWithinTolerance) {
                     // Price difference exceeds tolerance - need to correct order on blockchain
                     this.logger.log(
                         `Order ${gridOrder.id} (${gridOrder.orderId}): PRICE MISMATCH - ` +
                         `grid=${toleranceCheck.gridPrice.toFixed(8)}, chain=${toleranceCheck.chainPrice.toFixed(8)}, ` +
                         `diff=${toleranceCheck.priceDiff.toFixed(8)}, tolerance=${toleranceCheck.tolerance.toFixed(8)}. ` +
-                        `Flagging for correction.`, 
+                        `Flagging for correction.`,
                         'warn'
                     );
-                    
+
                     const correctionInfo = {
                         gridOrder: { ...gridOrder },
                         chainOrderId: gridOrder.orderId,
@@ -366,12 +424,12 @@ class OrderManager {
                     // Don't update size yet - will be updated after correction
                     continue;
                 }
-                
+
                 // Price within tolerance - update size if different
                 chainOrderIdsOnGrid.add(gridOrder.orderId);
                 const oldSize = Number(gridOrder.size || 0);
                 const newSize = Number(chainOrder.size || 0);
-                
+
                 // Compare using asset precision so we only treat on-chain-significant
                 // size changes as different. Use the order-type to pick precision.
                 const precision = (gridOrder.type === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
@@ -387,29 +445,35 @@ class OrderManager {
                 this._updateOrder(gridOrder);
             } else {
                 // Order no longer exists on chain - it was fully filled
-                this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) no longer on chain - marking as FILLED`, 'info');
-                const filledOrder = { ...gridOrder };
-                // Create new object to avoid mutation bug
-                const updatedOrder = { ...gridOrder, state: ORDER_STATES.FILLED, size: 0 };
-                this._updateOrder(updatedOrder);
-                filledOrders.push(filledOrder);
+                // Only treat as filled if it was previously ACTIVE. If it was VIRTUAL and not on chain, it's just a virtual order.
+                if (gridOrder.state === ORDER_STATES.ACTIVE) {
+                    this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) no longer on chain - marking as FILLED`, 'info');
+                    const filledOrder = { ...gridOrder };
+                    // Create new object to avoid mutation bug
+                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.FILLED, size: 0 };
+                    this._updateOrder(updatedOrder);
+                    filledOrders.push(filledOrder);
+                }
             }
         }
-        
+
         // Second pass: Check for chain orders that don't match any grid orderId but match by price
-        // This handles cases where orders were recreated with new IDs
+        // This handles cases where orders were recreated with new IDs OR picking up existing orders for virtual spots
         for (const [chainOrderId, chainOrder] of parsedChainOrders) {
             if (chainOrderIdsOnGrid.has(chainOrderId)) continue; // Already matched
-            
+
             // Find a grid order that matches by type and price but has a stale/missing orderId
             // Use calculatePriceTolerance(...) which computes tolerance based on asset precisions and order sizes
             let bestMatch = null;
             let bestPriceDiff = Infinity;
 
             for (const gridOrder of this.orders.values()) {
-                if (gridOrder.state !== ORDER_STATES.ACTIVE) continue;
+                // Skip if already confirmed active on another ID
+                if (gridOrder.state === ORDER_STATES.ACTIVE && gridOrder.orderId && parsedChainOrders.has(gridOrder.orderId)) continue;
+                // If it's active but the ID is dead/missing, we can match. If it's VIRTUAL, we can match.
+
                 if (gridOrder.type !== chainOrder.type) continue;
-                // Skip if this grid order's orderId is still valid on chain
+                // Skip if this grid order's orderId is still valid on chain (covered by first pass)
                 if (gridOrder.orderId && parsedChainOrders.has(gridOrder.orderId)) continue;
 
                 const priceDiff = Math.abs(gridOrder.price - chainOrder.price);
@@ -419,28 +483,29 @@ class OrderManager {
 
                 // Compute tolerance using the same formula used elsewhere in the manager
                 let tolerance = null;
-                            try {
-                        if (orderSize !== null && orderSize > 0) {
-                            tolerance = calculatePriceTolerance(gridOrder.price, orderSize, gridOrder.type, this.assets);
-                        }
+                try {
+                    if (orderSize !== null && orderSize > 0) {
+                        tolerance = calculatePriceTolerance(gridOrder.price, orderSize, gridOrder.type, this.assets);
+                    }
                 } catch (e) {
                     tolerance = null;
                 }
 
                 // Ensure we have a usable tolerance from calculatePriceTolerance (it provides a fallback)
-                    if (!tolerance || !Number.isFinite(tolerance)) {
-                        tolerance = calculatePriceTolerance(gridOrder.price, orderSize, gridOrder.type, this.assets);
-                    }
+                if (!tolerance || !Number.isFinite(tolerance)) {
+                    tolerance = calculatePriceTolerance(gridOrder.price, orderSize, gridOrder.type, this.assets);
+                }
 
                 if (priceDiff <= tolerance && priceDiff < bestPriceDiff) {
                     bestMatch = gridOrder;
                     bestPriceDiff = priceDiff;
                 }
             }
-            
+
             if (bestMatch) {
-                this.logger.log(`Order ${bestMatch.id}: Updating orderId ${bestMatch.orderId} -> ${chainOrderId} (matched by price, diff=${bestPriceDiff.toFixed(8)})`, 'info');
+                this.logger.log(`Order ${bestMatch.id}: Found matching open order ${chainOrderId} (diff=${bestPriceDiff.toFixed(8)}). Syncing...`, 'info');
                 bestMatch.orderId = chainOrderId;
+                bestMatch.state = ORDER_STATES.ACTIVE;
                 // Update size from chain but NEVER update price
                 const oldSize = Number(bestMatch.size || 0);
                 const newSize = Number(chainOrder.size || 0);
@@ -458,17 +523,17 @@ class OrderManager {
                 this.logger.log(`Chain order ${chainOrderId} (type=${chainOrder.type}, price=${chainOrder.price.toFixed(4)}) has no matching grid order`, 'warn');
             }
         }
-        
+
         // Log fill info if provided
         if (fillInfo && fillInfo.pays && fillInfo.receives) {
             this.logger.log(`Fill event: pays ${fillInfo.pays.amount} (${fillInfo.pays.asset_id}), receives ${fillInfo.receives.amount} (${fillInfo.receives.asset_id})`, 'info');
         }
-        
+
         // Log summary of orders needing correction
         if (ordersNeedingCorrection.length > 0) {
             this.logger.log(`${ordersNeedingCorrection.length} order(s) need price correction on blockchain`, 'warn');
         }
-        
+
         return { filledOrders, updatedOrders, ordersNeedingCorrection };
     }
 
@@ -491,20 +556,20 @@ class OrderManager {
             this.logger.log('syncFromFillHistory: No valid fill operation provided', 'debug');
             return { filledOrders: [], updatedOrders: [], partialFill: false };
         }
-        
+
         const orderId = fillOp.order_id;
         const paysAmount = fillOp.pays ? Number(fillOp.pays.amount) : 0;
         const paysAssetId = fillOp.pays ? fillOp.pays.asset_id : null;
         const receivesAmount = fillOp.receives ? Number(fillOp.receives.amount) : 0;
         const receivesAssetId = fillOp.receives ? fillOp.receives.asset_id : null;
-        
+
         this.logger.log(`syncFromFillHistory: Processing fill for order_id=${orderId}`, 'info');
         this.logger.log(`  Pays: ${paysAmount} (${paysAssetId}), Receives: ${receivesAmount} (${receivesAssetId})`, 'info');
-        
+
         const filledOrders = [];
         const updatedOrders = [];
         let partialFill = false;
-        
+
         // Find the grid order by orderId
         let matchedGridOrder = null;
         for (const gridOrder of this.orders.values()) {
@@ -513,26 +578,26 @@ class OrderManager {
                 break;
             }
         }
-        
+
         if (!matchedGridOrder) {
             this.logger.log(`syncFromFillHistory: No matching grid order found for order_id=${orderId}`, 'warn');
             return { filledOrders, updatedOrders, partialFill };
         }
-        
+
         this.logger.log(`syncFromFillHistory: Matched order_id=${orderId} to grid order ${matchedGridOrder.id} (type=${matchedGridOrder.type})`, 'info');
-        
+
         // Determine the fill amount based on order type and which asset was paid
         // For SELL orders: pays is assetA (what we're selling)
         // For BUY orders: pays is assetB (what we're selling to buy assetA)
         const orderType = matchedGridOrder.type;
         const currentSize = Number(matchedGridOrder.size || 0);
-        
+
         // Get asset precisions for conversion
         const assetAPrecision = this.assets?.assetA?.precision || 5;
         const assetBPrecision = this.assets?.assetB?.precision || 5;
         const assetAId = this.assets?.assetA?.id;
         const assetBId = this.assets?.assetB?.id;
-        
+
         // Calculate the filled amount in human-readable units
         let filledAmount = 0;
         if (orderType === ORDER_TYPES.SELL) {
@@ -546,16 +611,16 @@ class OrderManager {
                 filledAmount = blockchainToFloat(paysAmount, assetBPrecision);
             }
         }
-        
+
         const newSize = Math.max(0, currentSize - filledAmount);
-        
+
         this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} filled ${filledAmount.toFixed(8)}, size ${currentSize.toFixed(8)} -> ${newSize.toFixed(8)}`, 'info');
-        
+
         // Check if fully filled or partially filled
         // Use blockchain integer comparison for precision
         const precision = (orderType === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
         const newSizeInt = floatToBlockchainInt(newSize, precision);
-        
+
         if (newSizeInt <= 0) {
             // Fully filled
             this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED`, 'info');
@@ -572,7 +637,7 @@ class OrderManager {
             updatedOrders.push(matchedGridOrder);
             partialFill = true;
         }
-        
+
         return { filledOrders, updatedOrders, partialFill };
     }
 
@@ -590,6 +655,7 @@ class OrderManager {
         if (source === 'readOpenOrders') {
             this.ordersNeedingPriceCorrection = [];
         }
+        this.logger.log(`DEBUG: synchronizeWithChain entering switch, source=${source}, chainData.length=${Array.isArray(chainData) ? chainData.length : 'N/A'}`, 'info');
         switch (source) {
             case 'createOrder': {
                 const { gridOrderId, chainOrderId } = chainData;
@@ -605,7 +671,7 @@ class OrderManager {
             }
             case 'cancelOrder': {
                 const orderId = chainData;
-                const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p,s,t) => calculatePriceTolerance(p,s,t,this.assets), logger: this.logger });
+                const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p, s, t) => calculatePriceTolerance(p, s, t, this.assets), logger: this.logger });
                 if (gridOrder) {
                     // Create a new object to avoid mutation bug
                     const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
@@ -616,35 +682,41 @@ class OrderManager {
             }
             case 'readOpenOrders': {
                 const seenOnChain = new Set();
+                this.logger.log(`DEBUG: readOpenOrders: ${chainData.length} chain orders to process, ${this.orders.size} grid orders loaded.`, 'info');
+                let parsedCount = 0;
                 for (const chainOrder of chainData) {
                     const parsedOrder = parseChainOrder(chainOrder, this.assets);
                     if (!parsedOrder) {
-                        this.logger.log(`Could not parse chain order ${chainOrder.id}`, 'debug');
+                        this.logger.log(`DEBUG: Could not parse chain order ${chainOrder.id}`, 'warn');
                         continue;
                     }
+                    parsedCount++;
+                    this.logger.log(`DEBUG: Parsed chain order ${parsedOrder.orderId}: type=${parsedOrder.type}, price=${parsedOrder.price?.toFixed(6)}, size=${parsedOrder.size?.toFixed(8)}`, 'info');
+
                     seenOnChain.add(parsedOrder.orderId);
-                    const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p,s,t) => calculatePriceTolerance(p,s,t,this.assets), logger: this.logger });
+                    const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p, s, t) => calculatePriceTolerance(p, s, t, this.assets), logger: this.logger });
                     if (gridOrder) {
+                        this.logger.log(`DEBUG: Matched chain order ${parsedOrder.orderId} to grid order ${gridOrder.id} (state=${gridOrder.state})`, 'info');
                         const wasActive = gridOrder.state === ORDER_STATES.ACTIVE;
                         const oldOrderId = gridOrder.orderId;
-                        
+
                         // Build updated order object to avoid mutation bug
                         let updatedGridOrder = { ...gridOrder };
-                        
+
                         // Always update the orderId from chain - it may have changed
                         if (gridOrder.orderId !== parsedOrder.orderId) {
                             this.logger.log(`Updating orderId for ${gridOrder.id}: ${oldOrderId} -> ${parsedOrder.orderId}`, 'info');
                             updatedGridOrder.orderId = parsedOrder.orderId;
                         }
-                        
+
                         if (!wasActive) {
                             updatedGridOrder.state = ORDER_STATES.ACTIVE;
                             this.logger.log(`Order ${gridOrder.id} transitioned to ACTIVE with orderId ${updatedGridOrder.orderId}`, 'info');
                         }
-                        
+
                         // Check price tolerance - if chain price differs too much, flag for correction
                         const toleranceCheck = checkPriceWithinTolerance(gridOrder, parsedOrder, this.assets);
-                        
+
                         if (!toleranceCheck.isWithinTolerance) {
                             this.logger.log(
                                 `Price mismatch ${gridOrder.id}: gridPrice=${toleranceCheck.gridPrice.toFixed(8)}, ` +
@@ -661,7 +733,7 @@ class OrderManager {
                                 type: gridOrder.type
                             });
                         }
-                        
+
                         // Reconcile sizes to avoid funds drift when on-chain size differs
                         if (parsedOrder.size !== null && parsedOrder.size !== undefined && Number.isFinite(Number(parsedOrder.size))) {
                             const gridSize = Number(gridOrder.size || 0);
@@ -673,7 +745,7 @@ class OrderManager {
                             if (gridInt !== chainInt) {
                                 this.logger.log(`Size sync ${gridOrder.id}: chain orderId=${parsedOrder.orderId}, chainPrice=${parsedOrder.price.toFixed(6)}, gridPrice=${gridOrder.price.toFixed(6)}, gridSize=${gridSize} -> chainSize=${chainSize}`, 'info');
                             }
-                            try { applyChainSizeToGridOrder(this, updatedGridOrder, parsedOrder.size); } catch (e) { 
+                            try { applyChainSizeToGridOrder(this, updatedGridOrder, parsedOrder.size); } catch (e) {
                                 this.logger.log(`Error applying chain size to grid order: ${e.message}`, 'warn');
                             }
                         } else {
@@ -692,7 +764,7 @@ class OrderManager {
                         this._updateOrder(updatedOrder);
                     }
                 }
-                
+
                 // Log summary of orders needing correction
                 if (this.ordersNeedingPriceCorrection.length > 0) {
                     this.logger.log(`${this.ordersNeedingPriceCorrection.length} order(s) need price correction on blockchain`, 'warn');
@@ -718,7 +790,7 @@ class OrderManager {
     getInitialOrdersToActivate() {
         const sellCount = Math.max(0, Number(this.config.activeOrders && this.config.activeOrders.sell ? this.config.activeOrders.sell : 1));
         const buyCount = Math.max(0, Number(this.config.activeOrders && this.config.activeOrders.buy ? this.config.activeOrders.buy : 1));
-        
+
         // Get minimum order sizes for each type
         const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
         const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
@@ -756,11 +828,11 @@ class OrderManager {
         });
         // Sort that block from the outside-in
         validBuys.sort((a, b) => a.price - b.price);
-        
+
         if (validSells.length < futureActiveSells.length || validBuys.length < futureActiveBuys.length) {
             this.logger.log(`Filtered ${futureActiveSells.length - validSells.length} sell and ${futureActiveBuys.length - validBuys.length} buy orders below minimum size threshold`, 'info');
         }
-        
+
         return [...validSells, ...validBuys];
     }
 
@@ -770,9 +842,9 @@ class OrderManager {
      * @param {string|null} state - ORDER_STATES.VIRTUAL, ACTIVE, or FILLED (null for all)
      * @returns {Array} Filtered array of order objects
      */
-    getOrdersByTypeAndState(type, state) { 
+    getOrdersByTypeAndState(type, state) {
         let candidateIds;
-        
+
         // Use indices for faster lookup when possible
         if (state !== null && type !== null) {
             // Intersection of both state and type indices
@@ -816,57 +888,58 @@ class OrderManager {
      * @param {Set} excludeOrderIds - Set of chain orderIds to exclude from rotation (e.g., just corrected)
      * @returns {Array} Newly activated orders that need on-chain placement
      */
-    async processFilledOrders(filledOrders, excludeOrderIds = new Set()) { 
-        const filledCounts = { [ORDER_TYPES.BUY]: 0, [ORDER_TYPES.SELL]: 0 }; 
-        for (const filledOrder of filledOrders) { 
-            filledCounts[filledOrder.type]++; 
-            const updatedOrder = { ...filledOrder, state: ORDER_STATES.FILLED, size: 0 }; 
-            this._updateOrder(updatedOrder); 
-            if (filledOrder.type === ORDER_TYPES.SELL) { 
-                const proceeds = filledOrder.size * filledOrder.price; 
-                this.funds.available.buy += proceeds; 
-                // Prevent negative committed by capping at 0
-                const previousCommitted = this.funds.committed.sell;
-                this.funds.committed.sell = Math.max(0, this.funds.committed.sell - filledOrder.size);
-                if (previousCommitted < filledOrder.size) {
-                    this.logger.log(`Warning: committed.sell (${previousCommitted.toFixed(8)}) was less than filled size (${filledOrder.size.toFixed(8)}). This may indicate a funds tracking issue.`, 'warn');
-                }
-                const quoteName = this.config.assetB || 'quote'; 
-                const baseName = this.config.assetA || 'base'; 
-                this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed`, 'info'); 
-            } else { 
-                const proceeds = filledOrder.size / filledOrder.price; 
-                this.funds.available.sell += proceeds; 
-                // Prevent negative committed by capping at 0
-                const previousCommitted = this.funds.committed.buy;
-                this.funds.committed.buy = Math.max(0, this.funds.committed.buy - filledOrder.size);
-                if (previousCommitted < filledOrder.size) {
-                    this.logger.log(`Warning: committed.buy (${previousCommitted.toFixed(8)}) was less than filled size (${filledOrder.size.toFixed(8)}). This may indicate a funds tracking issue.`, 'warn');
-                }
-                const quoteName = this.config.assetB || 'quote'; 
-                const baseName = this.config.assetA || 'base'; 
-                this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed`, 'info'); 
-            } 
-            await this.maybeConvertToSpread(filledOrder.id); 
-        } 
-        const extraOrderCount = this.outOfSpread ? 1 : 0; 
-        if (this.outOfSpread) { 
-            this.logger.log(`Adding extra order due to previous wide spread condition`, 'info'); 
-            this.outOfSpread = false; 
-        } 
-        const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds); 
+    async processFilledOrders(filledOrders, excludeOrderIds = new Set()) {
+        const filledCounts = { [ORDER_TYPES.BUY]: 0, [ORDER_TYPES.SELL]: 0 };
+        // Collect proceeds to add AFTER all maybeConvertToSpread calls
+        // (because maybeConvertToSpread calls _updateOrder which runs recalculateFunds and would overwrite)
+        let proceedsBuy = 0;
+        let proceedsSell = 0;
+
+        for (const filledOrder of filledOrders) {
+            filledCounts[filledOrder.type]++;
+            const updatedOrder = { ...filledOrder, state: ORDER_STATES.FILLED, size: 0 };
+            this._updateOrder(updatedOrder);
+
+            if (filledOrder.type === ORDER_TYPES.SELL) {
+                const proceeds = filledOrder.size * filledOrder.price;
+                proceedsBuy += proceeds;  // Collect, don't add yet
+                const quoteName = this.config.assetB || 'quote';
+                const baseName = this.config.assetA || 'base';
+                this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed`, 'info');
+            } else {
+                const proceeds = filledOrder.size / filledOrder.price;
+                proceedsSell += proceeds;  // Collect, don't add yet
+                const quoteName = this.config.assetB || 'quote';
+                const baseName = this.config.assetA || 'base';
+                this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed`, 'info');
+            }
+            await this.maybeConvertToSpread(filledOrder.id);
+        }
+
+        // NOW add proceeds to available funds (after all recalculateFunds calls)
+        this.funds.available.buy += proceedsBuy;
+        this.funds.available.sell += proceedsSell;
+        this.logger.log(`Proceeds added: Buy +${proceedsBuy.toFixed(8)}, Sell +${proceedsSell.toFixed(8)}`, 'info');
+        const extraOrderCount = this.outOfSpread ? 1 : 0;
+        if (this.outOfSpread) {
+            this.logger.log(`Adding extra order due to previous wide spread condition`, 'info');
+            this.outOfSpread = false;
+        }
+        // Log available funds before rotation
+        this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
+        const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds);
         this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
         return newOrders;
     }
 
     // Convert filled orders into spread placeholders so new ones can re-enter later.
-    async maybeConvertToSpread(orderId) { 
-        const order = this.orders.get(orderId); 
-        if (!order || order.type === ORDER_TYPES.SPREAD) return; 
-        const updatedOrder = { ...order, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL }; 
-        this._updateOrder(updatedOrder); 
-        this.currentSpreadCount++; 
-        this.logger.log(`Converted order ${orderId} to SPREAD`, 'debug'); 
+    async maybeConvertToSpread(orderId) {
+        const order = this.orders.get(orderId);
+        if (!order || order.type === ORDER_TYPES.SPREAD) return;
+        const updatedOrder = { ...order, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL };
+        this._updateOrder(updatedOrder);
+        this.currentSpreadCount++;
+        this.logger.log(`Converted order ${orderId} to SPREAD`, 'debug');
     }
 
     /**
@@ -886,24 +959,25 @@ class OrderManager {
      * @param {Set} excludeOrderIds - Set of chain orderIds to exclude from rotation
      * @returns {Object} { ordersToPlace: [], ordersToRotate: [] }
      */
-    async rebalanceOrders(filledCounts, extraOrderCount = 0, excludeOrderIds = new Set()) { 
+    async rebalanceOrders(filledCounts, extraOrderCount = 0, excludeOrderIds = new Set()) {
         const ordersToPlace = [];    // New orders to place on-chain (activated virtuals)
         const ordersToRotate = [];   // Orders to cancel and recreate at new price
-        
+
         // When SELL orders fill: activate virtual sells (need on-chain) and rotate furthest buys
-        if (filledCounts[ORDER_TYPES.SELL] > 0) { 
+        if (filledCounts[ORDER_TYPES.SELL] > 0) {
             const count = filledCounts[ORDER_TYPES.SELL] + extraOrderCount;
-            
+
             // Step 1: Activate closest virtual SELL orders - these need on-chain placement
             const activatedSells = await this.activateClosestVirtualOrdersForPlacement(ORDER_TYPES.SELL, count);
             ordersToPlace.push(...activatedSells);
             this.logger.log(`Prepared ${activatedSells.length} virtual SELL orders for on-chain placement`, 'info');
-            
+
             // Step 2: Find furthest active BUY orders and prepare them for rotation (cancel + recreate)
+            // Rotation requires available funds - new order consumes available, old order moves to reserved
             if (this.funds.available.buy > 0) {
                 const rotatedBuys = await this.prepareFurthestOrdersForRotation(ORDER_TYPES.BUY, count, excludeOrderIds);
                 ordersToRotate.push(...rotatedBuys);
-                
+
                 if (rotatedBuys.length < count) {
                     this.logger.log(`Only prepared ${rotatedBuys.length}/${count} BUY orders for rotation`, 'warn');
                 }
@@ -911,21 +985,22 @@ class OrderManager {
                 this.logger.log(`No available buy funds to rotate orders`, 'warn');
             }
         }
-        
+
         // When BUY orders fill: activate virtual buys (need on-chain) and rotate furthest sells
-        if (filledCounts[ORDER_TYPES.BUY] > 0) { 
+        if (filledCounts[ORDER_TYPES.BUY] > 0) {
             const count = filledCounts[ORDER_TYPES.BUY] + extraOrderCount;
-            
+
             // Step 1: Activate closest virtual BUY orders - these need on-chain placement
             const activatedBuys = await this.activateClosestVirtualOrdersForPlacement(ORDER_TYPES.BUY, count);
             ordersToPlace.push(...activatedBuys);
             this.logger.log(`Prepared ${activatedBuys.length} virtual BUY orders for on-chain placement`, 'info');
-            
+
             // Step 2: Find furthest active SELL orders and prepare them for rotation
+            // Rotation requires available funds - new order consumes available, old order moves to reserved
             if (this.funds.available.sell > 0) {
                 const rotatedSells = await this.prepareFurthestOrdersForRotation(ORDER_TYPES.SELL, count, excludeOrderIds);
                 ordersToRotate.push(...rotatedSells);
-                
+
                 if (rotatedSells.length < count) {
                     this.logger.log(`Only prepared ${rotatedSells.length}/${count} SELL orders for rotation`, 'warn');
                 }
@@ -933,7 +1008,7 @@ class OrderManager {
                 this.logger.log(`No available sell funds to rotate orders`, 'warn');
             }
         }
-        
+
         return { ordersToPlace, ordersToRotate };
     }
 
@@ -951,25 +1026,25 @@ class OrderManager {
      */
     async activateClosestVirtualOrdersForPlacement(targetType, count) {
         if (count <= 0) return [];
-        
+
         // Only get orders that are truly VIRTUAL (not yet on-chain)
         const virtualOrders = this.getOrdersByTypeAndState(targetType, ORDER_STATES.VIRTUAL);
-        
+
         // Debug: log what we found
         this.logger.log(`Found ${virtualOrders.length} VIRTUAL ${targetType} orders for activation`, 'debug');
-        
+
         // Sort by distance to market price (closest first)
         // For BUY: highest price is closest to market (below market)
         // For SELL: lowest price is closest to market (above market)
-        virtualOrders.sort((a, b) => 
-            targetType === ORDER_TYPES.BUY 
+        virtualOrders.sort((a, b) =>
+            targetType === ORDER_TYPES.BUY
                 ? b.price - a.price  // Highest price first for buys
                 : a.price - b.price  // Lowest price first for sells
         );
-        
+
         const toActivate = virtualOrders.slice(0, count);
         const activated = [];
-        
+
         // These orders inherit their grid position's size (already calculated)
         for (const order of toActivate) {
             // Double-check the order is still VIRTUAL (not already being processed)
@@ -978,22 +1053,22 @@ class OrderManager {
                 this.logger.log(`Order ${order.id} is no longer VIRTUAL (state=${currentOrder?.state}), skipping`, 'warn');
                 continue;
             }
-            
+
             const orderSize = order.size || 0;
-            
+
             if (orderSize <= 0) {
                 this.logger.log(`Skipping virtual ${targetType} at ${order.price.toFixed(4)} - no size defined`, 'warn');
                 continue;
             }
-            
+
             // Mark as ACTIVE and commit funds
             const activatedOrder = { ...order, state: ORDER_STATES.ACTIVE };
             this._updateOrder(activatedOrder);
-            
+
             activated.push(activatedOrder);
             this.logger.log(`Prepared virtual ${targetType} ${order.id} at price ${order.price.toFixed(4)}, size ${orderSize.toFixed(8)} for on-chain placement`, 'info');
         }
-        
+
         return activated;
     }
 
@@ -1016,53 +1091,41 @@ class OrderManager {
      */
     async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set()) {
         if (count <= 0) return [];
-        
+
         // Get orderIds that are pending price correction - exclude these from rotation
         const correctionOrderIds = new Set(
             (this.ordersNeedingPriceCorrection || []).map(c => c.chainOrderId).filter(Boolean)
         );
-        
+
         // Also exclude recently rotated orders (prevents double-rotation from rapid fill events)
         const recentlyRotated = this._recentlyRotatedOrderIds || new Set();
-        
+
         // Combine all exclusion sets
         const allExcluded = new Set([...correctionOrderIds, ...excludeOrderIds, ...recentlyRotated]);
-        
+
         if (allExcluded.size > 0) {
             this.logger.log(`Excluding ${allExcluded.size} order(s) from rotation (corrected, pending, or recently rotated)`, 'debug');
         }
-        
+
         const activeOrders = this.getOrdersByTypeAndState(targetType, ORDER_STATES.ACTIVE)
             .filter(o => !allExcluded.has(o.orderId)); // Exclude orders that were corrected, pending, or recently rotated
-        
+
         // Sort by distance from market price (furthest first)
         // For BUY: lowest price is furthest from market
         // For SELL: highest price is furthest from market
-        activeOrders.sort((a, b) => 
-            targetType === ORDER_TYPES.BUY 
+        activeOrders.sort((a, b) =>
+            targetType === ORDER_TYPES.BUY
                 ? a.price - b.price  // Lowest price first for buys (furthest from market)
                 : b.price - a.price  // Highest price first for sells (furthest from market)
         );
-        
+
         const ordersToProcess = activeOrders.slice(0, count);
         const rotations = [];
-        
-        const availableFunds = targetType === ORDER_TYPES.BUY 
-            ? this.funds.available.buy 
-            : this.funds.available.sell;
-        
-        if (availableFunds <= 0 || ordersToProcess.length === 0) {
+
+        if (ordersToProcess.length === 0) {
             return [];
         }
-        
-        const minSize = getMinOrderSize(targetType, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
-        const fundsPerOrder = availableFunds / Math.min(count, ordersToProcess.length);
-        
-        if (fundsPerOrder < minSize) {
-            this.logger.log(`Insufficient funds per order for rotation: ${fundsPerOrder.toFixed(8)} < minSize ${minSize.toFixed(8)}`, 'warn');
-            return [];
-        }
-        
+
         // Find new prices from SPREAD orders
         // For BUY rotation (when SELL fills): use LOWEST spread (closest to buy side)
         // For SELL rotation (when BUY fills): use HIGHEST spread (closest to sell side)
@@ -1073,11 +1136,24 @@ class OrderManager {
             // For BUY: lowest price first (edge closest to buy orders)
             // For SELL: highest price first (edge closest to sell orders)
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
-        
+
+        // Calculate new order size from available funds
+        const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+        const availableFunds = this.funds.available[side];
+        const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
+        const fundsPerOrder = orderCount > 0 ? availableFunds / orderCount : 0;
+
         for (let i = 0; i < ordersToProcess.length && i < eligibleSpreadOrders.length; i++) {
             const oldOrder = ordersToProcess[i];
             const newPriceSource = eligibleSpreadOrders[i];
-            
+
+            // Use available funds for new order size (proceeds from the fill)
+            const newSize = fundsPerOrder;
+            if (newSize <= 0) {
+                this.logger.log(`No available funds for rotation, skipping`, 'warn');
+                continue;
+            }
+
             // Create the rotation info
             const rotation = {
                 oldOrder: {
@@ -1088,28 +1164,38 @@ class OrderManager {
                     size: oldOrder.size
                 },
                 newPrice: newPriceSource.price,
-                newSize: fundsPerOrder,
+                newSize: newSize,
                 newGridId: newPriceSource.id,
                 type: targetType
             };
-            
-            // Move funds from available to committed for the new order
-            this._adjustFunds(targetType, fundsPerOrder);
-            
+
             // Convert the spread to the target type (will become ACTIVE after chain confirm)
-            const updatedOrder = { ...newPriceSource, type: targetType, size: fundsPerOrder, state: ORDER_STATES.VIRTUAL };
+            const updatedOrder = { ...newPriceSource, type: targetType, size: newSize, state: ORDER_STATES.VIRTUAL };
             this._updateOrder(updatedOrder);
             this.currentSpreadCount--;
-            
+
+            // Explicit fund adjustments for rotation:
+            // 1. Remove newSize from available funds (new order will consume these)
+            // 2. Move old order's size from committed.grid to virtuel (old order becoming virtual)
+            const oldSize = Number(oldOrder.size) || 0;
+
+            // Deduct new order size from available
+            this.funds.available[side] = Math.max(0, this.funds.available[side] - newSize);
+
+            // Move old order from committed.grid to virtuel
+            this.funds.committed.grid[side] = Math.max(0, this.funds.committed.grid[side] - oldSize);
+            this.funds.virtuel[side] += oldSize;
+
             // Track this orderId as being rotated to prevent double-rotation
             if (oldOrder.orderId) {
                 this._recentlyRotatedOrderIds.add(oldOrder.orderId);
             }
-            
+
             rotations.push(rotation);
-            this.logger.log(`Prepared ${targetType} rotation: old ${oldOrder.orderId} @ ${oldOrder.price.toFixed(4)} -> new spread @ ${newPriceSource.price.toFixed(4)}, size ${fundsPerOrder.toFixed(8)}`, 'info');
+            this.logger.log(`Prepared ${targetType} rotation: old ${oldOrder.orderId} @ ${oldOrder.price.toFixed(4)} -> new spread @ ${newPriceSource.price.toFixed(4)}, size ${newSize.toFixed(8)}`, 'info');
         }
-        
+
+
         return rotations;
     }
 
@@ -1130,7 +1216,7 @@ class OrderManager {
             const virtualOrder = { ...order, state: ORDER_STATES.VIRTUAL, orderId: null };
             this._updateOrder(virtualOrder);
             this.logger.log(`Rotated order ${oldOrderInfo.id} (${oldOrderInfo.type}) at price ${oldOrderInfo.price.toFixed(4)} -> VIRTUAL (size preserved: ${order.size?.toFixed(8) || 0})`, 'info');
-            
+
             // Clear this orderId from recently rotated tracking (rotation complete)
             if (oldOrderInfo.orderId) {
                 this._recentlyRotatedOrderIds.delete(oldOrderInfo.orderId);

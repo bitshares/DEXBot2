@@ -58,16 +58,27 @@ class Logger {
         const buyName = manager.config?.assetB || 'quote';
         const sellName = manager.config?.assetA || 'base';
         console.log('\n===== FUNDS STATUS =====');
-        // Two kinds of "available" values exist:
-        // - manager.funds.available -> funds available for creating new grid orders (grid allocation)
-        // - manager.accountTotals (when present) -> free on-chain balances fetched from the blockchain
+
+        // Use new nested structure
         const gridBuy = Number.isFinite(Number(manager.funds?.available?.buy)) ? manager.funds.available.buy.toFixed(8) : 'N/A';
         const gridSell = Number.isFinite(Number(manager.funds?.available?.sell)) ? manager.funds.available.sell.toFixed(8) : 'N/A';
-        const chainBuy = (manager.accountTotals && Number.isFinite(Number(manager.accountTotals.buy))) ? Number(manager.accountTotals.buy).toFixed(8) : 'N/A';
-        const chainSell = (manager.accountTotals && Number.isFinite(Number(manager.accountTotals.sell))) ? Number(manager.accountTotals.sell).toFixed(8) : 'N/A';
-        console.log(`Available (grid): Buy ${gridBuy} ${buyName} | Sell ${gridSell} ${sellName}`);
-        console.log(`Available (chain): Buy ${chainBuy} ${buyName} | Sell ${chainSell} ${sellName}`);
-        console.log(`Committed: Buy ${manager.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.committed.sell.toFixed(8)} ${sellName}`);
+        const totalChainBuy = manager.funds?.total?.chain?.buy ?? 0;
+        const totalChainSell = manager.funds?.total?.chain?.sell ?? 0;
+        const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
+        const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
+        const virtuelBuy = manager.funds?.virtuel?.buy ?? 0;
+        const virtuelSell = manager.funds?.virtuel?.sell ?? 0;
+        const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
+        const committedGridSell = manager.funds?.committed?.grid?.sell ?? 0;
+        const committedChainBuy = manager.funds?.committed?.chain?.buy ?? 0;
+        const committedChainSell = manager.funds?.committed?.chain?.sell ?? 0;
+
+        console.log(`funds.available: Buy ${gridBuy} ${buyName} | Sell ${gridSell} ${sellName}`);
+        console.log(`total.chain: Buy ${totalChainBuy.toFixed(8)} ${buyName} | Sell ${totalChainSell.toFixed(8)} ${sellName}`);
+        console.log(`total.grid: Buy ${totalGridBuy.toFixed(8)} ${buyName} | Sell ${totalGridSell.toFixed(8)} ${sellName}`);
+        console.log(`virtuel.grid: Buy ${virtuelBuy.toFixed(8)} ${buyName} | Sell ${virtuelSell.toFixed(8)} ${sellName}`);
+        console.log(`committed.grid: Buy ${committedGridBuy.toFixed(8)} ${buyName} | Sell ${committedGridSell.toFixed(8)} ${sellName}`);
+        console.log(`committed.chain: Buy ${committedChainBuy.toFixed(8)} ${buyName} | Sell ${committedChainSell.toFixed(8)} ${sellName}`);
     }
 
     // Print a comprehensive status summary using manager state.
@@ -81,14 +92,27 @@ class Logger {
         console.log(`Market: ${market}`);
         const buyName = manager.config?.assetB || 'quote';
         const sellName = manager.config?.assetA || 'base';
+
+        // Use new nested structure
         const gridBuy = Number.isFinite(Number(manager.funds?.available?.buy)) ? manager.funds.available.buy.toFixed(8) : 'N/A';
         const gridSell = Number.isFinite(Number(manager.funds?.available?.sell)) ? manager.funds.available.sell.toFixed(8) : 'N/A';
-        const chainBuy = (manager.accountTotals && Number.isFinite(Number(manager.accountTotals.buy))) ? Number(manager.accountTotals.buy).toFixed(8) : 'N/A';
-        const chainSell = (manager.accountTotals && Number.isFinite(Number(manager.accountTotals.sell))) ? Number(manager.accountTotals.sell).toFixed(8) : 'N/A';
-        console.log(`Available Funds (grid): Buy ${gridBuy} ${buyName} | Sell ${gridSell} ${sellName}`);
-        console.log(`Available Funds (chain): Buy ${chainBuy} ${buyName} | Sell ${chainSell} ${sellName}`);
-        console.log(`Committed Funds: Buy ${manager.funds.committed.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.committed.sell.toFixed(8)} ${sellName}`);
-        console.log(`Start Funds: Buy ${manager.funds.total.buy.toFixed(8)} ${buyName} | Sell ${manager.funds.total.sell.toFixed(8)} ${sellName}`);
+        const totalChainBuy = manager.funds?.total?.chain?.buy ?? 0;
+        const totalChainSell = manager.funds?.total?.chain?.sell ?? 0;
+        const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
+        const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
+        const virtuelBuy = manager.funds?.virtuel?.buy ?? 0;
+        const virtuelSell = manager.funds?.virtuel?.sell ?? 0;
+        const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
+        const committedGridSell = manager.funds?.committed?.grid?.sell ?? 0;
+        const committedChainBuy = manager.funds?.committed?.chain?.buy ?? 0;
+        const committedChainSell = manager.funds?.committed?.chain?.sell ?? 0;
+
+        console.log(`funds.available: Buy ${gridBuy} ${buyName} | Sell ${gridSell} ${sellName}`);
+        console.log(`total.chain: Buy ${totalChainBuy.toFixed(8)} ${buyName} | Sell ${totalChainSell.toFixed(8)} ${sellName}`);
+        console.log(`total.grid: Buy ${totalGridBuy.toFixed(8)} ${buyName} | Sell ${totalGridSell.toFixed(8)} ${sellName}`);
+        console.log(`virtuel.grid: Buy ${virtuelBuy.toFixed(8)} ${buyName} | Sell ${virtuelSell.toFixed(8)} ${sellName}`);
+        console.log(`committed.grid: Buy ${committedGridBuy.toFixed(8)} ${buyName} | Sell ${committedGridSell.toFixed(8)} ${sellName}`);
+        console.log(`committed.chain: Buy ${committedChainBuy.toFixed(8)} ${buyName} | Sell ${committedChainSell.toFixed(8)} ${sellName}`);
         console.log(`Orders: Virtual ${virtualOrders.length} | Active ${activeOrders.length} | Filled ${filledOrders.length}`);
         console.log(`Spreads: ${manager.currentSpreadCount}/${manager.targetSpreadCount}`);
         // calculateCurrentSpread may exist on manager

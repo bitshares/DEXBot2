@@ -50,7 +50,7 @@ class Grid {
         // Use explicit step multipliers for clarity:
         const stepUp = 1 + (incrementPercent / 100);    // e.g. 1.02 for +2%
         const stepDown = 1 - (incrementPercent / 100);  // e.g. 0.98 for -2%
-        
+
         // Ensure targetSpreadPercent is at least `minSpreadFactor * incrementPercent` to guarantee spread orders.
         // This implementation uses the constant GRID_LIMITS.MIN_SPREAD_FACTOR.
         const spreadFactor = Number(GRID_LIMITS.MIN_SPREAD_FACTOR);
@@ -58,9 +58,9 @@ class Grid {
         const targetSpreadPercent = Math.max(config.targetSpreadPercent, minSpreadPercent);
         if (config.targetSpreadPercent < minSpreadPercent) {
             console.log(`[WARN] targetSpreadPercent (${config.targetSpreadPercent}%) is less than ${spreadFactor}*incrementPercent (${minSpreadPercent.toFixed(2)}%). ` +
-                        `Auto-adjusting to ${minSpreadPercent.toFixed(2)}% to ensure spread orders are created.`);
+                `Auto-adjusting to ${minSpreadPercent.toFixed(2)}% to ensure spread orders are created.`);
         }
-        
+
         // Calculate number of spread orders based on target spread vs increment
         // Ensure at least 2 spread orders (1 buy, 1 sell) to maintain a proper spread zone
         // Number of increments needed to cover the target spread using stepUp^n >= (1 + targetSpread)
@@ -105,8 +105,16 @@ class Grid {
      * Restore a persisted grid snapshot onto a manager instance.
      * Usage: Grid.loadGrid(manager, gridArray)
      */
-    static loadGrid(manager, grid) {
+    static async loadGrid(manager, grid) {
         if (!Array.isArray(grid)) return;
+
+        // Ensure assets are initialized so that subsequent sync operations (which rely on precision) work correctly
+        try {
+            await manager._initializeAssets();
+        } catch (e) {
+            manager.logger && manager.logger.log && manager.logger.log(`Warning: Failed to initialize assets during loadGrid: ${e.message}`, 'warn');
+        }
+
         // Clear manager state and indices then load the grid entries
         manager.orders.clear();
         Object.values(manager._ordersByState).forEach(set => set.clear());
@@ -114,13 +122,13 @@ class Grid {
         manager.resetFunds();
         grid.forEach(order => {
             manager._updateOrder(order);
+            // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
+            // These explicit adjustments are kept for clarity but may be redundant
             if (order.state === 'active') {
                 if (order.type === ORDER_TYPES.BUY) {
-                    manager.funds.committed.buy += order.size;
-                    manager.funds.available.buy -= order.size;
+                    manager.funds.committed.grid.buy += order.size;
                 } else if (order.type === ORDER_TYPES.SELL) {
-                    manager.funds.committed.sell += order.size;
-                    manager.funds.available.sell -= order.size;
+                    manager.funds.committed.grid.sell += order.size;
                 }
             }
         });
@@ -189,15 +197,15 @@ class Grid {
                 //   enforcing the per-order minimum (i.e. minSize=0).
                 // - If totalFunds is zero or not finite, signal failure with
                 //   a zero-filled array so the caller can decide how to proceed.
-                    // If precision provided for this side, compare integer representations
-                    const precision = (side === 'sell') ? precisionA : precisionB;
-                    let anyBelow = false;
-                    if (precision !== null && precision !== undefined && Number.isFinite(precision)) {
-                        const minInt = floatToBlockchainInt(minSize, precision);
-                        anyBelow = sizes.some(sz => floatToBlockchainInt(sz, precision) < minInt);
-                    } else {
-                        anyBelow = sizes.some(sz => sz < minSize - 1e-8);
-                    }
+                // If precision provided for this side, compare integer representations
+                const precision = (side === 'sell') ? precisionA : precisionB;
+                let anyBelow = false;
+                if (precision !== null && precision !== undefined && Number.isFinite(precision)) {
+                    const minInt = floatToBlockchainInt(minSize, precision);
+                    anyBelow = sizes.some(sz => floatToBlockchainInt(sz, precision) < minInt);
+                } else {
+                    anyBelow = sizes.some(sz => sz < minSize - 1e-8);
+                }
                 if (anyBelow) {
                     if (Number.isFinite(totalFunds) && totalFunds > 0) {
                         // Retry allocation without min-size (single-pass)
@@ -365,15 +373,15 @@ class Grid {
         Object.values(manager._ordersByState).forEach(set => set.clear());
         Object.values(manager._ordersByType).forEach(set => set.clear());
         manager.resetFunds();
-        sizedOrders.forEach(order => { 
+        sizedOrders.forEach(order => {
             manager._updateOrder(order);
-            if (order.type === ORDER_TYPES.BUY) { 
-                manager.funds.committed.buy += order.size; 
-                manager.funds.available.buy -= order.size; 
-            } else if (order.type === ORDER_TYPES.SELL) { 
-                manager.funds.committed.sell += order.size; 
-                manager.funds.available.sell -= order.size; 
-            } 
+            // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
+            // These explicit adjustments are kept for clarity but may be redundant
+            if (order.type === ORDER_TYPES.BUY) {
+                manager.funds.committed.grid.buy += order.size;
+            } else if (order.type === ORDER_TYPES.SELL) {
+                manager.funds.committed.grid.sell += order.size;
+            }
         });
 
         manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell; manager.currentSpreadCount = manager.targetSpreadCount;

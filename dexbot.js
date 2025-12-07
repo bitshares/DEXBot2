@@ -16,6 +16,7 @@
 const { BitShares, waitForConnected } = require('./modules/bitshares_client');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline-sync');
 const chainOrders = require('./modules/chain_orders');
 const chainKeys = require('./modules/chain_keys');
 const { OrderManager, grid: Grid, utils: OrderUtils } = require('./modules/order');
@@ -284,7 +285,7 @@ class DEXBot {
         };
 
         const orderGroups = [];
-        for (let i = 0; i < interleavedOrders.length; ) {
+        for (let i = 0; i < interleavedOrders.length;) {
             const current = interleavedOrders[i];
             const next = interleavedOrders[i + 1];
             if (next && current.type === 'sell' && next.type === 'buy') {
@@ -363,7 +364,7 @@ class DEXBot {
      */
     async updateOrdersOnChain(rebalanceResult) {
         const { ordersToPlace, ordersToRotate } = rebalanceResult;
-        
+
         if (this.config.dryRun) {
             if (ordersToPlace && ordersToPlace.length > 0) {
                 this.manager.logger.log(`Dry run: would place ${ordersToPlace.length} new orders on-chain`, 'info');
@@ -402,9 +403,9 @@ class DEXBot {
                         this.account, this.privateKey, args.amountToSell, args.sellAssetId,
                         args.minToReceive, args.receiveAssetId, null, false
                     );
-                    
+
                     const chainOrderId = result && result[0] && result[0].trx && result[0].trx.operation_results && result[0].trx.operation_results[0] && result[0].trx.operation_results[0][1];
-                    
+
                     if (chainOrderId) {
                         await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId }, 'createOrder');
                         this.manager.logger.log(`Placed ${order.type} order ${order.id} -> ${chainOrderId}`, 'info');
@@ -420,7 +421,7 @@ class DEXBot {
         // Step 2: Update orders (use limit_order_update to change price/size in place)
         if (ordersToRotate && ordersToRotate.length > 0) {
             this.manager.logger.log(`Processing ${ordersToRotate.length} order rotation(s)`, 'info');
-            
+
             // Deduplicate by orderId - only process each chain order once
             const seenOrderIds = new Set();
             const uniqueRotations = ordersToRotate.filter(r => {
@@ -432,16 +433,16 @@ class DEXBot {
                 seenOrderIds.add(orderId);
                 return true;
             });
-            
+
             for (const rotation of uniqueRotations) {
                 try {
                     const { oldOrder, newPrice, newSize, newGridId, type } = rotation;
-                    
+
                     if (!oldOrder.orderId) {
                         this.manager.logger.log(`Cannot update order without orderId`, 'warn');
                         continue;
                     }
-                    
+
                     // Calculate new amounts for the update
                     // For BUY: amountToSell is in assetB (quote), minToReceive is in assetA (base)
                     // For SELL: amountToSell is in assetA (base), minToReceive is in assetB (quote)
@@ -453,37 +454,37 @@ class DEXBot {
                         newAmountToSell = newSize;
                         newMinToReceive = newSize / newPrice;
                     }
-                    
+
                     this.manager.logger.log(`Updating ${type} order ${oldOrder.orderId}: price ${oldOrder.price.toFixed(4)} -> ${newPrice.toFixed(4)}, size ${oldOrder.size.toFixed(8)} -> ${newSize.toFixed(8)}`, 'info');
-                    
+
                     // Use limit_order_update to modify the order in place
                     const updateResult = await chainOrders.updateOrder(
-                        this.account, 
-                        this.privateKey, 
+                        this.account,
+                        this.privateKey,
                         oldOrder.orderId,
                         {
                             amountToSell: newAmountToSell,
                             minToReceive: newMinToReceive
                         }
                     );
-                    
+
                     if (updateResult) {
                         // Update the grid: old position becomes VIRTUAL, new position becomes ACTIVE with same orderId
                         this.manager.completeOrderRotation(oldOrder);
-                        
+
                         // The orderId stays the same, just update the grid position it's associated with
                         await this.manager.synchronizeWithChain({ gridOrderId: newGridId, chainOrderId: oldOrder.orderId }, 'createOrder');
-                        
+
                         this.manager.logger.log(`Rotation complete: ${oldOrder.orderId} moved from ${oldOrder.price.toFixed(4)} to ${newPrice.toFixed(4)}`, 'info');
                     } else {
                         this.manager.logger.log(`Order ${oldOrder.orderId} update returned null (no change needed)`, 'info');
                     }
-                    
+
                 } catch (err) {
                     const orderId = rotation?.oldOrder?.orderId || 'unknown';
                     const oldPrice = rotation?.oldOrder?.price?.toFixed(4) || '?';
                     const newPriceVal = rotation?.newPrice?.toFixed(4) || '?';
-                    
+
                     // Handle "not found" errors gracefully - order was filled between detection and rotation
                     if (err.message && err.message.includes('not found')) {
                         this.manager.logger.log(`Order ${orderId} @ ${oldPrice} no longer exists (filled?) - cannot rotate to ${newPriceVal}`, 'warn');
@@ -525,11 +526,11 @@ class DEXBot {
                     return;
                 }
                 this._processingFill = true;
-                
+
                 try {
                     const allFills = [...fills, ...this._pendingFills];
                     this._pendingFills = [];
-                    
+
                     for (const fill of allFills) {
                         if (fill && fill.op && fill.op[0] === 4) {
                             const fillOp = fill.op[1];
@@ -539,7 +540,7 @@ class DEXBot {
                                 this.manager.logger.log(`Skipping taker fill (is_maker=false)`, 'debug');
                                 continue;
                             }
-                            
+
                             // Deduplicate fills - prevent processing the same fill event twice
                             const fillKey = `${fillOp.order_id}:${fill.block_num}`;
                             const now = Date.now();
@@ -557,7 +558,7 @@ class DEXBot {
                                     this._recentlyProcessedFills.delete(key);
                                 }
                             }
-                            
+
                             // Log nicely formatted fill info
                             const paysAmount = fillOp.pays ? fillOp.pays.amount : '?';
                             const paysAsset = fillOp.pays ? fillOp.pays.asset_id : '?';
@@ -574,7 +575,7 @@ class DEXBot {
                             // Process fill based on configured mode
                             const fillMode = chainOrders.getFillProcessingMode();
                             let syncResult;
-                            
+
                             if (fillMode === 'history') {
                                 // Use fill event data directly - match by order_id (preferred, faster)
                                 this.manager.logger.log(`Processing fill using 'history' mode (order_id matching)`, 'info');
@@ -587,7 +588,7 @@ class DEXBot {
                                 const chainOpenOrders = await chainOrders.readOpenOrders(this.account);
                                 syncResult = this.manager.syncFromOpenOrders(chainOpenOrders, fillOp);
                             }
-                            
+
                             // Correct any orders with price mismatches (orderId matched but price outside tolerance)
                             // Only applicable in 'open' mode
                             let correctedOrderIds = new Set();
@@ -602,7 +603,7 @@ class DEXBot {
                                     this.manager.logger.log(`${correctionResult.failed} order correction(s) failed`, 'error');
                                 }
                             }
-                            
+
                             // Process any fully filled orders using the "rotate furthest" strategy:
                             // - Activate closest virtual orders on same side (need on-chain placement)
                             // - Rotate furthest active orders on opposite side (cancel + recreate at new price)
@@ -611,12 +612,12 @@ class DEXBot {
                                 // rebalanceResult now contains { ordersToPlace, ordersToRotate }
                                 const hasOrdersToPlace = rebalanceResult && rebalanceResult.ordersToPlace && rebalanceResult.ordersToPlace.length > 0;
                                 const hasOrdersToRotate = rebalanceResult && rebalanceResult.ordersToRotate && rebalanceResult.ordersToRotate.length > 0;
-                                
+
                                 if (hasOrdersToPlace || hasOrdersToRotate) {
                                     await this.updateOrdersOnChain(rebalanceResult);
                                 }
                             }
-                            
+
                             // Always persist snapshot after processing fills
                             accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
                         }
@@ -631,7 +632,7 @@ class DEXBot {
                         this._pendingFills = [];
                         // Re-invoke the listener with pending fills
                         setTimeout(() => {
-                            chainOrders.listenForFills(this.account, () => {}); // dummy to trigger
+                            chainOrders.listenForFills(this.account, () => { }); // dummy to trigger
                         }, 100);
                     }
                 }
@@ -671,7 +672,7 @@ class DEXBot {
         } else {
             const persistedGrid = accountOrders.loadBotGrid(this.config.botKey);
             const chainOpenOrders = this.config.dryRun ? [] : await chainOrders.readOpenOrders(this.accountId);
-            
+
             let shouldRegenerate = false;
             if (!persistedGrid || persistedGrid.length === 0) {
                 shouldRegenerate = true;
@@ -713,9 +714,45 @@ class DEXBot {
                 await this.placeInitialOrders();
             } else {
                 this.manager.logger.log('Found active session. Loading and syncing existing grid.', 'info');
-                Grid.loadGrid(this.manager, persistedGrid);
+
+                // If using percentage-based funds, ensure we have valid account totals before proceeding
+                const botFunds = this.config && this.config.botFunds ? this.config.botFunds : {};
+                const needsPercent = (v) => typeof v === 'string' && v.includes('%');
+                if ((needsPercent(botFunds.buy) || needsPercent(botFunds.sell)) && (this.accountId || this.account)) {
+                    this.manager.logger.log('Percentage-based funds detected on restart. Verifying account totals...', 'info');
+                    let retries = 0;
+                    let validTotals = false;
+
+                    while (retries < 10) {
+                        try {
+                            if (typeof this.manager._fetchAccountBalancesAndSetTotals === 'function') {
+                                await this.manager._fetchAccountBalancesAndSetTotals();
+                            }
+                            const { buy, sell } = this.manager.accountTotals || {};
+                            // We consider it valid if we successfully fetched numbers (even 0 is a valid balance)
+                            // null indicates fetch failed or hasn't run
+                            if (buy !== null && buy !== undefined && sell !== null && sell !== undefined) {
+                                validTotals = true;
+                                break;
+                            }
+                        } catch (err) {
+                            this.manager.logger.log(`Error fetching totals: ${err.message}`, 'warn');
+                        }
+
+                        this.manager.logger.log(`Waiting for account totals (attempt ${retries + 1}/10)...`, 'debug');
+                        await new Promise(r => setTimeout(r, 1000));
+                        retries++;
+                    }
+
+                    if (!validTotals) {
+                        this.manager.logger.log('Timeout waiting for account totals. No funds available or fetch failed.', 'error');
+                        throw new Error('No funds available');
+                    }
+                }
+
+                await Grid.loadGrid(this.manager, persistedGrid);
                 const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
-                
+
                 // Correct any orders with price mismatches at startup
                 if (syncResult.ordersNeedingCorrection && syncResult.ordersNeedingCorrection.length > 0) {
                     this.manager.logger.log(`Startup: Correcting ${syncResult.ordersNeedingCorrection.length} order(s) with price mismatch...`, 'info');
@@ -726,7 +763,12 @@ class DEXBot {
                         this.manager.logger.log(`${correctionResult.failed} startup order correction(s) failed`, 'error');
                     }
                 }
-                
+
+                // Show updated funds status after syncing with chain (active orders now counted)
+                if (this.manager.logger && typeof this.manager.logger.logFundsStatus === 'function') {
+                    this.manager.logger.logFundsStatus(this.manager);
+                }
+
                 accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
             }
         }
@@ -936,7 +978,7 @@ async function runBotInstances(botEntries, { forceDryRun = false, sourceName = '
             instances.push(bot);
         } catch (err) {
             console.error('Failed to start bot:', err.message);
-                if (err && err instanceof chainKeys.MasterPasswordError) {
+            if (err && err instanceof chainKeys.MasterPasswordError) {
                 console.error('Aborting because the master password failed 3 times.');
                 process.exit(1);
             }
