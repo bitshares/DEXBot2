@@ -166,9 +166,12 @@ class OrderManager {
         this.funds.total.chain = { buy: chainFreeBuy + chainBuy, sell: chainFreeSell + chainSell };
         this.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
 
-        // Set available = chainFree - reserved (virtual orders)
-        this.funds.available.buy = Math.max(0, chainFreeBuy - virtuelBuy);
-        this.funds.available.sell = Math.max(0, chainFreeSell - virtuelSell);
+        // Set available = chainFree - virtuel + pendingProceeds
+        // pendingProceeds tracks fill proceeds that haven't been consumed by rotation yet
+        const pendingBuy = this.funds.pendingProceeds?.buy || 0;
+        const pendingSell = this.funds.pendingProceeds?.sell || 0;
+        this.funds.available.buy = Math.max(0, chainFreeBuy - virtuelBuy) + pendingBuy;
+        this.funds.available.sell = Math.max(0, chainFreeSell - virtuelSell) + pendingSell;
     }
 
     _updateOrder(order) {
@@ -205,7 +208,8 @@ class OrderManager {
             committed: {
                 grid: { buy: 0, sell: 0 },
                 chain: { buy: 0, sell: 0 }
-            }
+            },
+            pendingProceeds: { buy: 0, sell: 0 }  // Proceeds from fills awaiting rotation
         };
         // Make reserved an alias for virtuel
         this.funds.reserved = this.funds.virtuel;
@@ -661,6 +665,16 @@ class OrderManager {
                 const { gridOrderId, chainOrderId } = chainData;
                 const gridOrder = this.orders.get(gridOrderId);
                 if (gridOrder) {
+                    // Deduct order size from chainFree when moving from VIRTUAL to ACTIVE
+                    // This keeps accountTotals.buyFree/sellFree accurate without re-fetching
+                    if (gridOrder.state === ORDER_STATES.VIRTUAL && gridOrder.size > 0) {
+                        const size = Number(gridOrder.size) || 0;
+                        if (gridOrder.type === ORDER_TYPES.BUY && this.accountTotals?.buyFree !== undefined) {
+                            this.accountTotals.buyFree = Math.max(0, this.accountTotals.buyFree - size);
+                        } else if (gridOrder.type === ORDER_TYPES.SELL && this.accountTotals?.sellFree !== undefined) {
+                            this.accountTotals.sellFree = Math.max(0, this.accountTotals.sellFree - size);
+                        }
+                    }
                     // Create a new object with updated state to avoid mutation bugs in _updateOrder
                     // (if we mutate in place, _updateOrder can't find the old state index to remove from)
                     const updatedOrder = { ...gridOrder, state: ORDER_STATES.ACTIVE, orderId: chainOrderId };
@@ -673,6 +687,16 @@ class OrderManager {
                 const orderId = chainData;
                 const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p, s, t) => calculatePriceTolerance(p, s, t, this.assets), logger: this.logger });
                 if (gridOrder) {
+                    // Restore order size to chainFree when moving from ACTIVE to VIRTUAL
+                    // This keeps accountTotals.buyFree/sellFree accurate without re-fetching
+                    if (gridOrder.state === ORDER_STATES.ACTIVE && gridOrder.size > 0) {
+                        const size = Number(gridOrder.size) || 0;
+                        if (gridOrder.type === ORDER_TYPES.BUY && this.accountTotals?.buyFree !== undefined) {
+                            this.accountTotals.buyFree += size;
+                        } else if (gridOrder.type === ORDER_TYPES.SELL && this.accountTotals?.sellFree !== undefined) {
+                            this.accountTotals.sellFree += size;
+                        }
+                    }
                     // Create a new object to avoid mutation bug
                     const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
                     this._updateOrder(updatedOrder);
@@ -916,9 +940,12 @@ class OrderManager {
             await this.maybeConvertToSpread(filledOrder.id);
         }
 
-        // NOW add proceeds to available funds (after all recalculateFunds calls)
-        this.funds.available.buy += proceedsBuy;
-        this.funds.available.sell += proceedsSell;
+        // Set pending proceeds - these will be included in available by recalculateFunds
+        // and survive any additional recalculateFunds calls
+        if (!this.funds.pendingProceeds) this.funds.pendingProceeds = { buy: 0, sell: 0 };
+        this.funds.pendingProceeds.buy += proceedsBuy;
+        this.funds.pendingProceeds.sell += proceedsSell;
+        this.recalculateFunds();  // Trigger recalc to include pending proceeds in available
         this.logger.log(`Proceeds added: Buy +${proceedsBuy.toFixed(8)}, Sell +${proceedsSell.toFixed(8)}`, 'info');
         const extraOrderCount = this.outOfSpread ? 1 : 0;
         if (this.outOfSpread) {
@@ -928,6 +955,11 @@ class OrderManager {
         // Log available funds before rotation
         this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
         const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds);
+
+        // Clear pending proceeds after rotation has consumed them
+        this.funds.pendingProceeds = { buy: 0, sell: 0 };
+        this.recalculateFunds();
+
         this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
         return newOrders;
     }
@@ -1138,10 +1170,15 @@ class OrderManager {
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
         // Calculate new order size from available funds
+        // IMPORTANT: Capture available funds BEFORE the loop - _updateOrder triggers recalculateFunds
+        // which would reset available to chainFree - virtuel, losing the proceeds we added
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
         const availableFunds = this.funds.available[side];
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
         const fundsPerOrder = orderCount > 0 ? availableFunds / orderCount : 0;
+
+        // Track remaining funds locally since this.funds.available gets reset by recalculateFunds
+        let remainingFunds = availableFunds;
 
         for (let i = 0; i < ordersToProcess.length && i < eligibleSpreadOrders.length; i++) {
             const oldOrder = ordersToProcess[i];
@@ -1174,15 +1211,11 @@ class OrderManager {
             this._updateOrder(updatedOrder);
             this.currentSpreadCount--;
 
-            // Explicit fund adjustments for rotation:
-            // 1. Remove newSize from available funds (new order will consume these)
-            // 2. Move old order's size from committed.grid to virtuel (old order becoming virtual)
-            const oldSize = Number(oldOrder.size) || 0;
-
-            // Deduct new order size from available
-            this.funds.available[side] = Math.max(0, this.funds.available[side] - newSize);
+            // Track remaining funds locally
+            remainingFunds = Math.max(0, remainingFunds - newSize);
 
             // Move old order from committed.grid to virtuel
+            const oldSize = Number(oldOrder.size) || 0;
             this.funds.committed.grid[side] = Math.max(0, this.funds.committed.grid[side] - oldSize);
             this.funds.virtuel[side] += oldSize;
 
@@ -1195,6 +1228,8 @@ class OrderManager {
             this.logger.log(`Prepared ${targetType} rotation: old ${oldOrder.orderId} @ ${oldOrder.price.toFixed(4)} -> new spread @ ${newPriceSource.price.toFixed(4)}, size ${newSize.toFixed(8)}`, 'info');
         }
 
+        // Set final available funds (after recalculateFunds might have reset it)
+        this.funds.available[side] = remainingFunds;
 
         return rotations;
     }

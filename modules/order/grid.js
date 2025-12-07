@@ -123,14 +123,6 @@ class Grid {
         grid.forEach(order => {
             manager._updateOrder(order);
             // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
-            // These explicit adjustments are kept for clarity but may be redundant
-            if (order.state === 'active') {
-                if (order.type === ORDER_TYPES.BUY) {
-                    manager.funds.committed.grid.buy += order.size;
-                } else if (order.type === ORDER_TYPES.SELL) {
-                    manager.funds.committed.grid.sell += order.size;
-                }
-            }
         });
         manager.logger.log(`Loaded ${manager.orders.size} orders from persisted grid state.`, 'info');
         manager.logger && manager.logger.logFundsStatus && manager.logger.logFundsStatus(manager);
@@ -332,9 +324,21 @@ class Grid {
 
         const precA = manager.assets?.assetA?.precision;
         const precB = manager.assets?.assetB?.precision;
+
+        // Capture the funds being used for sizing
+        const inputFundsSell = manager.funds.available.sell;
+        const inputFundsBuy = manager.funds.available.buy;
+        manager.logger.log(`DEBUG Grid Sizing Input: buyFunds=${inputFundsBuy.toFixed(8)}, sellFunds=${inputFundsSell.toFixed(8)}`, 'info');
+
         let sizedOrders = Grid.calculateOrderSizes(
-            orders, manager.config, manager.funds.available.sell, manager.funds.available.buy, minSellSize, minBuySize, precA, precB
+            orders, manager.config, inputFundsSell, inputFundsBuy, minSellSize, minBuySize, precA, precB
         );
+
+        // Calculate total allocated by the sizing algorithm
+        const allocatedBuy = sizedOrders.filter(o => o.type === ORDER_TYPES.BUY).reduce((sum, o) => sum + (Number(o.size) || 0), 0);
+        const allocatedSell = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).reduce((sum, o) => sum + (Number(o.size) || 0), 0);
+        manager.logger.log(`DEBUG Grid Sizing Output: allocatedBuy=${allocatedBuy.toFixed(8)}, allocatedSell=${allocatedSell.toFixed(8)}`, 'info');
+        manager.logger.log(`DEBUG Grid Sizing Discrepancy: buy=${(inputFundsBuy - allocatedBuy).toFixed(8)}, sell=${(inputFundsSell - allocatedSell).toFixed(8)}`, 'info');
 
         try {
             const sellsAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).map(o => Number(o.size || 0));
@@ -376,18 +380,22 @@ class Grid {
         sizedOrders.forEach(order => {
             manager._updateOrder(order);
             // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
-            // These explicit adjustments are kept for clarity but may be redundant
-            if (order.type === ORDER_TYPES.BUY) {
-                manager.funds.committed.grid.buy += order.size;
-            } else if (order.type === ORDER_TYPES.SELL) {
-                manager.funds.committed.grid.sell += order.size;
-            }
         });
 
         manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell; manager.currentSpreadCount = manager.targetSpreadCount;
         manager.config.activeOrders = manager.config.activeOrders || { buy: 1, sell: 1 };
         manager.config.activeOrders.buy = Number.isFinite(Number(manager.config.activeOrders.buy)) ? Number(manager.config.activeOrders.buy) : 1;
         manager.config.activeOrders.sell = Number.isFinite(Number(manager.config.activeOrders.sell)) ? Number(manager.config.activeOrders.sell) : 1;
+
+        // Debug: Compare chainFree with allocated grid funds
+        const chainFreeBuy = manager.accountTotals?.buyFree || 0;
+        const chainFreeSell = manager.accountTotals?.sellFree || 0;
+        const virtuelBuy = manager.funds?.virtuel?.buy || 0;
+        const virtuelSell = manager.funds?.virtuel?.sell || 0;
+        const discrepancyBuy = chainFreeBuy - virtuelBuy;
+        const discrepancySell = chainFreeSell - virtuelSell;
+        manager.logger.log(`DEBUG Grid Init: chainFree.buy=${chainFreeBuy.toFixed(8)}, virtuel.buy=${virtuelBuy.toFixed(8)}, discrepancy=${discrepancyBuy.toFixed(8)}`, 'info');
+        manager.logger.log(`DEBUG Grid Init: chainFree.sell=${chainFreeSell.toFixed(8)}, virtuel.sell=${virtuelSell.toFixed(8)}, discrepancy=${discrepancySell.toFixed(8)}`, 'info');
 
         manager.logger.log(`Initialized order grid with ${orders.length} orders`, 'info'); manager.logger.log(`Configured activeOrders: buy=${manager.config.activeOrders.buy}, sell=${manager.config.activeOrders.sell}`, 'info');
         manager.logger && manager.logger.logFundsStatus && manager.logger.logFundsStatus(manager);
