@@ -384,6 +384,36 @@ class Grid {
                 manager.logger && manager.logger.log && manager.logger.log(msg, 'error');
                 throw new Error(msg);
             }
+
+            // check for warning if orders are near minimal size
+            let anySellNearMin = false;
+            let anyBuyNearMin = false;
+            if (minSellSize > 0) {
+                const warningSellSize = getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2);
+                if (precA !== undefined && precA !== null && Number.isFinite(precA)) {
+                    const warnSellInt = floatToBlockchainInt(warningSellSize, precA);
+                    anySellNearMin = sellsAfter.some(sz => Number.isFinite(sz) && floatToBlockchainInt(sz, precA) < warnSellInt);
+                } else {
+                    anySellNearMin = sellsAfter.some(sz => Number.isFinite(sz) && sz < (warningSellSize - 1e-8));
+                }
+            }
+
+            if (minBuySize > 0) {
+                const warningBuySize = getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2);
+                if (precB !== undefined && precB !== null && Number.isFinite(precB)) {
+                    const warnBuyInt = floatToBlockchainInt(warningBuySize, precB);
+                    anyBuyNearMin = buysAfter.some(sz => Number.isFinite(sz) && floatToBlockchainInt(sz, precB) < warnBuyInt);
+                } else {
+                    anyBuyNearMin = buysAfter.some(sz => Number.isFinite(sz) && sz < (warningBuySize - 1e-8));
+                }
+            }
+
+            if (anySellNearMin || anyBuyNearMin) {
+                const parts = [];
+                if (anySellNearMin) parts.push('sells near min');
+                if (anyBuyNearMin) parts.push('buys near min');
+                manager.logger.log(`WARNING: Order grid contains orders near minimum size (${parts.join(', ')}). To ensure the bot runs properly, consider increasing the funds of your bot.`, 'warn');
+            }
         } catch (e) {
             throw e;
         }
