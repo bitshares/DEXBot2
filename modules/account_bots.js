@@ -151,7 +151,7 @@ function promptBotData(base = {}) {
     const active = askBoolean('Active', base.active !== undefined ? base.active : DEFAULT_CONFIG.active);
     const dryRun = askBoolean('Dry run', base.dryRun !== undefined ? base.dryRun : DEFAULT_CONFIG.dryRun);
     const preferredAccount = askRequiredString('Preferred account', base.preferredAccount);
-    const marketPrice = askString('marketPrice ("pool", "market", or numeric)', base.marketPrice);
+    const marketPrice = askString('marketPrice (pool, market or numeric (A/B))', base.marketPrice);
     const minPrice = askNumberOrMultiplier('minPrice', base.minPrice !== undefined ? base.minPrice : DEFAULT_CONFIG.minPrice);
     const maxPrice = askNumberOrMultiplier('maxPrice', base.maxPrice !== undefined ? base.maxPrice : DEFAULT_CONFIG.maxPrice);
     const incrementPercent = askNumber('incrementPercent', base.incrementPercent !== undefined ? base.incrementPercent : DEFAULT_CONFIG.incrementPercent);
