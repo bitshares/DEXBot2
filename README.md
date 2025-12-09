@@ -30,7 +30,9 @@ npm install
 
 ## CLI & Running
 
-Use the `dexbot` wrapper or run `node dexbot.js` directly.
+### Single Bot (Direct)
+
+Use the `dexbot` wrapper or run `node dexbot.js` directly:
 
 - `node dexbot.js` — starts all active bots defined in `profiles/bots.json` (use `examples/bots.json` as a template).
 - `dexbot start [bot_name]` — start a specific bot (or all active bots if omitted). Respects each bot's `dryRun` setting.
@@ -44,6 +46,74 @@ Use the `dexbot` wrapper or run `node dexbot.js` directly.
 `dexbot` is a thin wrapper around `./dexbot.js`. You can link it for system-wide use via `npm link` or run it with `npx dexbot`.
 
 If any active bot requires `preferredAccount`, dexbot will prompt once for the master password and reuse it for subsequent bots.
+
+### PM2 Process Management (Recommended for Production)
+
+For production use with automatic restart and process monitoring, use PM2:
+
+#### Quick Start
+
+```bash
+# Start all bots with PM2
+node pm2.js
+
+# Or via CLI
+node dexbot.js pm2
+```
+
+This unified launcher handles everything automatically:
+1. **BitShares Connection**: Waits for network connection
+2. **PM2 Check**: Detects local and global PM2; prompts to install if missing
+3. **Config Generation**: Creates `profiles/ecosystem.config.js` from `profiles/bots.json`
+4. **Authentication**: Prompts for master password (kept in RAM only, never saved to disk)
+5. **Startup**: Starts all active bots as PM2-managed processes with auto-restart
+
+#### Individual Bot
+
+```bash
+# Run a single bot directly (prompts for password if not in environment)
+node bot.js <bot-name>
+```
+
+#### PM2 Management Commands
+
+After startup via `node pm2.js`:
+
+```bash
+# View bot status and resource usage
+pm2 status
+
+# View real-time logs from all bots
+pm2 logs
+
+# View logs from specific bot
+pm2 logs <bot-name>
+
+# Stop all bots (but keep PM2 alive)
+pm2 stop all
+
+# Restart all bots
+pm2 restart all
+
+# Delete all bots from PM2
+pm2 delete all
+```
+
+#### Configuration & Logs
+
+Bot configurations are defined in `profiles/bots.json`. The PM2 launcher automatically:
+- Filters only bots with `active !== false`
+- Generates ecosystem config with proper paths and logging
+- Logs bot output to `profiles/logs/<bot-name>.log`
+- Logs bot errors to `profiles/logs/<bot-name>-error.log`
+- Applies restart policies (max 13 restarts, 1 day min uptime, 3 second restart delay)
+
+#### Security
+
+- Master password is prompted interactively in your terminal
+- Password passed via environment variable to bot processes (RAM only)
+- Never written to disk or config files
+- Cleared when process exits
 
 ## Order Calculation
 
