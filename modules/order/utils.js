@@ -272,9 +272,23 @@ function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
     const newInt = floatToBlockchainInt(newSize, precision);
     if (oldInt === newInt) { gridOrder.size = newSize; return; }
     manager.logger?.log?.(`Order ${gridOrder.id} size adjustment: ${oldSize.toFixed(8)} -> ${newSize.toFixed(8)} (delta: ${delta.toFixed(8)})`, 'info');
-    try { manager._adjustFunds(gridOrder.type, delta); } catch (e) { /* best-effort */ }
+    try { manager._adjustFunds(gridOrder, delta); } catch (e) { /* best-effort */ }
     gridOrder.size = newSize;
     try { manager._updateOrder(gridOrder); } catch (e) { /* best-effort */ }
+
+    if (delta < 0 && manager.logger) {
+        // After partial fill adjustment, log funds snapshot for visibility
+        if (typeof manager.logger.logFundsStatus === 'function') {
+            manager.logger.logFundsStatus(manager);
+        } else {
+            const f = manager.funds || {};
+            const a = f.available || {};
+            manager.logger.log(
+                `Funds after partial fill: available buy=${(a.buy || 0).toFixed(8)} sell=${(a.sell || 0).toFixed(8)}`,
+                'info'
+            );
+        }
+    }
 }
 
 async function correctOrderPriceOnChain(manager, correctionInfo, accountName, privateKey, accountOrders) {

@@ -237,6 +237,57 @@ class OrderManager {
         this.recalculateFunds(); // Sync funds whenever order state/size changes
     }
 
+    _logAvailable(label = '') {
+        if (!this.logger) return;
+        const avail = this.funds?.available || { buy: 0, sell: 0 };
+        const pend = this.funds?.pendingProceeds || { buy: 0, sell: 0 };
+        this.logger.log(
+            `Available${label ? ' [' + label + ']' : ''}: buy=${(avail.buy || 0).toFixed(8)}, sell=${(avail.sell || 0).toFixed(8)}, pendingProceeds buy=${(pend.buy || 0).toFixed(8)}, sell=${(pend.sell || 0).toFixed(8)}`,
+            'info'
+        );
+    }
+
+    // Adjust funds for partial fills detected via size deltas (applied before _updateOrder recalc)
+    _adjustFunds(gridOrder, deltaSize) {
+        if (!gridOrder || !Number.isFinite(deltaSize)) return;
+        if (deltaSize >= 0) return; // only react to size decreases (fills)
+
+        const fillSize = Math.abs(deltaSize);
+        const price = Number(gridOrder.price || 0);
+        if (fillSize <= 0 || price <= 0) return;
+
+        if (!this.funds) this.resetFunds();
+        if (!this.accountTotals) {
+            this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
+        }
+
+        const bumpTotal = (key, delta) => {
+            const next = (Number(this.accountTotals[key]) || 0) + delta;
+            this.accountTotals[key] = next < 0 ? 0 : next;
+        };
+
+        // Partial proceeds: credit chain totals/free and pendingProceeds (so availability updates immediately and persists)
+        if (gridOrder.type === ORDER_TYPES.SELL) {
+            // SELL partial: receive quote asset; free balance rises, base total drops
+            const proceeds = fillSize * price;
+            this.funds.pendingProceeds.buy = (this.funds.pendingProceeds.buy || 0) + proceeds;
+            bumpTotal('buyFree', proceeds);
+            bumpTotal('buy', proceeds);
+            bumpTotal('sell', -fillSize);
+            this.recalculateFunds();
+            this._logAvailable('after partial SELL');
+        } else if (gridOrder.type === ORDER_TYPES.BUY) {
+            // BUY partial: receive base asset; free base rises, quote total drops
+            const proceeds = fillSize / price;
+            this.funds.pendingProceeds.sell = (this.funds.pendingProceeds.sell || 0) + proceeds;
+            bumpTotal('sellFree', proceeds);
+            bumpTotal('sell', proceeds);
+            bumpTotal('buy', -fillSize);
+            this.recalculateFunds();
+            this._logAvailable('after partial BUY');
+        }
+    }
+
     // Note: findBestMatchByPrice is available from utils; callers should pass
     // a tolerance function that includes the manager's assets, for example:
     // utils.findBestMatchByPrice(chainOrder, candidates, this.orders, (p,s,t) => calculatePriceTolerance(p,s,t,this.assets))
@@ -505,23 +556,30 @@ class OrderManager {
                 if (oldInt !== newInt) {
                     const fillAmount = oldSize - newSize;
                     this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}): size changed ${oldSize.toFixed(8)} -> ${newSize.toFixed(8)} (filled: ${fillAmount.toFixed(8)})`, 'info');
-                    applyChainSizeToGridOrder(this, gridOrder, newSize);
+                    
+                    // Create copy for update
+                    const updatedOrder = { ...gridOrder };
+                    applyChainSizeToGridOrder(this, updatedOrder, newSize);
+                    
                     // Transition to PARTIAL state since it was partially filled
-                    if (gridOrder.state === ORDER_STATES.ACTIVE) {
-                        gridOrder.state = ORDER_STATES.PARTIAL;
-                        this._updateOrder(gridOrder);
+                    if (updatedOrder.state === ORDER_STATES.ACTIVE) {
+                        updatedOrder.state = ORDER_STATES.PARTIAL;
                     }
-                    updatedOrders.push(gridOrder);
+                    this._updateOrder(updatedOrder);
+                    updatedOrders.push(updatedOrder);
+                } else {
+                    this._updateOrder(gridOrder);
                 }
-                this._updateOrder(gridOrder);
             } else {
                 // Order no longer exists on chain - it was fully filled
                 // Only treat as filled if it was previously ACTIVE or PARTIAL. If it was VIRTUAL and not on chain, it's just a virtual order.
                 if (gridOrder.state === ORDER_STATES.ACTIVE || gridOrder.state === ORDER_STATES.PARTIAL) {
                     this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) no longer on chain - marking as VIRTUAL (fully filled)`, 'info');
                     const filledOrder = { ...gridOrder };
-                    // Create new object to avoid mutation bug
-                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, size: 0 };
+                    
+                    // Create copy for update
+                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+                    
                     this._updateOrder(updatedOrder);
                     filledOrders.push(filledOrder);
                 }
@@ -696,16 +754,31 @@ class OrderManager {
             // Fully filled
             this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED`, 'info');
             const filledOrder = { ...matchedGridOrder };
-            // Create new object to avoid mutation bug - mark as VIRTUAL (fully filled)
-            const updatedOrder = { ...matchedGridOrder, state: ORDER_STATES.VIRTUAL, size: 0 };
+            
+            // Create copy for update
+            const updatedOrder = { ...matchedGridOrder, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+            
             this._updateOrder(updatedOrder);
             filledOrders.push(filledOrder);
         } else {
             // Partially filled - transition to PARTIAL state
             this.logger.log(`syncFromFillHistory: Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED, remaining=${newSize.toFixed(8)}`, 'info');
-            applyChainSizeToGridOrder(this, matchedGridOrder, newSize);
-            // Update state to PARTIAL
-            const updatedOrder = { ...matchedGridOrder, state: ORDER_STATES.PARTIAL };
+            
+            // Create copy for update
+            const updatedOrder = { ...matchedGridOrder };
+            
+            // Update state to PARTIAL first to ensure correct index updates
+            // (applyChainSizeToGridOrder calls _updateOrder internally)
+            updatedOrder.state = ORDER_STATES.PARTIAL;
+            
+            applyChainSizeToGridOrder(this, updatedOrder, newSize);
+            
+            // Sanity check: ensure orderId is still there
+            if (!updatedOrder.orderId) {
+                this.logger.log(`CRITICAL: orderId lost in syncFromFillHistory for ${updatedOrder.id}! Restoring from param ${orderId}`, 'error');
+                updatedOrder.orderId = orderId;
+            }
+
             this._updateOrder(updatedOrder);
             updatedOrders.push(updatedOrder);
             partialFill = true;
@@ -746,9 +819,11 @@ class OrderManager {
                     }
                     // Create a new object with updated state to avoid mutation bugs in _updateOrder
                     // (if we mutate in place, _updateOrder can't find the old state index to remove from)
-                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.ACTIVE, orderId: chainOrderId };
+                    // Preserve PARTIAL state if the order was already PARTIAL (e.g. during a move)
+                    const newState = (gridOrder.state === ORDER_STATES.PARTIAL) ? ORDER_STATES.PARTIAL : ORDER_STATES.ACTIVE;
+                    const updatedOrder = { ...gridOrder, state: newState, orderId: chainOrderId };
                     this._updateOrder(updatedOrder);
-                    this.logger.log(`Order ${updatedOrder.id} activated with on-chain ID ${updatedOrder.orderId}`, 'info');
+                    this.logger.log(`Order ${updatedOrder.id} synced with on-chain ID ${updatedOrder.orderId} (state=${newState})`, 'info');
                 }
                 break;
             }
@@ -799,12 +874,14 @@ class OrderManager {
                         // Always update the orderId from chain - it may have changed
                         if (gridOrder.orderId !== parsedOrder.orderId) {
                             this.logger.log(`Updating orderId for ${gridOrder.id}: ${oldOrderId} -> ${parsedOrder.orderId}`, 'info');
-                            updatedGridOrder.orderId = parsedOrder.orderId;
+                            // Modify in place
+                            gridOrder.orderId = parsedOrder.orderId;
                         }
 
                         if (!wasActive) {
-                            updatedGridOrder.state = ORDER_STATES.ACTIVE;
-                            this.logger.log(`Order ${gridOrder.id} transitioned to ACTIVE with orderId ${updatedGridOrder.orderId}`, 'info');
+                            // Modify in place
+                            gridOrder.state = ORDER_STATES.ACTIVE;
+                            this.logger.log(`Order ${gridOrder.id} transitioned to ACTIVE with orderId ${gridOrder.orderId}`, 'info');
                         }
 
                         // Check price tolerance - if chain price differs too much, flag for correction
@@ -818,7 +895,7 @@ class OrderManager {
                                 'warn'
                             );
                             this.ordersNeedingPriceCorrection.push({
-                                gridOrder: updatedGridOrder,
+                                gridOrder: gridOrder,
                                 chainOrderId: parsedOrder.orderId,
                                 expectedPrice: gridOrder.price,
                                 actualPrice: parsedOrder.price,
@@ -838,13 +915,13 @@ class OrderManager {
                             if (gridInt !== chainInt) {
                                 this.logger.log(`Size sync ${gridOrder.id}: chain orderId=${parsedOrder.orderId}, chainPrice=${parsedOrder.price.toFixed(6)}, gridPrice=${gridOrder.price.toFixed(6)}, gridSize=${gridSize} -> chainSize=${chainSize}`, 'info');
                             }
-                            try { applyChainSizeToGridOrder(this, updatedGridOrder, parsedOrder.size); } catch (e) {
+                            try { applyChainSizeToGridOrder(this, gridOrder, parsedOrder.size); } catch (e) {
                                 this.logger.log(`Error applying chain size to grid order: ${e.message}`, 'warn');
                             }
                         } else {
                             this.logger.log(`Chain order ${parsedOrder.orderId} has no valid size (for_sale)`, 'debug');
                         }
-                        this._updateOrder(updatedGridOrder);
+                        this._updateOrder(gridOrder);
                     } else {
                         this.logger.log(`No matching grid order found for chain order ${parsedOrder.orderId} (type=${parsedOrder.type}, price=${parsedOrder.price.toFixed(4)})`, 'warn');
                     }
@@ -969,6 +1046,15 @@ class OrderManager {
         }
     }
 
+    /**
+     * Get all PARTIAL orders of a specific type.
+     * @param {string} type - ORDER_TYPES.BUY or SELL
+     * @returns {Array} Array of partial order objects
+     */
+    getPartialOrdersOnSide(type) {
+        return this.getOrdersByTypeAndState(type, ORDER_STATES.PARTIAL);
+    }
+
     // Periodically poll for fills and recalculate orders on demand.
     async fetchOrderUpdates(options = { calculate: false }) {
         try { const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE); if (activeOrders.length === 0 || (options && options.calculate)) { const { remaining, filled } = await this.calculateOrderUpdates(); remaining.forEach(order => this.orders.set(order.id, order)); if (filled.length > 0) await this.processFilledOrders(filled); this.checkSpreadCondition(); return { remaining, filled }; } return { remaining: activeOrders, filled: [] }; } catch (error) { this.logger.log(`Error fetching order updates: ${error.message}`, 'error'); return { remaining: [], filled: [] }; }
@@ -1013,6 +1099,11 @@ class OrderManager {
         // (because maybeConvertToSpread calls _updateOrder which runs recalculateFunds and would overwrite)
         let proceedsBuy = 0;
         let proceedsSell = 0;
+        // Track balance deltas so we can adjust accountTotals immediately without waiting for a fresh chain fetch
+        let deltaBuyFree = 0;
+        let deltaSellFree = 0;
+        let deltaBuyTotal = 0;
+        let deltaSellTotal = 0;
 
         for (const filledOrder of filledOrders) {
             filledCounts[filledOrder.type]++;
@@ -1021,31 +1112,59 @@ class OrderManager {
             if (filledOrder.type === ORDER_TYPES.SELL) {
                 const proceeds = filledOrder.size * filledOrder.price;
                 proceedsBuy += proceeds;  // Collect, don't add yet
+                // SELL means we receive quote asset (buy side) and give up base asset (sell side)
+                deltaBuyFree += proceeds;
+                deltaBuyTotal += proceeds;
+                // sellFree was reduced at order creation; the locked size is now sold, so only the total decreases
+                deltaSellTotal -= filledOrder.size;
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed`, 'info');
             } else {
                 const proceeds = filledOrder.size / filledOrder.price;
                 proceedsSell += proceeds;  // Collect, don't add yet
+                // BUY means we receive base asset (sell side tracker) and spend quote asset (buy side)
+                deltaSellFree += proceeds;
+                deltaSellTotal += proceeds;
+                // buyFree was reduced at order creation; only total decreases to reflect the spend
+                deltaBuyTotal -= filledOrder.size;
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed`, 'info');
             }
             
             // Convert directly to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
+            // Create copy for update
             const updatedOrder = { ...filledOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
             this._updateOrder(updatedOrder);
+
             this.currentSpreadCount++;
             this.logger.log(`Converted order ${filledOrder.id} to SPREAD`, 'debug');
         }
 
-        // Set pending proceeds - these will be included in available by recalculateFunds
-        // and survive any additional recalculateFunds calls
-        if (!this.funds.pendingProceeds) this.funds.pendingProceeds = { buy: 0, sell: 0 };
-        this.funds.pendingProceeds.buy += proceedsBuy;
-        this.funds.pendingProceeds.sell += proceedsSell;
-        this.recalculateFunds();  // Trigger recalc to include pending proceeds in available
-        this.logger.log(`Proceeds added: Buy +${proceedsBuy.toFixed(8)}, Sell +${proceedsSell.toFixed(8)}`, 'info');
+        // Apply proceeds directly to accountTotals so availability reflects fills immediately (no waiting for a chain refresh)
+        if (!this.accountTotals) {
+            this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
+        }
+
+        const bumpTotal = (key, delta) => {
+            if (this.accountTotals[key] === null || this.accountTotals[key] === undefined) this.accountTotals[key] = 0;
+            const next = (Number(this.accountTotals[key]) || 0) + delta;
+            this.accountTotals[key] = next < 0 ? 0 : next;
+        };
+
+        bumpTotal('buyFree', deltaBuyFree);
+        bumpTotal('sellFree', deltaSellFree);
+        bumpTotal('buy', deltaBuyTotal);
+        bumpTotal('sell', deltaSellTotal);
+
+        // Hold proceeds in pendingProceeds so availability reflects them through rotation
+        // Use += to accumulate with any partial fill proceeds already tracked by _adjustFunds
+        this.funds.pendingProceeds.buy = (this.funds.pendingProceeds.buy || 0) + proceedsBuy;
+        this.funds.pendingProceeds.sell = (this.funds.pendingProceeds.sell || 0) + proceedsSell;
+        this.recalculateFunds();
+        this.logger.log(`Proceeds applied: Buy +${proceedsBuy.toFixed(8)}, Sell +${proceedsSell.toFixed(8)}`, 'info');
+        this._logAvailable('after proceeds apply');
         const extraOrderCount = this.outOfSpread ? 1 : 0;
         if (this.outOfSpread) {
             this.logger.log(`Adding extra order due to previous wide spread condition`, 'info');
@@ -1053,11 +1172,21 @@ class OrderManager {
         }
         // Log available funds before rotation
         this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
+        this._logAvailable('before rotation');
         const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds);
 
-        // Clear pending proceeds after rotation has consumed them
-        this.funds.pendingProceeds = { buy: 0, sell: 0 };
+        // Clear pending proceeds only for sides that had fills processed
+        // (preserve pending proceeds from partial fills on the other side)
+        if (filledCounts[ORDER_TYPES.SELL] > 0) {
+            // SELL fills produce buy-side proceeds (quote asset received)
+            this.funds.pendingProceeds.buy = 0;
+        }
+        if (filledCounts[ORDER_TYPES.BUY] > 0) {
+            // BUY fills produce sell-side proceeds (base asset received)
+            this.funds.pendingProceeds.sell = 0;
+        }
         this.recalculateFunds();
+        this._logAvailable('after rotation clear');
 
         this.logger && this.logger.logFundsStatus && this.logger.logFundsStatus(this);
         return newOrders;
@@ -1080,25 +1209,50 @@ class OrderManager {
      * @param {Object} filledCounts - Count of filled orders by type { buy: n, sell: n }
      * @param {number} extraOrderCount - Extra orders to create (for spread widening)
      * @param {Set} excludeOrderIds - Set of chain orderIds to exclude from rotation
-     * @returns {Object} { ordersToPlace: [], ordersToRotate: [] }
+     * @returns {Object} { ordersToPlace: [], ordersToRotate: [], partialMoves: [] }
      */
     async rebalanceOrders(filledCounts, extraOrderCount = 0, excludeOrderIds = new Set()) {
         const ordersToPlace = [];    // New orders to place on-chain (activated virtuals)
         const ordersToRotate = [];   // Orders to cancel and recreate at new price
+        const partialMoves = [];     // Partial orders to move away from market (also feed preferred rotation slots)
 
         // When SELL orders fill: activate virtual sells (need on-chain) and rotate furthest buys
         if (filledCounts[ORDER_TYPES.SELL] > 0) {
             const count = filledCounts[ORDER_TYPES.SELL] + extraOrderCount;
+            const partialMoveSlots = filledCounts[ORDER_TYPES.SELL]; // move partials strictly by number of fills
 
             // Step 1: Activate closest virtual SELL orders - these need on-chain placement
             const activatedSells = await this.activateClosestVirtualOrdersForPlacement(ORDER_TYPES.SELL, count);
             ordersToPlace.push(...activatedSells);
             this.logger.log(`Prepared ${activatedSells.length} virtual SELL orders for on-chain placement`, 'info');
 
-            // Step 2: Find furthest active BUY orders and prepare them for rotation (cancel + recreate)
+            // Step 2: Move partial BUY (opposite side) before we select spread targets for rotation
+            const partialBuys = this.getPartialOrdersOnSide(ORDER_TYPES.BUY);
+            if (partialBuys.length === 1) {
+                const reservedBuyGridIds = new Set(); // rotation targets unknown yet; rely on virtual-only search
+                const moveInfo = this.preparePartialOrderMove(partialBuys[0], partialMoveSlots, reservedBuyGridIds);
+                if (moveInfo) {
+                    partialMoves.push(moveInfo);
+                    this.logger.log(`Prepared partial BUY move: ${moveInfo.partialOrder.id} -> ${moveInfo.newGridId}`, 'info');
+                }
+            } else if (partialBuys.length > 1) {
+                this.logger.log(`WARNING: ${partialBuys.length} partial BUY orders exist - skipping partial move`, 'warn');
+            }
+
+            // Step 3: Find furthest active BUY orders and prepare them for rotation (cancel + recreate)
             // Rotation requires available funds - new order consumes available, old order moves to reserved
             if (this.funds.available.buy > 0) {
-                const rotatedBuys = await this.prepareFurthestOrdersForRotation(ORDER_TYPES.BUY, count, excludeOrderIds);
+                const rotatedBuys = await this.prepareFurthestOrdersForRotation(
+                    ORDER_TYPES.BUY,
+                    count,
+                    excludeOrderIds,
+                    {
+                        avoidPrices: partialMoves.map(m => m.newPrice),
+                        preferredSlots: partialMoves
+                            .filter(m => m.partialOrder.type === ORDER_TYPES.BUY)
+                            .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }))
+                    }
+                );
                 ordersToRotate.push(...rotatedBuys);
 
                 if (rotatedBuys.length < count) {
@@ -1112,16 +1266,40 @@ class OrderManager {
         // When BUY orders fill: activate virtual buys (need on-chain) and rotate furthest sells
         if (filledCounts[ORDER_TYPES.BUY] > 0) {
             const count = filledCounts[ORDER_TYPES.BUY] + extraOrderCount;
+            const partialMoveSlots = filledCounts[ORDER_TYPES.BUY]; // move partials strictly by number of fills
 
             // Step 1: Activate closest virtual BUY orders - these need on-chain placement
             const activatedBuys = await this.activateClosestVirtualOrdersForPlacement(ORDER_TYPES.BUY, count);
             ordersToPlace.push(...activatedBuys);
             this.logger.log(`Prepared ${activatedBuys.length} virtual BUY orders for on-chain placement`, 'info');
 
-            // Step 2: Find furthest active SELL orders and prepare them for rotation
+            // Step 2: Move partial SELL (opposite side) before we select spread targets for rotation
+            const partialSells = this.getPartialOrdersOnSide(ORDER_TYPES.SELL);
+            if (partialSells.length === 1) {
+                const reservedSellGridIds = new Set();
+                const moveInfo = this.preparePartialOrderMove(partialSells[0], partialMoveSlots, reservedSellGridIds);
+                if (moveInfo) {
+                    partialMoves.push(moveInfo);
+                    this.logger.log(`Prepared partial SELL move: ${moveInfo.partialOrder.id} -> ${moveInfo.newGridId}`, 'info');
+                }
+            } else if (partialSells.length > 1) {
+                this.logger.log(`WARNING: ${partialSells.length} partial SELL orders exist - skipping partial move`, 'warn');
+            }
+
+            // Step 3: Find furthest active SELL orders and prepare them for rotation
             // Rotation requires available funds - new order consumes available, old order moves to reserved
             if (this.funds.available.sell > 0) {
-                const rotatedSells = await this.prepareFurthestOrdersForRotation(ORDER_TYPES.SELL, count, excludeOrderIds);
+                const rotatedSells = await this.prepareFurthestOrdersForRotation(
+                    ORDER_TYPES.SELL,
+                    count,
+                    excludeOrderIds,
+                    {
+                        avoidPrices: partialMoves.map(m => m.newPrice),
+                        preferredSlots: partialMoves
+                            .filter(m => m.partialOrder.type === ORDER_TYPES.SELL)
+                            .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }))
+                    }
+                );
                 ordersToRotate.push(...rotatedSells);
 
                 if (rotatedSells.length < count) {
@@ -1132,7 +1310,7 @@ class OrderManager {
             }
         }
 
-        return { ordersToPlace, ordersToRotate };
+        return { ordersToPlace, ordersToRotate, partialMoves };
     }
 
     /**
@@ -1184,12 +1362,9 @@ class OrderManager {
                 continue;
             }
 
-            // Mark as ACTIVE and commit funds
-            const activatedOrder = { ...order, state: ORDER_STATES.ACTIVE };
-            this._updateOrder(activatedOrder);
-
-            activated.push(activatedOrder);
-            this.logger.log(`Prepared virtual ${targetType} ${order.id} at price ${order.price.toFixed(4)}, size ${orderSize.toFixed(8)} for on-chain placement`, 'info');
+            // Do not mutate grid state yet; placement will set ACTIVE once the chain returns an orderId
+            activated.push({ ...order });
+            this.logger.log(`Prepared virtual ${targetType} ${order.id} at price ${order.price.toFixed(4)}, size ${orderSize.toFixed(8)} for on-chain placement (state unchanged until confirmed)`, 'info');
         }
 
         return activated;
@@ -1207,12 +1382,14 @@ class OrderManager {
      *   - Furthest active SELL (highest price) → becomes VIRTUAL  
      *   - HIGHEST SPREAD price → becomes the new SELL order
      * 
-     * @param {string} targetType - ORDER_TYPES.BUY or SELL (type of orders to rotate)
-     * @param {number} count - Number of orders to rotate
-     * @param {Set} excludeOrderIds - Set of chain orderIds to exclude (e.g., just corrected)
+    * @param {string} targetType - ORDER_TYPES.BUY or SELL (type of orders to rotate)
+    * @param {number} count - Number of orders to rotate
+    * @param {Set} excludeOrderIds - Set of chain orderIds to exclude (e.g., just corrected)
+    * @param {Object} options - Optional overrides
+    * @param {string|null} options.overrideGridId - If provided, use this grid slot (and its price) as the first rotation target instead of a spread slot
      * @returns {Array} Array of rotation objects { oldOrder, newPrice, newSize, newGridId }
      */
-    async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set()) {
+    async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), options = {}) {
         if (count <= 0) return [];
 
         // Get orderIds that are pending price correction - exclude these from rotation
@@ -1253,27 +1430,83 @@ class OrderManager {
         // For BUY rotation (when SELL fills): use LOWEST spread (closest to buy side)
         // For SELL rotation (when BUY fills): use HIGHEST spread (closest to sell side)
         // No market price filtering - spread orders are always in the middle zone
-        const spreadOrders = this.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL);
-        const eligibleSpreadOrders = spreadOrders
+        const avoidPrices = Array.isArray(options.avoidPrices) ? options.avoidPrices : [];
+        const preferredSlots = Array.isArray(options.preferredSlots) ? options.preferredSlots : [];
+
+        // Enforce layering: partials stay closest to spread; rotations must not place new orders inside the partial boundary.
+        const partialsOnSide = this.getPartialOrdersOnSide(targetType) || [];
+        let boundaryPrice = null;
+        if (partialsOnSide.length > 0) {
+            if (targetType === ORDER_TYPES.SELL) {
+                // Sells decrease toward spread; the lowest price partial is closest to spread
+                boundaryPrice = Math.min(...partialsOnSide.map(p => Number(p.price) || 0));
+            } else {
+                // Buys increase toward spread; the highest price partial is closest to spread
+                boundaryPrice = Math.max(...partialsOnSide.map(p => Number(p.price) || 0));
+            }
+        }
+
+        const spreadOrders = this.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL)
+            .filter(o => {
+                const priceOk = (() => {
+                    if (boundaryPrice === null) return true;
+                    if (targetType === ORDER_TYPES.SELL) return (o.price || 0) >= boundaryPrice; // keep new sells outside/above partial
+                    return (o.price || 0) <= boundaryPrice; // keep new buys outside/below partial
+                })();
+                if (!priceOk) return false;
+                if (!avoidPrices.length) return true;
+                return !avoidPrices.some(p => Math.abs((o.price || 0) - p) < 1e-6);
+            });
+
+        // Preferred slots (typically vacated partial positions) go first if eligible by boundary/avoid filters
+        const preferredSpreadOrders = preferredSlots
+            .map(s => {
+                const order = this.orders.get(s.id);
+                const price = s.price !== undefined ? s.price : order?.price;
+                if (price === undefined || price === null) return null;
+                const priceOk = (() => {
+                    if (boundaryPrice === null) return true;
+                    if (targetType === ORDER_TYPES.SELL) return price >= boundaryPrice;
+                    return price <= boundaryPrice;
+                })();
+                if (!priceOk) return null;
+                if (avoidPrices.some(p => Math.abs(price - p) < 1e-6)) return null;
+                return { id: s.id, price };
+            })
+            .filter(Boolean);
+
+        const mergedSpreadOrders = [...preferredSpreadOrders, ...spreadOrders];
+
+        const seenIds = new Set();
+        const eligibleSpreadOrders = mergedSpreadOrders
+            .filter(o => {
+                if (seenIds.has(o.id)) return false;
+                seenIds.add(o.id);
+                return true;
+            })
             // Sort to get the right edge of spread zone:
             // For BUY: lowest price first (edge closest to buy orders)
             // For SELL: highest price first (edge closest to sell orders)
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
-        // Calculate new order size from available funds
-        // IMPORTANT: Capture available funds BEFORE the loop - _updateOrder triggers recalculateFunds
-        // which would reset available to chainFree - virtuel, losing the proceeds we added
+        // Calculate new order size using proceeds from this rotation cycle
+        // Prefer pendingProceeds so sizes match the just-filled funds, not unrelated chainFree
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        const availableFunds = this.funds.available[side];
+        const availableFunds = this.funds.pendingProceeds?.[side] ?? 0;
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
         const fundsPerOrder = orderCount > 0 ? availableFunds / orderCount : 0;
 
         // Track remaining funds locally since this.funds.available gets reset by recalculateFunds
         let remainingFunds = availableFunds;
 
-        for (let i = 0; i < ordersToProcess.length && i < eligibleSpreadOrders.length; i++) {
+        for (let i = 0; i < ordersToProcess.length; i++) {
             const oldOrder = ordersToProcess[i];
-            const newPriceSource = eligibleSpreadOrders[i];
+            // Always consume the next spread slot for price (shift band toward market)
+            const priceSource = eligibleSpreadOrders.shift();
+            if (!priceSource) break; // no slot available
+
+            const targetGridId = priceSource.id;
+            const targetPrice = priceSource.price;
 
             // Use available funds for new order size (proceeds from the fill)
             const newSize = fundsPerOrder;
@@ -1291,14 +1524,14 @@ class OrderManager {
                     price: oldOrder.price,
                     size: oldOrder.size
                 },
-                newPrice: newPriceSource.price,
+                newPrice: targetPrice,
                 newSize: newSize,
-                newGridId: newPriceSource.id,
+                newGridId: targetGridId,
                 type: targetType
             };
 
-            // Convert the spread to the target type (will become ACTIVE after chain confirm)
-            const updatedOrder = { ...newPriceSource, type: targetType, size: newSize, state: ORDER_STATES.VIRTUAL };
+            // Convert the slot to the target type (will become ACTIVE after chain confirm)
+            const updatedOrder = { ...priceSource, id: targetGridId, type: targetType, size: newSize, state: ORDER_STATES.VIRTUAL, price: targetPrice };
             this._updateOrder(updatedOrder);
             this.currentSpreadCount--;
 
@@ -1316,7 +1549,7 @@ class OrderManager {
             }
 
             rotations.push(rotation);
-            this.logger.log(`Prepared ${targetType} rotation: old ${oldOrder.orderId} @ ${oldOrder.price.toFixed(4)} -> new spread @ ${newPriceSource.price.toFixed(4)}, size ${newSize.toFixed(8)}`, 'info');
+            this.logger.log(`Prepared ${targetType} rotation: old ${oldOrder.orderId} @ ${oldOrder.price.toFixed(4)} -> ${targetGridId} @ ${targetPrice.toFixed(4)}, size ${newSize.toFixed(8)}`, 'info');
         }
 
         // Set final available funds (after recalculateFunds might have reset it)
@@ -1348,6 +1581,136 @@ class OrderManager {
                 this._recentlyRotatedOrderIds.delete(oldOrderInfo.orderId);
             }
         }
+    }
+
+    /**
+     * Prepare a partial order to move X grid slots toward market/spread.
+     * The order keeps its current size but gets a new price closer to spread.
+     * This makes room for rotated orders coming in from the furthest active position.
+     *
+     * @param {Object} partialOrder - The partial order to move
+     * @param {number} gridSlotsToMove - Number of grid positions to move toward market
+     * @param {Set} reservedGridIds - Grid IDs that will be consumed by rotations/placements in this batch (avoid landing here)
+     * @returns {Object|null} Move info { partialOrder, newGridId, newPrice, newMinToReceive } or null if cannot move
+     */
+    preparePartialOrderMove(partialOrder, gridSlotsToMove, reservedGridIds = new Set()) {
+        if (!partialOrder || gridSlotsToMove <= 0) return null;
+
+        // Ensure we have a valid orderId to move
+        if (!partialOrder.orderId) {
+            this.logger.log(`Cannot move partial order ${partialOrder.id} - missing orderId`, 'warn');
+            return null;
+        }
+
+        // Parse grid position from ID (e.g., "sell-67" -> { side: "sell", pos: 67 })
+        const match = partialOrder.id.match(/^(sell|buy)-(\d+)$/);
+        if (!match) {
+            this.logger.log(`Cannot parse grid position from order id: ${partialOrder.id}`, 'warn');
+            return null;
+        }
+
+        const orderSide = match[1];
+        const currentPosition = parseInt(match[2], 10);
+
+        // Walk toward market by the requested number of grid slots.
+        const direction = orderSide === 'sell' ? 1 : -1; // sells increase index toward spread; buys decrease index
+        const startPosition = currentPosition + (direction * gridSlotsToMove);
+        if (startPosition < 0) {
+            this.logger.log(`Cannot move ${partialOrder.id} by ${gridSlotsToMove} - would go below index 0`, 'warn');
+            return null;
+        }
+
+        const newGridId = `${orderSide}-${startPosition}`;
+        const targetGridOrder = this.orders.get(newGridId);
+
+        if (!targetGridOrder) {
+            this.logger.log(`Target grid slot ${newGridId} does not exist (edge of grid)`, 'warn');
+            return null;
+        }
+
+        if (reservedGridIds.has(newGridId)) {
+            this.logger.log(`Target grid slot ${newGridId} is reserved for rotation/placement - skipping partial move`, 'warn');
+            return null;
+        }
+
+        // Only allow moving into the exact requested virtual slot.
+        if (targetGridOrder.state !== ORDER_STATES.VIRTUAL) {
+            this.logger.log(`Target grid slot ${newGridId} is not virtual (state=${targetGridOrder.state}) - skipping partial move`, 'warn');
+            return null;
+        }
+
+        const newPrice = targetGridOrder.price;
+
+        // Keep the partial order's current size (what's on chain)
+        let newMinToReceive;
+        if (partialOrder.type === ORDER_TYPES.SELL) {
+            // SELL: size is base asset, receive quote asset
+            newMinToReceive = partialOrder.size * newPrice;
+        } else {
+            // BUY: size is quote asset, receive base asset
+            newMinToReceive = partialOrder.size / newPrice;
+        }
+
+        this.logger.log(
+            `Prepared partial ${partialOrder.type} move: ${partialOrder.id} (${partialOrder.orderId}) ` +
+            `price ${partialOrder.price.toFixed(4)} -> ${newPrice.toFixed(4)} (slot ${newGridId})`,
+            'info'
+        );
+
+        return {
+            partialOrder: {
+                id: partialOrder.id,
+                orderId: partialOrder.orderId,
+                type: partialOrder.type,
+                price: partialOrder.price,
+                size: partialOrder.size
+            },
+            newGridId,
+            newPrice,
+            newMinToReceive,
+            targetGridOrder,
+            vacatedGridId: partialOrder.id,
+            vacatedPrice: partialOrder.price
+        };
+    }
+
+    /**
+     * Complete the partial order move after blockchain confirmation.
+     * Updates the grid state: old slot becomes VIRTUAL, new slot gets the partial order.
+     *
+     * @param {Object} moveInfo - Info about the move from preparePartialOrderMove
+     */
+    completePartialOrderMove(moveInfo) {
+        const { partialOrder, newGridId, newPrice } = moveInfo;
+
+        // Old slot becomes virtual again
+        const oldGridOrder = this.orders.get(partialOrder.id);
+        if (oldGridOrder) {
+            const updatedOld = {
+                ...oldGridOrder,
+                state: ORDER_STATES.VIRTUAL,
+                orderId: null,
+                size: 0
+            };
+            this._updateOrder(updatedOld);
+        }
+
+        // New slot becomes PARTIAL with the moved order (still partial filled)
+        // Also set the type to match the partial order's type (it may be moving into a spread slot)
+        const targetGridOrder = this.orders.get(newGridId);
+        if (targetGridOrder) {
+            const updatedNew = {
+                ...targetGridOrder,
+                type: partialOrder.type,  // Preserve the partial order's type (buy/sell)
+                state: ORDER_STATES.PARTIAL,
+                orderId: partialOrder.orderId,
+                size: partialOrder.size,
+                price: newPrice
+            };
+            this._updateOrder(updatedNew);
+        }
+
+        this.logger.log(`Partial move complete: ${partialOrder.id} -> ${newGridId} at price ${newPrice.toFixed(4)}`, 'info');
     }
 
     /**

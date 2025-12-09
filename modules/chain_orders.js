@@ -302,8 +302,21 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     const currentReceiveInt = Math.round((currentSellInt * priceRatioQuote) / priceRatioBase);
     const currentReceiveFloat = blockchainToFloat(currentReceiveInt, receivePrecision);
 
+    // Calculate newReceiveFloat based on newPrice if provided (for price-only updates)
+    let calculatedReceiveFloat = currentReceiveFloat;
+    if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
+        // newPrice is the market price (quote/base ratio)
+        // For SELL orders: we sell base asset, receive quote asset -> receive = sell * price
+        // For BUY orders: we sell quote asset, receive base asset -> receive = sell / price
+        if (newParams.orderType === 'sell') {
+            calculatedReceiveFloat = currentSellFloat * newParams.newPrice;
+        } else {
+            calculatedReceiveFloat = currentSellFloat / newParams.newPrice;
+        }
+    }
+
     const newSellFloat = (newParams.amountToSell !== undefined && newParams.amountToSell !== null) ? newParams.amountToSell : currentSellFloat;
-    const newReceiveFloat = (newParams.minToReceive !== undefined && newParams.minToReceive !== null) ? newParams.minToReceive : currentReceiveFloat;
+    const newReceiveFloat = (newParams.minToReceive !== undefined && newParams.minToReceive !== null) ? newParams.minToReceive : calculatedReceiveFloat;
 
     const newSellInt = floatToBlockchainInt(newSellFloat, sellPrecision);
     const newReceiveInt = floatToBlockchainInt(newReceiveFloat, receivePrecision);
@@ -313,7 +326,14 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     // But for the new_price, it takes the NEW total amounts.
     let deltaSellInt = newSellInt - currentSellInt;
 
-    if (deltaSellInt === 0) {
+    // Check if price is actually changing (compare ratios)
+    // Current price ratio: base/quote = priceRatioBase/priceRatioQuote
+    // New price ratio: newSellInt/newReceiveInt
+    // They're different if: currentSellInt * newReceiveInt != newSellInt * currentReceiveInt
+    const priceChanged = (currentSellInt * newReceiveInt) !== (newSellInt * currentReceiveInt);
+
+    // Skip update only if BOTH amount and price are unchanged
+    if (deltaSellInt === 0 && !priceChanged) {
         return null;
     }
 
@@ -326,10 +346,6 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
             fee: { amount: 0, asset_id: '1.3.0' },
             seller: accId,
             order: orderId,
-            delta_amount_to_sell: {
-                amount: deltaSellInt,
-                asset_id: sellAssetId
-            },
             new_price: {
                 base: {
                     amount: adjustedSellInt,
@@ -342,6 +358,13 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
             }
         }
     };
+    // Only include delta_amount_to_sell if non-zero (BitShares rejects zero delta)
+    if (deltaSellInt !== 0) {
+        op.op_data.delta_amount_to_sell = {
+            amount: deltaSellInt,
+            asset_id: sellAssetId
+        };
+    }
     if (newParams.expiration) op.op_data.expiration = newParams.expiration;
 
     return op;

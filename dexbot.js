@@ -20,6 +20,7 @@ const readline = require('readline-sync');
 const chainOrders = require('./modules/chain_orders');
 const chainKeys = require('./modules/chain_keys');
 const { OrderManager, grid: Grid, utils: OrderUtils } = require('./modules/order');
+const { ORDER_STATES } = require('./modules/order/constants');
 const accountKeys = require('./modules/chain_keys');
 const accountBots = require('./modules/account_bots');
 const { parseJsonWithComments } = accountBots;
@@ -373,7 +374,7 @@ class DEXBot {
      * @param {Object} rebalanceResult - { ordersToPlace: [], ordersToRotate: [] }
      */
     async updateOrdersOnChainBatch(rebalanceResult) {
-        const { ordersToPlace, ordersToRotate } = rebalanceResult;
+        const { ordersToPlace, ordersToRotate, partialMoves = [] } = rebalanceResult;
 
         if (this.config.dryRun) {
             if (ordersToPlace && ordersToPlace.length > 0) {
@@ -382,13 +383,15 @@ class DEXBot {
             if (ordersToRotate && ordersToRotate.length > 0) {
                 this.manager.logger.log(`Dry run: would update ${ordersToRotate.length} orders on-chain`, 'info');
             }
+            if (partialMoves && partialMoves.length > 0) {
+                this.manager.logger.log(`Dry run: would move ${partialMoves.length} partial order(s) on-chain`, 'info');
+            }
             return;
         }
 
         const { assetA, assetB } = this.manager.assets;
         const operations = [];
-        const createOrderContexts = []; // To map results back to grid orders
-        const rotateOrderContexts = []; // To map updates
+        const opContexts = [];
 
         const buildCreateOrderArgs = (order) => {
             let amountToSell, sellAssetId, minToReceive, receiveAssetId;
@@ -416,16 +419,43 @@ class DEXBot {
                         args.minToReceive, args.receiveAssetId, null
                     );
                     operations.push(op);
-                    createOrderContexts.push(order);
+                    opContexts.push({ kind: 'create', order });
                 } catch (err) {
                     this.manager.logger.log(`Failed to prepare create op for ${order.type} order ${order.id}: ${err.message}`, 'error');
                 }
             }
         }
 
-        // Step 2: Build update operations (rotation)
+        // Step 2: Build update operations for partial order moves (processed before rotations for atomic swap semantics)
+        if (partialMoves && partialMoves.length > 0) {
+            for (const moveInfo of partialMoves) {
+                try {
+                    const { partialOrder, newMinToReceive } = moveInfo;
+                    if (!partialOrder.orderId) continue;
+
+                    const op = await chainOrders.buildUpdateOrderOp(
+                        this.account, partialOrder.orderId,
+                        { minToReceive: newMinToReceive }
+                    );
+
+                    if (op) {
+                        operations.push(op);
+                        opContexts.push({ kind: 'partial-move', moveInfo });
+                        this.manager.logger.log(
+                            `Prepared partial move op: ${partialOrder.orderId} price ${partialOrder.price.toFixed(4)} -> ${moveInfo.newPrice.toFixed(4)}`,
+                            'info'
+                        );
+                    } else {
+                        this.manager.logger.log(`No change needed for partial move of ${partialOrder.orderId}`, 'debug');
+                    }
+                } catch (err) {
+                    this.manager.logger.log(`Failed to prepare partial move op: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        // Step 3: Build update operations (rotation)
         if (ordersToRotate && ordersToRotate.length > 0) {
-            // Deduplicate by orderId
             const seenOrderIds = new Set();
             const uniqueRotations = ordersToRotate.filter(r => {
                 const orderId = r?.oldOrder?.orderId;
@@ -439,7 +469,7 @@ class DEXBot {
 
             for (const rotation of uniqueRotations) {
                 try {
-                    const { oldOrder, newPrice, newSize, newGridId, type } = rotation;
+                    const { oldOrder, newPrice, newSize, type } = rotation;
                     if (!oldOrder.orderId) continue;
 
                     let newAmountToSell, newMinToReceive;
@@ -458,7 +488,7 @@ class DEXBot {
 
                     if (op) {
                         operations.push(op);
-                        rotateOrderContexts.push(rotation);
+                        opContexts.push({ kind: 'rotation', rotation });
                     } else {
                         this.manager.logger.log(`No change needed for rotation of ${oldOrder.orderId}`, 'debug');
                     }
@@ -472,47 +502,62 @@ class DEXBot {
             return;
         }
 
-        // Step 3: Execute Batch
+        // Step 4: Execute Batch
         try {
             this.manager.logger.log(`Broadcasting batch with ${operations.length} operations...`, 'info');
             const result = await chainOrders.executeBatch(this.account, this.privateKey, operations);
 
-            // Step 4: Map results
-            if (result && result[0] && result[0].trx && result[0].trx.operation_results) {
-                const results = result[0].trx.operation_results;
-                // Results correspond strictly to operations index
-                // We must iterate our contexts and match them to operations
+            // Step 5: Map results in operation order (supports atomic partial-move + rotation swaps)
+            const results = (result && result[0] && result[0].trx && result[0].trx.operation_results) || [];
 
-                let opIndex = 0;
+            for (let i = 0; i < opContexts.length; i++) {
+                const ctx = opContexts[i];
+                const res = results[i];
 
-                // Process Creates
-                for (let i = 0; i < createOrderContexts.length; i++) {
-                    const order = createOrderContexts[i];
-                    // Skip if corresponding op wasn't pushed? 
-                    // We pushed ops and contexts in sync, so index should match relative to overall list.
-                    // But we have creates THEN updates.
-
-                    const res = results[opIndex++];
-                    // res is [1, "1.7.xxxxx"] for limit_order_create (1 is object type id?) or just object id?
-                    // Usually operation_results is array of [type, id/data]
+                if (ctx.kind === 'create') {
+                    const { order } = ctx;
                     const chainOrderId = res && res[1];
-
                     if (chainOrderId) {
                         await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId }, 'createOrder');
                         this.manager.logger.log(`Placed ${order.type} order ${order.id} -> ${chainOrderId}`, 'info');
                     } else {
                         this.manager.logger.log(`Batch result missing ID for created order ${order.id}`, 'warn');
                     }
+                    continue;
                 }
 
-                // Process Rotations
-                for (let i = 0; i < rotateOrderContexts.length; i++) {
-                    const rotation = rotateOrderContexts[i];
-                    // limit_order_update returns void usually, or we don't need its id (id is constant)
-                    // We just assume success if tx broadcast didn't throw
-                    opIndex++;
+                if (ctx.kind === 'partial-move') {
+                    const { moveInfo } = ctx;
+                    this.manager.completePartialOrderMove(moveInfo);
+                    await this.manager.synchronizeWithChain(
+                        { gridOrderId: moveInfo.newGridId, chainOrderId: moveInfo.partialOrder.orderId },
+                        'createOrder'
+                    );
+                    this.manager.logger.log(
+                        `Partial move complete: ${moveInfo.partialOrder.orderId} moved to ${moveInfo.newPrice.toFixed(4)}`,
+                        'info'
+                    );
+                    continue;
+                }
 
+                if (ctx.kind === 'rotation') {
+                    const { rotation } = ctx;
                     const { oldOrder, newPrice, newGridId } = rotation;
+
+                    if (rotation.usingOverride) {
+                        const slot = this.manager.orders.get(newGridId) || { id: newGridId, type: rotation.type, price: newPrice, size: 0, state: ORDER_STATES.VIRTUAL };
+                        const updatedSlot = {
+                            ...slot,
+                            id: newGridId,
+                            type: rotation.type,
+                            size: rotation.newSize,
+                            price: newPrice,
+                            state: ORDER_STATES.VIRTUAL,
+                            orderId: null
+                        };
+                        this.manager._updateOrder(updatedSlot);
+                    }
+
                     this.manager.completeOrderRotation(oldOrder);
                     await this.manager.synchronizeWithChain({ gridOrderId: newGridId, chainOrderId: oldOrder.orderId }, 'createOrder');
                     this.manager.logger.log(`Rotation complete: ${oldOrder.orderId} moved to ${newPrice.toFixed(4)}`, 'info');
