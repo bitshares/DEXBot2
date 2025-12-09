@@ -213,22 +213,32 @@ Committed: Buy 8676.13 USD | Sell 0.12420407 BTC
 
 Below is a short summary of the modules in this repository and what they provide. You can paste these lines elsewhere if you need a quick reference.
 
+### Entry Points
+
+- `dexbot.js`: Main CLI entry point. Handles single-bot mode (start, stop, restart, drystart) and management commands (keys, bots, --cli-examples).
+- `pm2.js`: Unified PM2 launcher. Orchestrates BitShares connection, PM2 check/install, ecosystem config generation, password authentication, and bot startup.
+- `bot.js`: PM2-friendly per-bot entry point. Loads bot config, authenticates master password, initializes DEXBot, and runs the trading loop.
+
+### Core Modules
+
 - `modules/account_bots.js`: Interactive editor for bot configurations (`profiles/bots.json`). Prompts accept numbers, percentages and multiplier strings (e.g. `5x`).
 - `modules/chain_keys.js`: Encrypted master-password storage for private keys, authenticate (`profiles/keys.json`), plus key management utilities.
 - `modules/chain_orders.js`: Account-level order helpers: select account, create/update/cancel orders, listen for fills and read open orders.
 - `modules/bitshares_client.js`: Shared BitShares client wrapper and helpers (`BitShares`, `createAccountClient`, `waitForConnected`).
-- `modules/bot_instance.js`: PM2-friendly per-bot runner that boots an `OrderManager` for a chosen bot config.
 - `modules/btsdex_event_patch.js`: Small runtime patch for `btsdex` history/account events (improves account history updates when available).
 - `modules/account_orders.js`: Local persistence for per-bot order-grid snapshots and metadata (`profiles/orders.json`).
-- `modules/order/`: Core order subsystem (see sub-items below).
-  - `modules/order/constants.js`: Order constants and `DEFAULT_CONFIG`.
-  - `modules/order/index.js`: Public entry: exports `OrderManager` and `runOrderManagerCalculation()` (dry-run helper).
-  - `modules/order/logger.js`: Colored console logger and `logOrderGrid()` helper.
-  - `modules/order/manager.js`: `OrderManager` class — derives market price, resolves bounds, builds and manages the grid.
-  - `modules/order/grid.js`: Grid generation and sizing algorithms.
-  - `modules/order/utils.js`: Helpers to derive market price from pool/market/ticker are now included here.
-  - `modules/order/runner.js`: Runner for calculation passes and dry-runs.
-  - `modules/order/utils.js`: Utility functions (percent parsing, multiplier parsing, blockchain float/int conversion).
+
+### Order Subsystem (`modules/order/`)
+
+Core order generation, management, and grid algorithms:
+
+- `modules/order/constants.js`: Order constants, grid limits, and `DEFAULT_CONFIG`.
+- `modules/order/index.js`: Public entry point: exports `OrderManager` and `runOrderManagerCalculation()` (dry-run helper).
+- `modules/order/logger.js`: Colored console logger and `logOrderGrid()` helper for formatted output.
+- `modules/order/manager.js`: `OrderManager` class — derives market price, resolves bounds, builds and manages the grid, handles fills and rebalancing.
+- `modules/order/grid.js`: Grid generation algorithms, order sizing, weight distribution, and minimum size validation.
+- `modules/order/runner.js`: Runner for calculation passes and dry-runs without blockchain interaction.
+- `modules/order/utils.js`: Utility functions (percent parsing, multiplier parsing, blockchain float/int conversion, market price helpers).
 
 ## Contributing
 
