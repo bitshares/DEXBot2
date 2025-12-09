@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Test script to fetch and display open orders from the blockchain
- * for account bbot9, showing order ID, size, and price in a visual format.
+ * for account hanzac-si, showing order ID, size, and price in a visual format.
  */
 
 const BitShares = require('btsdex');

@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline-sync');
+const { execSync } = require('child_process');
 const { DEFAULT_CONFIG } = require('./order/constants');
 
 function parseJsonWithComments(raw) {
@@ -10,6 +11,44 @@ function parseJsonWithComments(raw) {
 }
 
 const BOTS_FILE = path.join(__dirname, '..', 'profiles', 'bots.json');
+
+// Check if PM2 is installed
+function isPM2Installed() {
+    try {
+        execSync('pm2 --version', { stdio: 'pipe' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// Install PM2 globally
+function installPM2() {
+    console.log('\npm2 is not installed. Installing globally...');
+    try {
+        execSync('npm install -g pm2', { stdio: 'inherit' });
+        console.log('pm2 installed successfully!');
+        return true;
+    } catch (err) {
+        console.error('Failed to install pm2:', err.message);
+        console.log('\nYou can install pm2 manually with: npm install -g pm2');
+        return false;
+    }
+}
+
+// Generate PM2 ecosystem config from bots.json
+function generatePM2Config() {
+    try {
+        const scriptPath = path.join(__dirname, '..', 'scripts', 'generate-pm2-config.js');
+        console.log('\nGenerating PM2 ecosystem config from profiles/bots.json...');
+        execSync(`node ${scriptPath}`, { stdio: 'inherit' });
+        console.log('\nPM2 configuration generated successfully!');
+        return true;
+    } catch (err) {
+        console.error('Failed to generate PM2 config:', err.message);
+        return false;
+    }
+}
 
 
 function ensureProfilesDirectory() {
@@ -193,8 +232,9 @@ async function main() {
         console.log('  3) Delete bot');
         console.log('  4) Copy bot');
         console.log('  5) List bots');
-        console.log('  6) Exit');
-        const selection = readline.question('Choose an action [1-6]: ').trim();
+        console.log('  6) Generate PM2 profile');
+        console.log('  7) Exit');
+        const selection = readline.question('Choose an action [1-7]: ').trim();
         console.log('');
         switch (selection) {
             case '1': {
@@ -239,7 +279,24 @@ async function main() {
             case '5':
                 listBots(config.bots);
                 break;
-            case '6':
+            case '6': {
+                // Generate PM2 profile
+                if (!isPM2Installed()) {
+                    console.log('\nPM2 is required to generate the ecosystem config.');
+                    const installChoice = readline.question('Would you like to install pm2 globally now? (y/n): ').trim().toLowerCase();
+                    if (installChoice === 'y' || installChoice === 'yes') {
+                        if (!installPM2()) {
+                            break;
+                        }
+                    } else {
+                        console.log('Skipping PM2 profile generation.');
+                        break;
+                    }
+                }
+                generatePM2Config();
+                break;
+            }
+            case '7':
                 exit = true;
                 break;
             default:

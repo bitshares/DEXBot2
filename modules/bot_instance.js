@@ -41,7 +41,23 @@ function log(...args) {
 }
 
 // Boot up an OrderManager instance using available config/env and authenticate a preferred account if provided.
-async function startBot(settings = {}) {
+// @param {string|Object} settingsOrPassword - Either a settings object or a master password string
+async function startBot(settingsOrPassword = {}) {
+    // Handle both old API (settings object) and new API (password string)
+    let settings = {};
+    let providedMasterPassword = null;
+
+    if (typeof settingsOrPassword === 'string') {
+        providedMasterPassword = settingsOrPassword;
+    } else if (settingsOrPassword && typeof settingsOrPassword === 'object') {
+        settings = settingsOrPassword;
+        providedMasterPassword = settings.masterPassword || null;
+    }
+
+    // Also check environment variable
+    if (!providedMasterPassword && process.env.MASTER_PASSWORD) {
+        providedMasterPassword = process.env.MASTER_PASSWORD;
+    }
     if (running) {
         log('startBot called but bot already running');
         return;
@@ -109,7 +125,8 @@ async function startBot(settings = {}) {
             const effectivePreferredAccount = PREFERRED_ACCOUNT || global.PREFERRED_ACCOUNT_OVERRIDE || null;
             if (effectivePreferredAccount) {
                 try {
-                    const masterPassword = await chainKeys.authenticate();
+                    // Use provided password or prompt interactively
+                    const masterPassword = providedMasterPassword || await chainKeys.authenticate();
                     const privateKey = chainKeys.getPrivateKey(effectivePreferredAccount, masterPassword);
                     activeAccountName = effectivePreferredAccount;
                     activePrivateKey = privateKey;

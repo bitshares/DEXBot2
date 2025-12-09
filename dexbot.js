@@ -31,14 +31,15 @@ const PROFILES_BOTS_FILE = path.join(__dirname, 'profiles', 'bots.json');
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 
 
-const CLI_COMMANDS = ['start', 'restart', 'stop', 'drystart', 'keys', 'bots'];
+const CLI_COMMANDS = ['start', 'restart', 'stop', 'drystart', 'keys', 'bots', 'pm2'];
 const CLI_HELP_FLAGS = ['-h', '--help'];
 const CLI_EXAMPLES_FLAG = '--cli-examples';
 const CLI_EXAMPLES = [
-    { title: 'Start a bot from the tracked config', command: 'dexbot start bbot9', notes: 'Targets the named entry in profiles/bots.json.' },
-    { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart bbot9', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
+    { title: 'Start a bot from the tracked config', command: 'dexbot start bot-name', notes: 'Targets the named entry in profiles/bots.json.' },
+    { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart bot-name', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
     { title: 'Manage keys', command: 'dexbot keys', notes: 'Runs modules/chain_keys.js to add or update master passwords.' },
-    { title: 'Edit bot definitions', command: 'dexbot bots', notes: 'Launches the interactive modules/account_bots.js helper for the JSON config.' }
+    { title: 'Edit bot definitions', command: 'dexbot bots', notes: 'Launches the interactive modules/account_bots.js helper for the JSON config.' },
+    { title: 'Start bots with PM2', command: 'dexbot pm2', notes: 'Generates ecosystem config, authenticates, and starts PM2.' }
 ];
 const cliArgs = process.argv.slice(2);
 
@@ -52,6 +53,7 @@ function printCLIUsage() {
     console.log('  stop <bot>        Mark the bot inactive in config (stop running instance separately).');
     console.log('  keys              Launch the chain key helper (modules/chain_keys.js).');
     console.log('  bots              Launch the interactive bot configurator (modules/account_bots.js).');
+    console.log('  pm2               Start all active bots with PM2 (authenticate + generate config + start).');
     console.log('Options:');
     console.log('  --cli-examples    Print curated CLI snippets.');
     console.log('  -h, --help        Show this help text.');
@@ -1285,6 +1287,10 @@ async function handleCLICommands() {
                 console.warn('Failed to disconnect BitShares after bot helper exit:', err && err.message ? err.message : err);
             }
             process.exit(0);
+            return true;
+        case 'pm2':
+            const pm2Launcher = require('./pm2.js');
+            await pm2Launcher.main();
             return true;
         default:
             printCLIUsage();

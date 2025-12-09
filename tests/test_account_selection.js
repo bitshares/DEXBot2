@@ -4,7 +4,7 @@ const orders = require('../modules/chain_orders');
 async function testAccountSelection() {
     try {
         console.log('Testing account order read for configured account...');
-        let TEST_ACCOUNT = '1.2.1624309';
+        let TEST_ACCOUNT = '1.2.1074325';
         try {
             const live = require('../profiles/bots.json');
             const bot = (live.bots || [])[0];
