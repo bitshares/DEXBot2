@@ -337,6 +337,30 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
         return null;
     }
 
+    // Enforce minimum delta: if deltaSellInt is 0 but price is changing,
+    // adjust delta by ±1 toward market center to ensure meaningful update
+    if (deltaSellInt === 0 && priceChanged) {
+        // Determine direction toward market center:
+        // For SELL orders: newReceiveInt < currentReceiveInt means moving down toward market (lower price = better for selling)
+        // For BUY orders: newReceiveInt < currentReceiveInt means moving down toward market (lower price = better for buying, get more BTC for same USD)
+        const isMovingTowardMarket = newReceiveInt < currentReceiveInt;
+
+        if (isMovingTowardMarket) {
+            // Adjust delta by +1 to push order size slightly (toward market center)
+            deltaSellInt = 1;
+            console.log(
+                `[buildUpdateOrderOp] Delta was 0 but price changed toward market. Enforcing minimum delta: +1 ` +
+                `(order ${orderId}, ${newParams.orderType}, receive ${currentReceiveInt} → ${newReceiveInt})`
+            );
+        } else {
+            // Moving away from market - allow zero delta but log it
+            console.log(
+                `[buildUpdateOrderOp] Delta is 0 and price moving away from market. Allowing zero delta. ` +
+                `(order ${orderId}, ${newParams.orderType}, receive ${currentReceiveInt} → ${newReceiveInt})`
+            );
+        }
+    }
+
     // Adjust newSellInt to strict logic: current + delta
     const adjustedSellInt = currentSellInt + deltaSellInt;
 
