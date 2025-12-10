@@ -27,6 +27,12 @@ cd DEXBot2
 
 # Install dependencies (if any)
 npm install
+
+# Set up your master password and keyring
+node dexbot keys
+
+# Create and configure your bots
+node dexbot bots
 ```
 
 ## ⚙️ CLI & Running
@@ -39,7 +45,7 @@ Use the `dexbot` wrapper or run `node dexbot.js` directly:
 - `dexbot start [bot_name]` — start a specific bot (or all active bots if omitted). Respects each bot's `dryRun` setting.
 - `dexbot drystart [bot_name]` — same as `start` but forces `dryRun=true` for safe simulation.
 - `dexbot stop [bot_name]` — mark a bot (or all bots) inactive; the config file is used the next time the process launches.
-- `dexbot restart [bot_name]` — restart a bot (stop running process first if needed).
+- `dexbot restart [bot_name]` — restart a bot and reset its order grid. This clears saved order state and regenerates the grid from scratch.
 - `dexbot keys` — manage master password and keyring via `modules/chain_keys.js`.
 - `dexbot bots` — open the interactive editor in `modules/account_bots.js` to create or edit bot entries.
 - `dexbot --cli-examples` — print curated CLI snippets for common tasks.
@@ -99,14 +105,17 @@ pm2 logs
 # View logs from specific bot
 pm2 logs <bot-name>
 
-# Stop all bots (but keep PM2 alive)
+# Stop all bots (or specific bot)
 pm2 stop all
+pm2 stop <bot-name>
 
-# Restart all bots
+# Restart all bots (or specific bot)
 pm2 restart all
+pm2 restart <bot-name>
 
-# Delete all bots from PM2
+# Delete all bots from PM2 (or specific bot)
 pm2 delete all
+pm2 delete <bot-name>
 ```
 
 #### Configuration & Logs
@@ -124,6 +133,22 @@ Bot configurations are defined in `profiles/bots.json`. The PM2 launcher automat
 - Password passed via environment variable to bot processes (RAM only)
 - Never written to disk or config files
 - Cleared when process exits
+
+## 🔐 Environment Variables
+
+Control bot behavior via environment variables (useful for advanced setups):
+
+- `MASTER_PASSWORD` - Master password for key decryption (set by `pm2.js`, used by `bot.js` and `dexbot.js`)
+- `BOT_NAME` or `LIVE_BOT_NAME` - Select a specific bot from `profiles/bots.json` by name (for single-bot runs)
+- `PREFERRED_ACCOUNT` - Override the preferred account for the selected bot
+- `RUN_LOOP_MS` - Polling interval in milliseconds (default: 5000). Controls how often the bot checks for fills and market conditions
+- `CALC_CYCLES` - Number of calculation passes for standalone grid calculator (default: 1)
+- `CALC_DELAY_MS` - Delay between calculator cycles in milliseconds (default: 0)
+
+Example - Run a specific bot with custom polling interval:
+```bash
+BOT_NAME=my-bot RUN_LOOP_MS=3000 node dexbot.js
+```
 
 ## 📊 Order Calculation
 
@@ -219,23 +244,55 @@ Available: Buy 0.00 USD | Sell 0.00000000 BTC
 Committed: Buy 8676.13 USD | Sell 0.12420407 BTC
 ```
 
+## 🔍 Advanced Features
+
+### Partial Order State Management
+When an order fills partially, DEXBot tracks the remaining portion in a `PARTIAL` state instead of cancelling it outright. Partial orders can be moved to new price levels atomically (in a single transaction batch), improving execution efficiency and reducing blockchain operations.
+
+### Fill Deduplication
+Fills are tracked with a 5-second deduplication window to prevent duplicate order processing. This ensures reliable fill detection even if the same fill event arrives multiple times.
+
+### Price Tolerance & Integer Rounding
+The bot calculates price tolerances to account for blockchain integer rounding discrepancies. This ensures reliable matching of on-chain orders with grid orders despite minor precision differences.
+
+### Trigger-File Grid Regeneration
+Create a trigger file `profiles/recalculate.<bot-key>.trigger` to request immediate grid regeneration on the next polling cycle. This allows external scripts to request recalculation without restarting the bot.
+
+Example:
+```bash
+touch profiles/recalculate.my-bot.trigger
+```
+
+### Standalone Grid Calculator
+Use the standalone calculator to dry-run grid calculations without blockchain interaction:
+
+```bash
+# Calculate grid 5 times with 1-second delays
+CALC_CYCLES=5 CALC_DELAY_MS=1000 BOT_NAME=my-bot node -e "require('./modules/order/runner').runOrderManagerCalculation()"
+```
+
+Environment variables:
+- `BOT_NAME` or `LIVE_BOT_NAME` - Select bot from `profiles/bots.json`
+- `CALC_CYCLES` - Number of calculation passes (default: 1)
+- `CALC_DELAY_MS` - Delay between cycles in milliseconds (default: 0)
+
 ## 📦 Modules
 
 Below is a short summary of the modules in this repository and what they provide. You can paste these lines elsewhere if you need a quick reference.
 
 ### Entry Points
 
-- `dexbot.js`: Main CLI entry point. Handles single-bot mode (start, stop, restart, drystart) and management commands (keys, bots, --cli-examples).
-- `pm2.js`: Unified PM2 launcher. Orchestrates BitShares connection, PM2 check/install, ecosystem config generation, password authentication, and bot startup.
-- `bot.js`: PM2-friendly per-bot entry point. Loads bot config, authenticates master password, initializes DEXBot, and runs the trading loop.
+- `dexbot.js`: Main CLI entry point. Handles single-bot mode (start, stop, restart, drystart) and management commands (keys, bots, --cli-examples). Includes full DEXBot class with grid management, fill processing, and account operations.
+- `pm2.js`: Unified PM2 launcher. Orchestrates BitShares connection, PM2 check/install, ecosystem config generation from `profiles/bots.json`, master password authentication, and bot startup with automatic restart policies.
+- `bot.js`: PM2-friendly per-bot entry point. Loads bot config by name from `profiles/bots.json`, authenticates via master password (from environment or interactive prompt), initializes DEXBot instance, and runs the trading loop.
 
 ### Core Modules
 
 - `modules/account_bots.js`: Interactive editor for bot configurations (`profiles/bots.json`). Prompts accept numbers, percentages and multiplier strings (e.g. `5x`).
-- `modules/chain_keys.js`: Encrypted master-password storage for private keys, authenticate (`profiles/keys.json`), plus key management utilities.
-- `modules/chain_orders.js`: Account-level order helpers: select account, create/update/cancel orders, listen for fills and read open orders.
-- `modules/bitshares_client.js`: Shared BitShares client wrapper and helpers (`BitShares`, `createAccountClient`, `waitForConnected`).
-- `modules/btsdex_event_patch.js`: Small runtime patch for `btsdex` history/account events (improves account history updates when available).
+- `modules/chain_keys.js`: Encrypted master-password storage for private keys (`profiles/keys.json`), plus key authentication and management utilities.
+- `modules/chain_orders.js`: Account-level order operations: select account, create/update/cancel orders, listen for fills with deduplication, read open orders. Uses 'history' mode for fill processing which matches orders from blockchain events.
+- `modules/bitshares_client.js`: Shared BitShares client wrapper and connection utilities (`BitShares`, `createAccountClient`, `waitForConnected`).
+- `modules/btsdex_event_patch.js`: Runtime patch for `btsdex` library to improve history and account event handling.
 - `modules/account_orders.js`: Local persistence for per-bot order-grid snapshots and metadata (`profiles/orders.json`).
 
 ### Order Subsystem (`modules/order/`)
