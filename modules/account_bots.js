@@ -1,7 +1,8 @@
 // Interactive CLI helper for editing the tracked bot profiles stored in profiles/bots.json.
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline-sync');
+const readlineSync = require('readline-sync');
+const readline = require('readline');
 const { execSync } = require('child_process');
 const { DEFAULT_CONFIG } = require('./order/constants');
 
@@ -62,7 +63,7 @@ function listBots(bots) {
 function selectBotIndex(bots, promptMessage) {
     if (!bots.length) return null;
     listBots(bots);
-    const raw = readline.question(`${promptMessage} [1-${bots.length}]: `).trim();
+    const raw = readlineSync.question(`${promptMessage} [1-${bots.length}]: `).trim();
     const idx = Number(raw);
     if (Number.isNaN(idx) || idx < 1 || idx > bots.length) {
         console.log('Invalid selection.');
@@ -73,7 +74,7 @@ function selectBotIndex(bots, promptMessage) {
 
 function askString(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const answer = readline.question(`${promptText}${suffix}: `);
+    const answer = readlineSync.question(`${promptText}${suffix}: `);
     if (!answer) return defaultValue;
     return answer.trim();
 }
@@ -86,9 +87,29 @@ function askRequiredString(promptText, defaultValue) {
     }
 }
 
+async function askAsset(promptText, defaultValue) {
+    while (true) {
+        const displayDefault = defaultValue ? String(defaultValue).toUpperCase() : undefined;
+        const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
+
+        // Use readlineSync with mask to capture and display as uppercase
+        const answer = readlineSync.question(`${promptText}${suffix}: `, {
+            hideEchoBack: false
+        }).trim();
+
+        if (!answer) {
+            if (displayDefault) return displayDefault;
+            console.log('Asset name is required.');
+            continue;
+        }
+
+        return answer.toUpperCase();
+    }
+}
+
 function askNumber(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readline.question(`${promptText}${suffix}: `).trim();
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -104,7 +125,7 @@ function isMultiplierString(value) {
 
 function askNumberOrMultiplier(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readline.question(`${promptText}${suffix}: `).trim();
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
     if (raw === '') return defaultValue;
     if (isMultiplierString(raw)) return raw.trim();
     const parsed = Number(raw);
@@ -126,7 +147,7 @@ function normalizePercentageInput(value) {
 
 function askNumberOrPercentage(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readline.question(`${promptText}${suffix}: `).trim();
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
     if (raw === '') return defaultValue;
     const percent = normalizePercentageInput(raw);
     if (percent !== null) return percent;
@@ -140,19 +161,47 @@ function askNumberOrPercentage(promptText, defaultValue) {
 
 function askBoolean(promptText, defaultValue) {
     const label = defaultValue ? 'Y/n' : 'y/N';
-    const raw = readline.question(`${promptText} (${label}): `).trim().toLowerCase();
+    const raw = readlineSync.question(`${promptText} (${label}): `).trim().toLowerCase();
     if (!raw) return !!defaultValue;
     return raw.startsWith('y');
 }
 
-function promptBotData(base = {}) {
+function askMarketPrice(promptText, defaultValue) {
+    while (true) {
+        const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+        const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+
+        if (!raw) {
+            if (defaultValue !== undefined && defaultValue !== null) {
+                return defaultValue;
+            }
+            return undefined;
+        }
+
+        const lower = raw.toLowerCase();
+        // Accept 'pool' or 'market' strings
+        if (lower === 'pool' || lower === 'market') {
+            return lower;
+        }
+
+        // Accept numeric values (including decimals)
+        const num = Number(raw);
+        if (!Number.isNaN(num) && Number.isFinite(num)) {
+            return num;
+        }
+
+        console.log('Please enter "pool", "market", or a numeric value.');
+    }
+}
+
+async function promptBotData(base = {}) {
     const name = askRequiredString('Bot name', base.name);
-    const assetA = askRequiredString('Asset A', base.assetA);
-    const assetB = askRequiredString('Asset B', base.assetB);
+    const assetA = await askAsset('Asset A', base.assetA);
+    const assetB = await askAsset('Asset B', base.assetB);
     const active = askBoolean('Active', base.active !== undefined ? base.active : DEFAULT_CONFIG.active);
     const dryRun = askBoolean('Dry run', base.dryRun !== undefined ? base.dryRun : DEFAULT_CONFIG.dryRun);
     const preferredAccount = askRequiredString('Preferred account', base.preferredAccount);
-    const marketPrice = askString('marketPrice (pool, market or numeric (A/B))', base.marketPrice);
+    const marketPrice = askMarketPrice('marketPrice (pool, market or A/B)', base.marketPrice || 'pool');
     const minPrice = askNumberOrMultiplier('minPrice', base.minPrice !== undefined ? base.minPrice : DEFAULT_CONFIG.minPrice);
     const maxPrice = askNumberOrMultiplier('maxPrice', base.maxPrice !== undefined ? base.maxPrice : DEFAULT_CONFIG.maxPrice);
     const incrementPercent = askNumber('incrementPercent', base.incrementPercent !== undefined ? base.incrementPercent : DEFAULT_CONFIG.incrementPercent);
@@ -197,11 +246,11 @@ async function main() {
         console.log('  4) Copy bot');
         console.log('  5) List bots');
         console.log('  6) Exit');
-        const selection = readline.question('Choose an action [1-6]: ').trim();
+        const selection = readlineSync.question('Choose an action [1-6]: ').trim();
         console.log('');
         switch (selection) {
             case '1': {
-                const entry = promptBotData();
+                const entry = await promptBotData();
                 config.bots.push(entry);
                 saveBotsConfig(config, filePath);
                 console.log(`Added bot '${entry.name}' to ${path.basename(filePath)}.`);
@@ -210,7 +259,7 @@ async function main() {
             case '2': {
                 const idx = selectBotIndex(config.bots, 'Select bot to modify');
                 if (idx === null) break;
-                const entry = promptBotData(config.bots[idx]);
+                const entry = await promptBotData(config.bots[idx]);
                 config.bots[idx] = entry;
                 saveBotsConfig(config, filePath);
                 console.log(`Updated bot '${entry.name}' in ${path.basename(filePath)}.`);
@@ -233,7 +282,7 @@ async function main() {
             case '4': {
                 const idx = selectBotIndex(config.bots, 'Select bot to copy');
                 if (idx === null) break;
-                const entry = promptBotData(config.bots[idx]);
+                const entry = await promptBotData(config.bots[idx]);
                 config.bots.splice(idx + 1, 0, entry);
                 saveBotsConfig(config, filePath);
                 console.log(`Copied bot '${entry.name}' into ${path.basename(filePath)}.`);
