@@ -50,15 +50,21 @@ cd DEXBot2
 npm install
 node dexbot keys        # Set up master password
 node dexbot bots        # Configure bots
-node dexbot start my-bot # Start testing
+
+# For single bot testing/development:
+node dexbot start my-bot
+
+# For production (multi-bot support):
+node pm2.js
 ```
 
 ## Features Included
 
 - ✅ Staggered order grid algorithm
 - ✅ Dynamic rebalancing with atomic transactions
-- ✅ Multi-bot support
+- ✅ **Multi-bot support (PM2 only)** - Run multiple bots via `node pm2.js`
 - ✅ PM2 process management (production-ready)
+- ✅ Single-bot mode via `node dexbot.js` for testing
 - ✅ Partial order handling
 - ✅ Fill deduplication (5-second window)
 - ✅ Master password security
