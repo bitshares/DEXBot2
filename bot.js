@@ -301,6 +301,204 @@ class DEXBot {
         accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
     }
 
+    async updateOrdersOnChainBatch(rebalanceResult) {
+        const { ordersToPlace, ordersToRotate, partialMoves = [] } = rebalanceResult;
+
+        if (this.config.dryRun) {
+            if (ordersToPlace && ordersToPlace.length > 0) {
+                this.manager.logger.log(`Dry run: would place ${ordersToPlace.length} new orders on-chain`, 'info');
+            }
+            if (ordersToRotate && ordersToRotate.length > 0) {
+                this.manager.logger.log(`Dry run: would update ${ordersToRotate.length} orders on-chain`, 'info');
+            }
+            if (partialMoves && partialMoves.length > 0) {
+                this.manager.logger.log(`Dry run: would move ${partialMoves.length} partial order(s) on-chain`, 'info');
+            }
+            return;
+        }
+
+        const { assetA, assetB } = this.manager.assets;
+        const operations = [];
+        const opContexts = [];
+
+        const buildCreateOrderArgs = (order) => {
+            let amountToSell, sellAssetId, minToReceive, receiveAssetId;
+            if (order.type === 'sell') {
+                amountToSell = order.size;
+                sellAssetId = assetA.id;
+                minToReceive = order.size * order.price;
+                receiveAssetId = assetB.id;
+            } else {
+                amountToSell = order.size;
+                sellAssetId = assetB.id;
+                minToReceive = order.size / order.price;
+                receiveAssetId = assetA.id;
+            }
+            return { amountToSell, sellAssetId, minToReceive, receiveAssetId };
+        };
+
+        // Step 1: Build create operations
+        if (ordersToPlace && ordersToPlace.length > 0) {
+            for (const order of ordersToPlace) {
+                try {
+                    const args = buildCreateOrderArgs(order);
+                    const op = await chainOrders.buildCreateOrderOp(
+                        this.account, args.amountToSell, args.sellAssetId,
+                        args.minToReceive, args.receiveAssetId, null
+                    );
+                    operations.push(op);
+                    opContexts.push({ kind: 'create', order });
+                } catch (err) {
+                    this.manager.logger.log(`Failed to prepare create op for ${order.type} order ${order.id}: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        // Step 2: Build update operations for partial order moves (processed before rotations for atomic swap semantics)
+        if (partialMoves && partialMoves.length > 0) {
+            for (const moveInfo of partialMoves) {
+                try {
+                    const { partialOrder, newMinToReceive } = moveInfo;
+                    if (!partialOrder.orderId) continue;
+
+                    const op = await chainOrders.buildUpdateOrderOp(
+                        this.account, partialOrder.orderId,
+                        { minToReceive: newMinToReceive }
+                    );
+
+                    if (op) {
+                        operations.push(op);
+                        opContexts.push({ kind: 'partial-move', moveInfo });
+                        this.manager.logger.log(
+                            `Prepared partial move op: ${partialOrder.orderId} price ${partialOrder.price.toFixed(4)} -> ${moveInfo.newPrice.toFixed(4)}`,
+                            'info'
+                        );
+                    } else {
+                        this.manager.logger.log(`No change needed for partial move of ${partialOrder.orderId}`, 'debug');
+                    }
+                } catch (err) {
+                    this.manager.logger.log(`Failed to prepare partial move op: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        // Step 3: Build update operations (rotation)
+        if (ordersToRotate && ordersToRotate.length > 0) {
+            const seenOrderIds = new Set();
+            const uniqueRotations = ordersToRotate.filter(r => {
+                const orderId = r?.oldOrder?.orderId;
+                if (!orderId || seenOrderIds.has(orderId)) {
+                    if (orderId) this.manager.logger.log(`Skipping duplicate rotation for ${orderId}`, 'debug');
+                    return false;
+                }
+                seenOrderIds.add(orderId);
+                return true;
+            });
+
+            for (const rotation of uniqueRotations) {
+                try {
+                    const { oldOrder, newPrice, newSize, type } = rotation;
+                    if (!oldOrder.orderId) continue;
+
+                    let newAmountToSell, newMinToReceive;
+                    if (type === 'sell') {
+                        newAmountToSell = newSize;
+                        newMinToReceive = newSize * newPrice;
+                    } else {
+                        newAmountToSell = newSize;
+                        newMinToReceive = newSize / newPrice;
+                    }
+
+                    const op = await chainOrders.buildUpdateOrderOp(
+                        this.account, oldOrder.orderId,
+                        { amountToSell: newAmountToSell, minToReceive: newMinToReceive }
+                    );
+
+                    if (op) {
+                        operations.push(op);
+                        opContexts.push({ kind: 'rotation', rotation });
+                    } else {
+                        this.manager.logger.log(`No change needed for rotation of ${oldOrder.orderId}`, 'debug');
+                    }
+                } catch (err) {
+                    this.manager.logger.log(`Failed to prepare update op for rotation: ${err.message}`, 'error');
+                }
+            }
+        }
+
+        if (operations.length === 0) {
+            return;
+        }
+
+        // Step 4: Execute Batch
+        try {
+            this.manager.logger.log(`Broadcasting batch with ${operations.length} operations...`, 'info');
+            const result = await chainOrders.executeBatch(this.account, this.privateKey, operations);
+
+            // Step 5: Map results in operation order (supports atomic partial-move + rotation swaps)
+            const results = (result && result[0] && result[0].trx && result[0].trx.operation_results) || [];
+
+            for (let i = 0; i < opContexts.length; i++) {
+                const ctx = opContexts[i];
+                const res = results[i];
+
+                if (ctx.kind === 'create') {
+                    const { order } = ctx;
+                    const chainOrderId = res && res[1];
+                    if (chainOrderId) {
+                        await this.manager.synchronizeWithChain({ gridOrderId: order.id, chainOrderId }, 'createOrder');
+                        this.manager.logger.log(`Placed ${order.type} order ${order.id} -> ${chainOrderId}`, 'info');
+                    } else {
+                        this.manager.logger.log(`Batch result missing ID for created order ${order.id}`, 'warn');
+                    }
+                    continue;
+                }
+
+                if (ctx.kind === 'partial-move') {
+                    const { moveInfo } = ctx;
+                    this.manager.completePartialOrderMove(moveInfo);
+                    await this.manager.synchronizeWithChain(
+                        { gridOrderId: moveInfo.newGridId, chainOrderId: moveInfo.partialOrder.orderId },
+                        'createOrder'
+                    );
+                    this.manager.logger.log(
+                        `Partial move complete: ${moveInfo.partialOrder.orderId} moved to ${moveInfo.newPrice.toFixed(4)}`,
+                        'info'
+                    );
+                    continue;
+                }
+
+                if (ctx.kind === 'rotation') {
+                    const { rotation } = ctx;
+                    const { oldOrder, newPrice, newGridId } = rotation;
+
+                    if (rotation.usingOverride) {
+                        const slot = this.manager.orders.get(newGridId) || { id: newGridId, type: rotation.type, price: newPrice, size: 0, state: ORDER_STATES.VIRTUAL };
+                        const updatedSlot = {
+                            ...slot,
+                            id: newGridId,
+                            type: rotation.type,
+                            size: rotation.newSize,
+                            price: newPrice,
+                            state: ORDER_STATES.VIRTUAL,
+                            orderId: null
+                        };
+                        this.manager._updateOrder(updatedSlot);
+                    }
+
+                    this.manager.completeOrderRotation(oldOrder);
+                    await this.manager.synchronizeWithChain({ gridOrderId: newGridId, chainOrderId: oldOrder.orderId }, 'createOrder');
+                    this.manager.logger.log(`Rotation complete: ${oldOrder.orderId} moved to ${newPrice.toFixed(4)}`, 'info');
+                }
+            }
+
+        } catch (err) {
+            this.manager.logger.log(`Batch transaction failed: ${err.message}`, 'error');
+            // If batch fails, should we try to revert or just let the next sync fix it?
+            // The next sync/loop will see discrepancies and fix them, though funds might be momentarily desync.
+        }
+    }
+
     async start(masterPassword = null) {
         await this.initialize(masterPassword);
         if (!this.manager) {
@@ -311,9 +509,134 @@ class DEXBot {
 
         // Start listening for fills
         await chainOrders.listenForFills(this.account || undefined, async (fills) => {
-            // Fill handling code (simplified for PM2 usage)
             if (this.manager && !this.isResyncing && !this.config.dryRun) {
-                console.log(`[bot.js] Fill detected: ${fills.length} fill(s)`);
+                // Queue fills if already processing to prevent concurrent operations
+                if (this._processingFill) {
+                    this._pendingFills.push(...fills);
+                    this.manager.logger.log(`Fill processing in progress, queued ${fills.length} fill(s)`, 'debug');
+                    return;
+                }
+                this._processingFill = true;
+
+                try {
+                    const allFills = [...fills, ...this._pendingFills];
+                    this._pendingFills = [];
+
+                    const validFills = [];
+                    const processedFillKeys = new Set();
+
+                    // 1. Filter and Deduplicate
+                    for (const fill of allFills) {
+                        if (fill && fill.op && fill.op[0] === 4) {
+                            const fillOp = fill.op[1];
+                            if (fillOp.is_maker === false) {
+                                this.manager.logger.log(`Skipping taker fill (is_maker=false)`, 'debug');
+                                continue;
+                            }
+
+                            const fillKey = `${fillOp.order_id}:${fill.block_num}`;
+                            const now = Date.now();
+                            if (this._recentlyProcessedFills.has(fillKey)) {
+                                const lastProcessed = this._recentlyProcessedFills.get(fillKey);
+                                if (now - lastProcessed < this._fillDedupeWindowMs) {
+                                    this.manager.logger.log(`Skipping duplicate fill for ${fillOp.order_id} (processed ${now - lastProcessed}ms ago)`, 'debug');
+                                    continue;
+                                }
+                            }
+
+                            // Check local dedupe set for this batch
+                            if (processedFillKeys.has(fillKey)) continue;
+
+                            processedFillKeys.add(fillKey);
+                            this._recentlyProcessedFills.set(fillKey, now);
+                            validFills.push(fill);
+
+                            // Log nicely formatted fill info
+                            const paysAmount = fillOp.pays ? fillOp.pays.amount : '?';
+                            const paysAsset = fillOp.pays ? fillOp.pays.asset_id : '?';
+                            const receivesAmount = fillOp.receives ? fillOp.receives.amount : '?';
+                            const receivesAsset = fillOp.receives ? fillOp.receives.asset_id : '?';
+                            console.log(`\n===== FILL DETECTED =====`);
+                            console.log(`Order ID: ${fillOp.order_id}`);
+                            console.log(`Pays: ${paysAmount} (asset ${paysAsset})`);
+                            console.log(`Receives: ${receivesAmount} (asset ${receivesAsset})`);
+                            console.log(`is_maker: ${fillOp.is_maker}`);
+                            console.log(`Block: ${fill.block_num}, Time: ${fill.block_time}`);
+                            console.log(`=========================\n`);
+                        }
+                    }
+
+                    // Clean up old entries
+                    const now = Date.now();
+                    for (const [key, timestamp] of this._recentlyProcessedFills) {
+                        if (now - timestamp > this._fillDedupeWindowMs * 2) {
+                            this._recentlyProcessedFills.delete(key);
+                        }
+                    }
+
+                    if (validFills.length === 0) return;
+
+                    // 2. Sync and Collect Filled Orders
+                    const allFilledOrders = [];
+                    let ordersNeedingCorrection = [];
+                    const fillMode = chainOrders.getFillProcessingMode();
+
+                    if (fillMode === 'history') {
+                        this.manager.logger.log(`Processing batch of ${validFills.length} fills using 'history' mode`, 'info');
+                        for (const fill of validFills) {
+                            const fillOp = fill.op[1];
+                            const result = this.manager.syncFromFillHistory(fillOp);
+                            if (result.filledOrders) allFilledOrders.push(...result.filledOrders);
+                        }
+                    } else {
+                        // Open orders mode: fetch once, then sync each fill against it
+                        this.manager.logger.log(`Processing batch of ${validFills.length} fills using 'open' mode`, 'info');
+                        const chainOpenOrders = await chainOrders.readOpenOrders(this.account);
+                        const result = this.manager.syncFromOpenOrders(chainOpenOrders, validFills[0].op[1]);
+                        if (result.filledOrders) allFilledOrders.push(...result.filledOrders);
+                        if (result.ordersNeedingCorrection) ordersNeedingCorrection = result.ordersNeedingCorrection;
+                    }
+
+                    // 3. Handle Price Corrections (immediate, loose - keeping original logic for now)
+                    if (ordersNeedingCorrection.length > 0) {
+                        this.manager.logger.log(`Correcting ${ordersNeedingCorrection.length} order(s) with price mismatch...`, 'info');
+                        const correctionResult = await OrderUtils.correctAllPriceMismatches(
+                            this.manager, this.account, this.privateKey, chainOrders
+                        );
+                        if (correctionResult.failed > 0) {
+                            this.manager.logger.log(`${correctionResult.failed} order correction(s) failed`, 'error');
+                        }
+                    }
+
+                    // 4. Batch Rebalance and Execution
+                    if (allFilledOrders.length > 0) {
+                        this.manager.logger.log(`Aggregating ${allFilledOrders.length} filled orders for batch processing...`, 'info');
+
+                        // This updates funds with proceeds from ALL filled orders and returns the rebalance result
+                        const rebalanceResult = await this.manager.processFilledOrders(allFilledOrders);
+
+                        // Execute batch transaction
+                        await this.updateOrdersOnChainBatch(rebalanceResult);
+                    }
+
+                    // Always persist snapshot after processing fills if we did anything
+                    if (validFills.length > 0) {
+                        accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()));
+                    }
+                } catch (err) {
+                    this.manager?.logger?.log(`Error processing fill: ${err.message}`, 'error');
+                } finally {
+                    this._processingFill = false;
+                    // Process any fills that arrived while we were busy
+                    if (this._pendingFills.length > 0) {
+                        const pending = this._pendingFills;
+                        this._pendingFills = [];
+                        // Re-invoke the listener with pending fills
+                        setTimeout(() => {
+                            chainOrders.listenForFills(this.account, () => { }); // dummy to trigger
+                        }, 100);
+                    }
+                }
             }
         });
 
