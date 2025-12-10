@@ -1,5 +1,4 @@
 # DEXBot2
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
 
 A sophisticated market making bot for the BitShares Decentralized Exchange (DEX), implementing optimized staggered order strategies for automated trading.
 
