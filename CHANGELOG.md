@@ -25,11 +25,6 @@ All notable changes to this project will be documented in this file.
 - **Fund Fallback in Order Rotation**: Added fallback to available funds when proceeds exhausted
 - **Price Derivation Robustness**: Enhanced pool price lookup with multiple API variant support
 
-### Known Issues
-- Virtual order ACTIVE state transition lacks error recovery if blockchain creation fails
-  - Orders marked ACTIVE without confirmation may leave grid inconsistent if placement fails
-  - Recommendation: Test thoroughly in dry-run mode before live trading
-- PM2 mode: Ensure MASTER_PASSWORD environment variable is properly set by pm2.js
 
 ### Installation & Usage
 See README.md for detailed installation and usage instructions.
