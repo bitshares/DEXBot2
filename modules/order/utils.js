@@ -644,6 +644,232 @@ const derivePrice = async (BitShares, symA, symB, mode) => {
 };
 
 // ---------------------------------------------------------------------------
+// Fee caching and retrieval
+// ---------------------------------------------------------------------------
+
+/**
+ * Cache for storing fee information for all assets
+ * Structure: {
+ *   assetSymbol: {
+ *     assetId: string,
+ *     precision: number,
+ *     marketFee: { basisPoints: number, percent: number },
+ *     takerFee: { percent: number } | null,
+ *     maxMarketFee: { raw: number, float: number }
+ *   },
+ *   BTS: { blockchain fees - see below }
+ * }
+ */
+let feeCache = {};
+
+/**
+ * Initialize and cache fees for all assets from bots.json configuration
+ * Also includes BTS for blockchain fees (maker/taker order creation/cancel)
+ *
+ * @param {Array} botsConfig - Array of bot configurations from bots.json
+ * @param {object} BitShares - BitShares library instance for fetching asset data
+ * @returns {Promise<object>} The populated fee cache
+ */
+async function initializeFeeCache(botsConfig, BitShares) {
+    if (!botsConfig || !Array.isArray(botsConfig)) {
+        throw new Error('botsConfig must be an array of bot configurations');
+    }
+    if (!BitShares || !BitShares.db) {
+        throw new Error('BitShares library instance with db methods required');
+    }
+
+    // Extract unique asset symbols from bot configurations
+    const uniqueAssets = new Set(['BTS']); // Always include BTS for blockchain fees
+
+    for (const bot of botsConfig) {
+        if (bot.assetA) uniqueAssets.add(bot.assetA);
+        if (bot.assetB) uniqueAssets.add(bot.assetB);
+    }
+
+    // Fetch and cache fees for each asset
+    for (const assetSymbol of uniqueAssets) {
+        try {
+            if (assetSymbol === 'BTS') {
+                // Special handling for BTS - fetch blockchain operation fees
+                feeCache.BTS = await _fetchBlockchainFees(BitShares);
+            } else {
+                // Fetch market fees for other assets
+                feeCache[assetSymbol] = await _fetchAssetMarketFees(assetSymbol, BitShares);
+            }
+        } catch (error) {
+            console.error(`Error caching fees for ${assetSymbol}:`, error.message);
+            // Continue with other assets even if one fails
+        }
+    }
+
+    return feeCache;
+}
+
+/**
+ * Get cached fees for a specific asset
+ * Useful for checking if cache has been initialized
+ *
+ * @param {string} assetSymbol - Asset symbol (e.g., 'IOB.XRP', 'TWENTIX', 'BTS')
+ * @returns {object|null} Fee data if cached, null otherwise
+ */
+function getCachedFees(assetSymbol) {
+    return feeCache[assetSymbol] || null;
+}
+
+/**
+ * Clear the fee cache (useful for testing or refreshing)
+ */
+function clearFeeCache() {
+    feeCache = {};
+}
+
+/**
+ * Get total fees (blockchain + market) for a filled order amount
+ *
+ * @param {string} assetSymbol - Asset symbol (e.g., 'IOB.XRP', 'TWENTIX', 'BTS')
+ * @param {number} assetAmount - Amount of asset to calculate fees for
+ * @returns {number} Total fee amount in the asset's native units
+ *   For BTS: blockchain fees only (creation 10% + update)
+ *   For market assets: market fee on the amount
+ */
+function getAssetFees(assetSymbol, assetAmount) {
+    const cachedFees = feeCache[assetSymbol];
+
+    if (!cachedFees) {
+        throw new Error(`Fees not cached for ${assetSymbol}. Call initializeFeeCache first.`);
+    }
+
+    assetAmount = Number(assetAmount);
+    if (!Number.isFinite(assetAmount) || assetAmount < 0) {
+        throw new Error(`Invalid assetAmount: ${assetAmount}`);
+    }
+
+    // Special handling for BTS (blockchain fees only)
+    if (assetSymbol === 'BTS') {
+        const orderCreationFee = cachedFees.limitOrderCreate.bts;
+        const orderUpdateFee = cachedFees.limitOrderUpdate.bts;
+        const makerNetFee = orderCreationFee * 0.1; // 10% of creation fee after 90% refund
+        return makerNetFee + orderUpdateFee;
+    }
+
+    // Handle regular assets - deduct market fee from the amount received
+    const marketFeePercent = cachedFees.marketFee?.percent || 0;
+    const marketFeeAmount = (assetAmount * marketFeePercent) / 100;
+
+    // Return amount after market fees are deducted
+    return assetAmount - marketFeeAmount;
+}
+
+/**
+ * Internal function to fetch blockchain operation fees
+ */
+async function _fetchBlockchainFees(BitShares) {
+    try {
+        const globalProps = await BitShares.db.getGlobalProperties();
+        const currentFees = globalProps.parameters.current_fees;
+
+        const fees = {
+            limitOrderCreate: { raw: 0, satoshis: 0, bts: 0 },
+            limitOrderCancel: { raw: 0, satoshis: 0, bts: 0 },
+            limitOrderUpdate: { raw: 0, satoshis: 0, bts: 0 }
+        };
+
+        // Extract fees from the parameters array
+        for (let i = 0; i < currentFees.parameters.length; i++) {
+            const param = currentFees.parameters[i];
+            if (!param || param.length < 2) continue;
+
+            const opCode = param[0];
+            const feeData = param[1];
+
+            if (opCode === 1 && feeData.fee !== undefined) {
+                // Operation 1: limit_order_create
+                fees.limitOrderCreate = {
+                    raw: feeData.fee,
+                    satoshis: Number(feeData.fee),
+                    bts: blockchainToFloat(feeData.fee, 5)
+                };
+            } else if (opCode === 2 && feeData.fee !== undefined) {
+                // Operation 2: limit_order_cancel
+                fees.limitOrderCancel = {
+                    raw: feeData.fee,
+                    satoshis: Number(feeData.fee),
+                    bts: blockchainToFloat(feeData.fee, 5)
+                };
+            } else if (opCode === 77 && feeData.fee !== undefined) {
+                // Operation 77: limit_order_update
+                fees.limitOrderUpdate = {
+                    raw: feeData.fee,
+                    satoshis: Number(feeData.fee),
+                    bts: blockchainToFloat(feeData.fee, 5)
+                };
+            }
+        }
+
+        return fees;
+    } catch (error) {
+        throw new Error(`Failed to fetch blockchain fees: ${error.message}`);
+    }
+}
+
+/**
+ * Internal function to fetch market fees for a specific asset
+ */
+async function _fetchAssetMarketFees(assetSymbol, BitShares) {
+    try {
+        const assetData = await BitShares.db.lookupAssetSymbols([assetSymbol]);
+        if (!assetData || !assetData[0]) {
+            throw new Error(`Asset ${assetSymbol} not found`);
+        }
+
+        const assetId = assetData[0].id;
+        const fullAssets = await BitShares.db.getAssets([assetId]);
+        if (!fullAssets || !fullAssets[0]) {
+            throw new Error(`Could not fetch full data for ${assetSymbol}`);
+        }
+
+        const fullAsset = fullAssets[0];
+        const options = fullAsset.options || {};
+
+        const marketFeeBasisPoints = options.market_fee_percent || 0;
+        const marketFeePercent = marketFeeBasisPoints / 100;
+
+        // Extract taker fee from extensions
+        let takerFeePercent = null;
+        if (options.extensions && typeof options.extensions === 'object') {
+            if (options.extensions.taker_fee_percent !== undefined) {
+                const value = Number(options.extensions.taker_fee_percent || 0);
+                takerFeePercent = value / 100;
+            }
+        }
+
+        // Check if taker_fee_percent exists directly in options
+        if (takerFeePercent === null && options.taker_fee_percent !== undefined) {
+            const value = Number(options.taker_fee_percent || 0);
+            takerFeePercent = value / 100;
+        }
+
+        return {
+            assetId: assetId,
+            symbol: assetSymbol,
+            precision: fullAsset.precision,
+            marketFee: {
+                basisPoints: marketFeeBasisPoints,
+                percent: marketFeePercent
+            },
+            takerFee: takerFeePercent !== null ? { percent: takerFeePercent } : null,
+            maxMarketFee: {
+                raw: options.max_market_fee || 0,
+                float: blockchainToFloat(options.max_market_fee || 0, fullAsset.precision)
+            },
+            issuer: fullAsset.issuer
+        };
+    } catch (error) {
+        throw new Error(`Failed to fetch market fees for ${assetSymbol}: ${error.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 module.exports = {
@@ -679,5 +905,11 @@ module.exports = {
     lookupAsset,
     deriveMarketPrice,
     derivePoolPrice,
-    derivePrice
+    derivePrice,
+
+    // Fee caching and retrieval
+    initializeFeeCache,
+    getCachedFees,
+    clearFeeCache,
+    getAssetFees
 };

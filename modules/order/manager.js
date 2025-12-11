@@ -35,7 +35,7 @@
  * 4. After rotation: pendingProceeds cleared as funds are consumed by new orders
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS } = require('./constants');
-const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize } = require('./utils');
+const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees } = require('./utils');
 const Logger = require('./logger');
 // Grid functions (initialize/recalculate) are intended to be
 // called directly via require('./grid').initializeGrid(manager) by callers.
@@ -351,7 +351,8 @@ class OrderManager {
                 grid: { buy: 0, sell: 0 },
                 chain: { buy: 0, sell: 0 }
             },
-            pendingProceeds: { buy: 0, sell: 0 }  // Proceeds from fills awaiting rotation
+            pendingProceeds: { buy: 0, sell: 0 },  // Proceeds from fills awaiting rotation
+            btsFeesOwed: 0  // BTS blockchain fees from filled orders (only if BTS is in pair)
         };
         // Make reserved an alias for virtuel
         this.funds.reserved = this.funds.virtuel;
@@ -1141,9 +1142,13 @@ class OrderManager {
         let deltaBuyTotal = 0;
         let deltaSellTotal = 0;
 
+        // Check if BTS is in the trading pair and track BTS fees only if it is
+        const hasBtsPair = this.config.assetA === 'BTS' || this.config.assetB === 'BTS';
+        let btsFeesDuedThisFill = 0;
+
         for (const filledOrder of filledOrders) {
             filledCounts[filledOrder.type]++;
-            
+
             // Calculate proceeds before converting to SPREAD
             if (filledOrder.type === ORDER_TYPES.SELL) {
                 const proceeds = filledOrder.size * filledOrder.price;
@@ -1156,6 +1161,13 @@ class OrderManager {
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed`, 'info');
+
+                // Add BTS blockchain fees if BTS is in pair (quote asset fee only when selling)
+                if (hasBtsPair && this.config.assetB === 'BTS') {
+                    const btsFee = getAssetFees('BTS', filledOrder.size);
+                    btsFeesDuedThisFill += btsFee;
+                    this.logger.log(`BTS blockchain fee for sell order: ${btsFee.toFixed(8)} BTS`, 'debug');
+                }
             } else {
                 const proceeds = filledOrder.size / filledOrder.price;
                 proceedsSell += proceeds;  // Collect, don't add yet
@@ -1167,8 +1179,15 @@ class OrderManager {
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed`, 'info');
+
+                // Add BTS blockchain fees if BTS is in pair (base asset fee only when buying)
+                if (hasBtsPair && this.config.assetA === 'BTS') {
+                    const btsFee = getAssetFees('BTS', filledOrder.size);
+                    btsFeesDuedThisFill += btsFee;
+                    this.logger.log(`BTS blockchain fee for buy order: ${btsFee.toFixed(8)} BTS`, 'debug');
+                }
             }
-            
+
             // Convert directly to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
             // Create copy for update
             const updatedOrder = { ...filledOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
@@ -1176,6 +1195,12 @@ class OrderManager {
 
             this.currentSpreadCount++;
             this.logger.log(`Converted order ${filledOrder.id} to SPREAD`, 'debug');
+        }
+
+        // Accumulate BTS fees if applicable
+        if (hasBtsPair && btsFeesDuedThisFill > 0) {
+            this.funds.btsFeesOwed += btsFeesDuedThisFill;
+            this.logger.log(`Total BTS fees owed accumulated: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
         }
 
         // Apply proceeds directly to accountTotals so availability reflects fills immediately (no waiting for a chain refresh)
@@ -1528,7 +1553,22 @@ class OrderManager {
         // Calculate new order size using proceeds from this rotation cycle
         // Prefer pendingProceeds so sizes match the just-filled funds, not unrelated chainFree
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        const availableFunds = this.funds.pendingProceeds?.[side] ?? 0;
+        let availableFunds = this.funds.pendingProceeds?.[side] ?? 0;
+
+        // Reduce available funds by BTS blockchain fees if BTS is in the pair
+        // BTS fees are deducted from the buy side (quote asset) when BTS is assetB
+        // BTS fees are deducted from the sell side (base asset) when BTS is assetA
+        const hasBtsPair = this.config.assetA === 'BTS' || this.config.assetB === 'BTS';
+        if (hasBtsPair && this.funds.btsFeesOwed > 0) {
+            const isBtsOnThisSide = (side === 'buy' && this.config.assetB === 'BTS') || (side === 'sell' && this.config.assetA === 'BTS');
+            if (isBtsOnThisSide) {
+                const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, availableFunds);
+                availableFunds -= feesOwedThisSide;
+                this.funds.btsFeesOwed -= feesOwedThisSide;
+                this.logger.log(`Reducing ${side}-side order by BTS fees: ${feesOwedThisSide.toFixed(8)} BTS. Remaining fees: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
+            }
+        }
+
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
         const fundsPerOrder = orderCount > 0 ? availableFunds / orderCount : 0;
 
