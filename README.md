@@ -242,7 +242,7 @@ Committed: Buy 8676.13 USD | Sell 0.12420407 BTC
 
 ## 🔍 Advanced Features
 
-### Atomic Updates & Partial Order State Management
+### ⚛️ Atomic Updates & Partial Order State Management
 DEXBot handles filled orders and partial fills with atomic transactions across all operations:
 - **Partial Fills**: Remaining portion tracked in `PARTIAL` state instead of cancellation
 - **Atomic Moves**: Partial orders moved to new price levels in single transaction
@@ -254,7 +254,7 @@ DEXBot handles filled orders and partial fills with atomic transactions across a
 
 This comprehensive fill handling ensures capital efficiency, eliminates orphaned orders or stuck funds, and guarantees consistency across all order state changes.
 
-### Fill Deduplication
+### 🔗 Fill Deduplication
 Fills are tracked with a 5-second deduplication window to prevent duplicate order processing. This ensures reliable fill detection even if the same fill event arrives multiple times.
 
 ### 🔢 Price Tolerance & Integer Rounding
