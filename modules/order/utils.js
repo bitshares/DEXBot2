@@ -94,7 +94,18 @@ function blockchainToFloat(intValue, precision) {
 
 function floatToBlockchainInt(floatValue, precision) {
     const p = Number(precision || 0);
-    return Math.round(Number(floatValue) * Math.pow(10, p));
+    const scaled = Math.round(Number(floatValue) * Math.pow(10, p));
+
+    // 64-bit signed integer limits: -(2^63) to (2^63 - 1)
+    const MAX_INT64 = 9223372036854775807;
+    const MIN_INT64 = -9223372036854775808;
+
+    if (scaled > MAX_INT64 || scaled < MIN_INT64) {
+        console.warn(`[floatToBlockchainInt] Overflow detected: ${floatValue} with precision ${p} resulted in ${scaled}. Clamping to safe limits.`);
+        return scaled > 0 ? MAX_INT64 : MIN_INT64;
+    }
+
+    return scaled;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +150,38 @@ function checkPriceWithinTolerance(gridOrder, chainOrder, assets = null) {
         chainPrice,
         orderSize
     };
+}
+
+/**
+ * Validate that calculated order amounts won't exceed 64-bit integer limits.
+ * Returns true if amounts are safe, false if they would overflow.
+ * @param {number} amountToSell - Amount to sell (in float)
+ * @param {number} minToReceive - Minimum to receive (in float)
+ * @param {number} sellPrecision - Precision of sell asset
+ * @param {number} receivePrecision - Precision of receive asset
+ * @returns {boolean} true if amounts are within safe limits
+ */
+function validateOrderAmountsWithinLimits(amountToSell, minToReceive, sellPrecision, receivePrecision) {
+    const MAX_INT64 = 9223372036854775807;
+
+    const sellPrecFloat = Math.pow(10, sellPrecision || 0);
+    const receivePrecFloat = Math.pow(10, receivePrecision || 0);
+
+    const sellInt = Math.round(Number(amountToSell) * sellPrecFloat);
+    const receiveInt = Math.round(Number(minToReceive) * receivePrecFloat);
+
+    const withinLimits = sellInt <= MAX_INT64 && receiveInt <= MAX_INT64 && sellInt > 0 && receiveInt > 0;
+
+    if (!withinLimits) {
+        console.warn(
+            `[validateOrderAmountsWithinLimits] Order amounts exceed safe limits. ` +
+            `Sell: ${amountToSell} (precision ${sellPrecision}) = ${sellInt}, ` +
+            `Receive: ${minToReceive} (precision ${receivePrecision}) = ${receiveInt}. ` +
+            `Max allowed: ${MAX_INT64}`
+        );
+    }
+
+    return withinLimits;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +661,7 @@ module.exports = {
     // Tolerance & checks
     calculatePriceTolerance,
     checkPriceWithinTolerance,
+    validateOrderAmountsWithinLimits,
 
     // Parsing + matching
     parseChainOrder,
