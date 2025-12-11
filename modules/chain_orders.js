@@ -12,7 +12,7 @@
  * and converted to blockchain integers internally using asset precision.
  */
 const { BitShares, createAccountClient, waitForConnected } = require('./bitshares_client');
-const { floatToBlockchainInt, blockchainToFloat } = require('./order/utils');
+const { floatToBlockchainInt, blockchainToFloat, validateOrderAmountsWithinLimits } = require('./order/utils');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -317,6 +317,16 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
 
     const newSellFloat = (newParams.amountToSell !== undefined && newParams.amountToSell !== null) ? newParams.amountToSell : currentSellFloat;
     const newReceiveFloat = (newParams.minToReceive !== undefined && newParams.minToReceive !== null) ? newParams.minToReceive : calculatedReceiveFloat;
+
+    // Validate amounts before converting to blockchain integers
+    if (!validateOrderAmountsWithinLimits(newSellFloat, newReceiveFloat, sellPrecision, receivePrecision)) {
+        throw new Error(
+            `Cannot update order: calculated amounts exceed blockchain limits. ` +
+            `Sell: ${newSellFloat}, Receive: ${newReceiveFloat}. ` +
+            `This typically happens with extreme price values or mixed absolute/relative price bounds that diverge too far. ` +
+            `Consider adjusting minPrice/maxPrice configuration.`
+        );
+    }
 
     const newSellInt = floatToBlockchainInt(newSellFloat, sellPrecision);
     const newReceiveInt = floatToBlockchainInt(newReceiveFloat, receivePrecision);

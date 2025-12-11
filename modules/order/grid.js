@@ -165,6 +165,16 @@ class Grid {
         const { incrementPercent, weightDistribution: { sell: sellWeight, buy: buyWeight } } = config;
         const incrementFactor = incrementPercent / 100;
 
+        // Validate weight distribution is within acceptable range (-1 to 2)
+        const MIN_WEIGHT = -1;
+        const MAX_WEIGHT = 2;
+        if (!Number.isFinite(sellWeight) || sellWeight < MIN_WEIGHT || sellWeight > MAX_WEIGHT) {
+            throw new Error(`Invalid sell weight distribution: ${sellWeight}. Must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
+        }
+        if (!Number.isFinite(buyWeight) || buyWeight < MIN_WEIGHT || buyWeight > MAX_WEIGHT) {
+            throw new Error(`Invalid buy weight distribution: ${buyWeight}. Must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
+        }
+
         // side: 'sell' or 'buy' - explicit instead of comparing weights
         // minSize: enforce a minimum human-unit size per order; allocations below
         // minSize are removed and their funds redistributed among remaining orders.
@@ -294,6 +304,35 @@ class Grid {
             }
         }
 
+        // =====================================================================
+        // PRICE BOUNDS RESOLUTION - Supports Mixed Absolute & Relative Formats
+        // =====================================================================
+        //
+        // minPrice and maxPrice can be configured in two formats:
+        //
+        // 1. ABSOLUTE prices (numeric): "0.55" or 0.55
+        //    - Fixed price bound regardless of market price
+        //    - Example: minPrice = 0.55 always means 0.55
+        //
+        // 2. RELATIVE multipliers (with 'x' suffix): "15x" or "4x"
+        //    - Dynamic bound based on current market price
+        //    - For minPrice: resolves as marketPrice / multiplier
+        //    - For maxPrice: resolves as marketPrice * multiplier
+        //    - Example: maxPrice = "15x" at market price 0.64 = 0.64 * 15 = 9.6
+        //
+        // MIXED FORMAT EXAMPLE:
+        //   minPrice: "0.55" (absolute - keeps minimum bound fixed)
+        //   maxPrice: "15x" (relative - scales with market price)
+        //
+        // IMPORTANT: When mixing formats, ensure bounds don't create
+        // unrealistic price ranges that could cause extreme order sizes
+        // and overflow the 64-bit blockchain limits.
+        //
+        // Resolution order (for each bound):
+        // 1. Try to parse as relative multiplier (e.g., "5x")
+        // 2. If that fails, try to parse as numeric absolute price
+        // 3. If that fails, use fallback from DEFAULT_CONFIG
+        //
         const mp = Number(manager.config.marketPrice);
         const fallbackMin = Number(DEFAULT_CONFIG.minPrice);
         const fallbackMax = Number(DEFAULT_CONFIG.maxPrice);

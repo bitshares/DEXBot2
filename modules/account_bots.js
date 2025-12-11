@@ -119,6 +119,24 @@ function askNumber(promptText, defaultValue) {
     return parsed;
 }
 
+function askWeightDistribution(promptText, defaultValue) {
+    const MIN_WEIGHT = -1;
+    const MAX_WEIGHT = 2;
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askWeightDistribution(promptText, defaultValue);
+    }
+    if (parsed < MIN_WEIGHT || parsed > MAX_WEIGHT) {
+        console.log(`Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
+        return askWeightDistribution(promptText, defaultValue);
+    }
+    return parsed;
+}
+
 function isMultiplierString(value) {
     return typeof value === 'string' && /^[\s]*[0-9]+(?:\.[0-9]+)?x[\s]*$/i.test(value);
 }
@@ -206,8 +224,8 @@ async function promptBotData(base = {}) {
     const maxPrice = askNumberOrMultiplier('maxPrice', base.maxPrice !== undefined ? base.maxPrice : DEFAULT_CONFIG.maxPrice);
     const incrementPercent = askNumber('incrementPercent', base.incrementPercent !== undefined ? base.incrementPercent : DEFAULT_CONFIG.incrementPercent);
     const targetSpreadPercent = askNumber('targetSpreadPercent', base.targetSpreadPercent !== undefined ? base.targetSpreadPercent : DEFAULT_CONFIG.targetSpreadPercent);
-    const weightSell = askNumber('Weight distribution (sell)', base.weightDistribution && base.weightDistribution.sell !== undefined ? base.weightDistribution.sell : DEFAULT_CONFIG.weightDistribution.sell);
-    const weightBuy = askNumber('Weight distribution (buy)', base.weightDistribution && base.weightDistribution.buy !== undefined ? base.weightDistribution.buy : DEFAULT_CONFIG.weightDistribution.buy);
+    const weightSell = askWeightDistribution('Weight distribution (sell)', base.weightDistribution && base.weightDistribution.sell !== undefined ? base.weightDistribution.sell : DEFAULT_CONFIG.weightDistribution.sell);
+    const weightBuy = askWeightDistribution('Weight distribution (buy)', base.weightDistribution && base.weightDistribution.buy !== undefined ? base.weightDistribution.buy : DEFAULT_CONFIG.weightDistribution.buy);
     // Prompt sell first, then buy to make the config output match the desired ordering
     const fundsSell = askNumberOrPercentage('botFunds sell amount', base.botFunds && base.botFunds.sell !== undefined ? base.botFunds.sell : DEFAULT_CONFIG.botFunds.sell);
     const fundsBuy = askNumberOrPercentage('botFunds buy amount', base.botFunds && base.botFunds.buy !== undefined ? base.botFunds.buy : DEFAULT_CONFIG.botFunds.buy);
