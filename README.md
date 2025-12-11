@@ -33,6 +33,22 @@ node dexbot keys
 node dexbot bots
 ```
 
+### Updating DEXBot2
+
+To update DEXBot2 to the latest version from the main branch:
+
+```bash
+# Run the update script from project root
+bash scripts/update.sh
+```
+
+The update script automatically:
+- Fetches and pulls the latest code from GitHub
+- Installs any new dependencies
+- Reloads PM2 processes if running
+- Ensures your `profiles/` directory is protected and unchanged
+- Logs all operations to `update.log`
+
 ## 🔧 Configuration
 
 Define each bot in `profiles/bots.json`. A minimal structure looks like this:

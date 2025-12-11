@@ -1,12 +1,11 @@
 #!/bin/bash
-# DEXBot2 Auto Update Script
+# DEXBot2 Auto Update Script (Development Branch)
 #
-# This script automatically updates DEXBot2 from the GitHub repository
-# Usage: ./scripts/update.sh or bash scripts/update.sh
+# This script automatically updates DEXBot2 from the GitHub repository dev branch
+# Usage: ./scripts/update-dev.sh or bash scripts/update-dev.sh
 #
 # Features:
-# - Checks for updates from main branch
-# - Backs up current profiles/ directory
+# - Checks for updates from dev branch
 # - Performs git pull
 # - Installs/updates dependencies
 # - Restarts PM2 if running
@@ -23,10 +22,10 @@ NC='\033[0m' # No Color
 
 # Configuration
 REPO_URL="https://github.com/froooze/DEXBot2.git"
-REPO_BRANCH="main"
+REPO_BRANCH="dev"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-LOG_FILE="${PROJECT_ROOT}/update.log"
+LOG_FILE="${PROJECT_ROOT}/update-dev.log"
 TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
 
 # Functions
@@ -53,7 +52,7 @@ if [ ! -f "$PROJECT_ROOT/dexbot.js" ]; then
 fi
 
 log_info "=========================================="
-log_info "DEXBot2 Update Script Started"
+log_info "DEXBot2 Update Script Started (Dev Branch)"
 log_info "=========================================="
 log_info "Project Root: $PROJECT_ROOT"
 log_info "Branch: $REPO_BRANCH"
@@ -155,7 +154,7 @@ log_success "Update completed successfully!"
 log_info "=========================================="
 log_info ""
 log_info "Summary:"
-log_info "- Code updated to latest from main branch"
+log_info "- Code updated to latest from dev branch"
 log_info "- Dependencies installed"
 if command -v pm2 &> /dev/null && pm2 list | grep -q "bbot"; then
     log_info "- PM2 processes reloaded"
