@@ -860,7 +860,9 @@ function getAssetFees(assetSymbol, assetAmount) {
         const makerNetFee = orderCreationFee * 0.1; // 10% of creation fee after 90% refund
         return {
             total: makerNetFee + orderUpdateFee,
-            createFee: orderCreationFee
+            createFee: orderCreationFee,
+            updateFee: orderUpdateFee,
+            makerNetFee: makerNetFee
         };
     }
 

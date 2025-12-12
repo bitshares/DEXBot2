@@ -1215,7 +1215,6 @@ class OrderManager {
 
         // Check if BTS is in the trading pair and track BTS fees only if it is
         const hasBtsPair = this.config.assetA === 'BTS' || this.config.assetB === 'BTS';
-        let btsFeesDuedThisFill = 0;
 
         for (const filledOrder of filledOrders) {
             filledCounts[filledOrder.type]++;
@@ -1232,13 +1231,6 @@ class OrderManager {
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed`, 'info');
-
-                // Add BTS blockchain fees if BTS is in pair (quote asset fee only when selling)
-                if (hasBtsPair && this.config.assetB === 'BTS') {
-                    const btsFeeData = getAssetFees('BTS', filledOrder.size);
-                    btsFeesDuedThisFill += btsFeeData.total;
-                    this.logger.log(`BTS blockchain fee for sell order: ${btsFeeData.total.toFixed(8)} BTS`, 'debug');
-                }
             } else {
                 const proceeds = filledOrder.size / filledOrder.price;
                 proceedsSell += proceeds;  // Collect, don't add yet
@@ -1250,13 +1242,6 @@ class OrderManager {
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
                 this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed`, 'info');
-
-                // Add BTS blockchain fees if BTS is in pair (base asset fee only when buying)
-                if (hasBtsPair && this.config.assetA === 'BTS') {
-                    const btsFeeData = getAssetFees('BTS', filledOrder.size);
-                    btsFeesDuedThisFill += btsFeeData.total;
-                    this.logger.log(`BTS blockchain fee for buy order: ${btsFeeData.total.toFixed(8)} BTS`, 'debug');
-                }
             }
 
             // Convert directly to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
@@ -1268,10 +1253,13 @@ class OrderManager {
             this.logger.log(`Converted order ${filledOrder.id} to SPREAD`, 'debug');
         }
 
-        // Accumulate BTS fees if applicable
-        if (hasBtsPair && btsFeesDuedThisFill > 0) {
-            this.funds.btsFeesOwed += btsFeesDuedThisFill;
-            this.logger.log(`Total BTS fees owed accumulated: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
+        // Accumulate BTS fees based on number of fills: (number_of_fills × total_fee)
+        if (hasBtsPair && filledOrders.length > 0) {
+            const btsFeeData = getAssetFees('BTS', 0);
+            const totalFillCount = filledOrders.length;
+            const btsFeesForFills = totalFillCount * btsFeeData.total;
+            this.funds.btsFeesOwed += btsFeesForFills;
+            this.logger.log(`BTS fees for ${totalFillCount} fill(s): ${btsFeesForFills.toFixed(8)} BTS (total owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'info');
         }
 
         // Apply proceeds directly to accountTotals so availability reflects fills immediately (no waiting for a chain refresh)
@@ -1306,6 +1294,17 @@ class OrderManager {
         this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
         this._logAvailable('before rotation');
         const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds);
+
+        // Add updateFee to BTS fees if partial orders were moved during rotation
+        // Partial fills require an update operation on the blockchain, incurring an additional updateFee
+        if (hasBtsPair && newOrders.partialMoves && newOrders.partialMoves.length > 0) {
+            const btsFeeData = getAssetFees('BTS', 0); // Get updateFee from cached fees
+            const updateFeePerPartial = btsFeeData.updateFee;
+            const totalUpdateFee = updateFeePerPartial * newOrders.partialMoves.length;
+
+            this.funds.btsFeesOwed += totalUpdateFee;
+            this.logger.log(`Added updateFee for ${newOrders.partialMoves.length} partial move(s): +${totalUpdateFee.toFixed(8)} BTS (total fees owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'info');
+        }
 
         // Clear pending proceeds only for sides that had fills processed
         // (preserve pending proceeds from partial fills on the other side)
