@@ -180,24 +180,25 @@ console.log('\n=== Grid Comparison Function Tests (By Side) ===\n');
     logTest('Zero persisted size on both sides', passed, `buy=${result.buy.metric}, sell=${result.sell.metric}`);
 }
 
-// Test 9: Non-matching orders ignored per side
+// Test 9: Unmatched orders detected by grid ID - grid structure divergence
 {
     const calculated = [
-        createOrder(ORDER_TYPES.SELL, 1.0, 12),
-        createOrder(ORDER_TYPES.SELL, 0.95, 15),  // Won't match
-        createOrder(ORDER_TYPES.BUY, 0.90, 18),
-        createOrder(ORDER_TYPES.BUY, 0.85, 20)    // Won't match
+        createOrder(ORDER_TYPES.SELL, 1.0, 12, 'sell-0'),
+        createOrder(ORDER_TYPES.SELL, 0.95, 15, 'sell-1'),  // Exists in calculated but not persisted
+        createOrder(ORDER_TYPES.BUY, 0.90, 18, 'buy-0'),
+        createOrder(ORDER_TYPES.BUY, 0.85, 20, 'buy-1')     // Exists in calculated but not persisted
     ];
     const persisted = [
-        createOrder(ORDER_TYPES.SELL, 1.0, 10),
-        createOrder(ORDER_TYPES.BUY, 0.90, 15)
+        createOrder(ORDER_TYPES.SELL, 1.0, 10, 'sell-0'),   // Matches: (12-10)^2/100 = 0.04
+        createOrder(ORDER_TYPES.BUY, 0.90, 15, 'buy-0')     // Matches: (18-15)^2/225 = 0.04
     ];
     const result = Grid.compareGrids(calculated, persisted);
-    // SELL: only 1.0 matches: (12-10)^2/100 = 0.04
-    // BUY: only 0.90 matches: (18-15)^2/225 = 0.04
-    const tolerance = 0.0001;
-    const passed = Math.abs(result.sell.metric - 0.04) < tolerance && Math.abs(result.buy.metric - 0.04) < tolerance;
-    logTest('Non-matching orders ignored per side', passed, `buy=${result.buy.metric.toFixed(6)}, sell=${result.sell.metric.toFixed(6)}`);
+    // SELL: sell-0 matches (metric 0.04), sell-1 unmatched (metric 1.0) → avg = (0.04+1.0)/2 = 0.52
+    // BUY: buy-0 matches (metric 0.04), buy-1 unmatched (metric 1.0) → avg = (0.04+1.0)/2 = 0.52
+    // Now unmatched grid positions are detected as divergence (robust grid structure validation)
+    const tolerance = 0.01;
+    const passed = Math.abs(result.sell.metric - 0.52) < tolerance && Math.abs(result.buy.metric - 0.52) < tolerance;
+    logTest('Unmatched orders detected by grid ID', passed, `buy=${result.buy.metric.toFixed(6)}, sell=${result.sell.metric.toFixed(6)}`);
 }
 
 console.log('\n=== Auto-Update Tests (By Side) ===\n');

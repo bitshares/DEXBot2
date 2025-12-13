@@ -859,6 +859,10 @@ class Grid {
      * Helper method to compare orders for a single side (buy or sell).
      * Calculates normalized sum of squared relative differences.
      * 
+     * Matches orders by grid ID (buy-0, buy-1, sell-0, etc.) rather than price.
+     * This ensures comparison is stable across price changes and config drift.
+     * Unmatched orders (length mismatch) are treated as maximum divergence.
+     * 
      * @param {Array} calculatedOrders - Calculated orders for one side (BUY or SELL only)
      * @param {Array} persistedOrders - Persisted orders for same side
      * @returns {number} Metric (0 = match, higher = divergence), or 0 if no orders
@@ -873,27 +877,29 @@ class Grid {
             return 0;
         }
 
-        // Build lookup map by price for matching
+        // Build lookup map by grid ID for stable matching
         const persistedMap = new Map();
         for (const order of persistedOrders) {
-            const key = Number(order.price).toFixed(8);
-            persistedMap.set(key, order);
+            if (order.id) {
+                persistedMap.set(order.id, order);
+            }
         }
 
         let sumSquaredDiff = 0;
         let matchCount = 0;
+        let unmatchedCount = 0;
 
-        // Compare each calculated order with its persisted counterpart
+        // Compare each calculated order with its persisted counterpart by ID
         for (const calcOrder of calculatedOrders) {
-            const key = Number(calcOrder.price).toFixed(8);
-            const persOrder = persistedMap.get(key);
+            const persOrder = persistedMap.get(calcOrder.id);
 
             if (persOrder) {
+                // Matched by ID: compare sizes
                 const calcSize = Number(calcOrder.size) || 0;
                 const persSize = Number(persOrder.size) || 0;
 
-                // Only calculate relative difference if persisted size is non-zero
                 if (persSize > 0) {
+                    // Normal relative difference when both sizes are positive
                     const relativeDiff = (calcSize - persSize) / persSize;
                     sumSquaredDiff += relativeDiff * relativeDiff;
                     matchCount++;
@@ -901,12 +907,30 @@ class Grid {
                     // If persisted size is 0 but calculated size is > 0, treat as maximum divergence
                     sumSquaredDiff += 1.0;
                     matchCount++;
+                } else {
+                    // Both are zero: perfect match
+                    matchCount++;
                 }
+            } else {
+                // Unmatched by ID: grid structure mismatch (e.g., different number of orders)
+                // Treat as significant divergence
+                sumSquaredDiff += 1.0;
+                unmatchedCount++;
+            }
+        }
+
+        // Also check for persisted orders that don't exist in calculated (opposite direction)
+        for (const persOrder of persistedOrders) {
+            if (!calculatedOrders.some(c => c.id === persOrder.id)) {
+                // Persisted order has no calculated counterpart: divergence
+                sumSquaredDiff += 1.0;
+                unmatchedCount++;
             }
         }
 
         // Return normalized metric: average squared difference
-        return matchCount > 0 ? sumSquaredDiff / matchCount : 0;
+        const totalOrders = matchCount + unmatchedCount;
+        return totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
     }
 
     /**
