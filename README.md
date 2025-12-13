@@ -18,12 +18,65 @@ A sophisticated market making bot for the BitShares Decentralized Exchange (DEX)
 
 ## 📦 Installation
 
+### Prerequisites
+
+You'll need **Git** and **Node.js** installed on your system.
+
+#### Windows Users - First Time Setup
+
+If you don't have Node.js installed yet, follow these steps:
+
+**Step 1: Install Node.js**
+1. Go to [nodejs.org](https://nodejs.org/) and download the **LTS (Long Term Support)** version
+2. Run the installer and follow the prompts (accept all default settings)
+3. Restart your computer after installation completes
+4. Open Command Prompt or PowerShell and verify installation:
+   ```bash
+   node --version
+   npm --version
+   ```
+   Both commands should display version numbers if Node.js is installed correctly.
+
+**Step 2: Install Git (if not already installed)**
+1. Go to [git-scm.com](https://git-scm.com/) and download the Windows installer
+2. Run the installer and follow the prompts (accept default settings)
+3. Restart your computer
+4. Verify Git installation in Command Prompt or PowerShell:
+   ```bash
+   git --version
+   ```
+
+#### macOS Users
+
+Use Homebrew to install Node.js and Git:
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Node.js and Git
+brew install node git
+```
+
+#### Linux Users
+
+Use your package manager:
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install nodejs npm git
+
+# Fedora/RHEL
+sudo dnf install nodejs npm git
+```
+
+### Clone and Setup DEXBot2
+
 ```bash
 # Clone the repository and switch to folder
 git clone https://github.com/froooze/DEXBot2.git
 cd DEXBot2
 
-# Install dependencies (if any)
+# Install dependencies
 npm install
 
 # Set up your master password and keyring
