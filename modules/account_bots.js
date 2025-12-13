@@ -214,8 +214,8 @@ function askMarketPrice(promptText, defaultValue) {
 
 async function promptBotData(base = {}) {
     const name = askRequiredString('Bot name', base.name);
-    const assetA = await askAsset('Asset A', base.assetA);
-    const assetB = await askAsset('Asset B', base.assetB);
+    const assetA = await askAsset('Asset A for selling', base.assetA);
+    const assetB = await askAsset('Asset B for buying', base.assetB);
     const active = askBoolean('Active', base.active !== undefined ? base.active : DEFAULT_CONFIG.active);
     const dryRun = askBoolean('Dry run', base.dryRun !== undefined ? base.dryRun : DEFAULT_CONFIG.dryRun);
     const preferredAccount = askRequiredString('Preferred account', base.preferredAccount);
