@@ -59,7 +59,21 @@ const GRID_LIMITS = Object.freeze({
     // Checked independently for buy and sell sides
     // Example: If cacheFunds.buy = 100 and total.grid.buy = 1000, ratio = 10%
     // If threshold = 5%, then 10% >= 5% triggers update for buy side only
-    GRID_REGENERATION_PERCENTAGE: 1
+    GRID_REGENERATION_PERCENTAGE: 1,
+    // Grid comparison metrics
+    // Stores the normalized sum of squared relative differences between calculated and persisted grids
+    // Used to detect significant divergence between in-memory grid and persisted state
+    GRID_COMPARISON: Object.freeze({
+        // Metric: sum of ((calculated - persisted) / persisted)^2 / count
+        // Represents average squared relative error across non-spread orders
+        SUMMED_RELATIVE_SQUARED_DIFFERENCE: 'summedRelativeSquaredDiff',
+        
+        // Divergence threshold for automatic grid regeneration
+        // When compareGrids() metric exceeds this value, updateGridOrderSizes will be triggered
+        // Default: 0.01 = 1% average relative error threshold
+        // Example: 0.01 = small divergence, 0.1 = 10% error, 1.0+ = major divergence
+        DIVERGENCE_THRESHOLD: 0.01
+    })
 });
 
 module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS };

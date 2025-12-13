@@ -22,6 +22,7 @@
  * - Order activation: funds.virtuel decreases, funds.committed increases
  */
 const { ORDER_TYPES, DEFAULT_CONFIG, GRID_LIMITS } = require('./constants');
+const { GRID_COMPARISON } = GRID_LIMITS;
 const { floatToBlockchainInt, resolveRelativePrice } = require('./utils');
 
 // Grid sizing limits are centralized in modules/order/constants.js -> GRID_LIMITS
@@ -743,6 +744,169 @@ class Grid {
         manager.logger?.log('Grid order sizes updated', 'info');
         manager.logger?.logFundsStatus && manager.logger.logFundsStatus(manager);
         manager.logger?.logOrderGrid && manager.logger.logOrderGrid(Array.from(manager.orders.values()), config.marketPrice);
+    }
+
+    /**
+     * Compare calculated grid with persisted grid (separately by side) and return metrics.
+     * Independently compares buy and sell orders, calculates relative squared differences,
+     * then triggers updateGridOrderSizesForSide for each side exceeding threshold.
+     * 
+     * Metric formula: sum of ((calculatedSize - persistedSize) / persistedSize)^2 / count per side
+     * 
+     * This metric helps detect significant divergence between the current in-memory grid
+     * (after updateGridOrderSizes) and what was previously persisted to disk.
+     * 
+     * When a side's metric exceeds GRID_COMPARISON.DIVERGENCE_THRESHOLD, automatically triggers
+     * updateGridOrderSizesForSide to regenerate sizes for that side only.
+     * 
+     * @param {Array} calculatedGrid - Current grid orders from manager (result of updateGridOrderSizes)
+     * @param {Array} persistedGrid - Grid orders loaded from orders.json
+     * @param {Object} [manager] - OrderManager instance (optional, required to trigger auto-update)
+     * @param {Object} [cacheFunds] - Cached funds { buy, sell } (optional, used for auto-update)
+     * @returns {Object} Comparison results:
+     *   {
+     *     buy: { metric: number, updated: boolean },
+     *     sell: { metric: number, updated: boolean },
+     *     totalMetric: number (average of buy and sell)
+     *   }
+     *   Each metric: 0 = perfect match, higher = more divergence
+     *   updated: true if auto-update was triggered for that side
+     * 
+     * @example
+     * // Compare with auto-update by side
+     * const result = Grid.compareGrids(
+     *   Array.from(manager.orders.values()),
+     *   accountOrders.loadBotGrid(botKey),
+     *   manager,
+     *   accountOrders.loadCacheFunds(botKey)
+     * );
+     * console.log(`Buy divergence: ${result.buy.metric.toFixed(6)}, updated: ${result.buy.updated}`);
+     * console.log(`Sell divergence: ${result.sell.metric.toFixed(6)}, updated: ${result.sell.updated}`);
+     */
+    static compareGrids(calculatedGrid, persistedGrid, manager = null, cacheFunds = null) {
+        if (!Array.isArray(calculatedGrid) || !Array.isArray(persistedGrid)) {
+            return { buy: { metric: 0, updated: false }, sell: { metric: 0, updated: false }, totalMetric: 0 };
+        }
+
+        // Separate orders by type for independent comparison
+        const calculatedBuys = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.BUY);
+        const calculatedSells = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.SELL);
+        const persistedBuys = persistedGrid.filter(o => o && o.type === ORDER_TYPES.BUY);
+        const persistedSells = persistedGrid.filter(o => o && o.type === ORDER_TYPES.SELL);
+
+        // Compare each side independently
+        const buyMetric = Grid._compareGridSide(calculatedBuys, persistedBuys);
+        const sellMetric = Grid._compareGridSide(calculatedSells, persistedSells);
+
+        // Calculate average metric
+        let totalMetric = 0;
+        if (buyMetric >= 0 && sellMetric >= 0) {
+            totalMetric = (buyMetric + sellMetric) / 2;
+        } else if (buyMetric >= 0) {
+            totalMetric = buyMetric;
+        } else if (sellMetric >= 0) {
+            totalMetric = sellMetric;
+        }
+
+        // Track which sides were updated
+        let buyUpdated = false;
+        let sellUpdated = false;
+
+        // Trigger auto-update for BUY side if metric exceeds threshold
+        if (manager && buyMetric > GRID_COMPARISON.DIVERGENCE_THRESHOLD) {
+            const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD;
+            manager.logger?.log?.(
+                `Buy side divergence metric ${buyMetric.toFixed(6)} exceeds threshold ${threshold.toFixed(6)}. Triggering updateGridOrderSizesForSide...`,
+                'info'
+            );
+            
+            const funds = cacheFunds || { buy: 0, sell: 0 };
+            Grid.updateGridOrderSizesForSide(manager, ORDER_TYPES.BUY, funds);
+            buyUpdated = true;
+            
+            manager.logger?.log?.(
+                `Buy side order sizes updated due to high divergence metric (${buyMetric.toFixed(6)})`,
+                'info'
+            );
+        }
+
+        // Trigger auto-update for SELL side if metric exceeds threshold
+        if (manager && sellMetric > GRID_COMPARISON.DIVERGENCE_THRESHOLD) {
+            const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD;
+            manager.logger?.log?.(
+                `Sell side divergence metric ${sellMetric.toFixed(6)} exceeds threshold ${threshold.toFixed(6)}. Triggering updateGridOrderSizesForSide...`,
+                'info'
+            );
+            
+            const funds = cacheFunds || { buy: 0, sell: 0 };
+            Grid.updateGridOrderSizesForSide(manager, ORDER_TYPES.SELL, funds);
+            sellUpdated = true;
+            
+            manager.logger?.log?.(
+                `Sell side order sizes updated due to high divergence metric (${sellMetric.toFixed(6)})`,
+                'info'
+            );
+        }
+
+        return {
+            buy: { metric: buyMetric, updated: buyUpdated },
+            sell: { metric: sellMetric, updated: sellUpdated },
+            totalMetric: totalMetric
+        };
+    }
+
+    /**
+     * Helper method to compare orders for a single side (buy or sell).
+     * Calculates normalized sum of squared relative differences.
+     * 
+     * @param {Array} calculatedOrders - Calculated orders for one side (BUY or SELL only)
+     * @param {Array} persistedOrders - Persisted orders for same side
+     * @returns {number} Metric (0 = match, higher = divergence), or 0 if no orders
+     * @private
+     */
+    static _compareGridSide(calculatedOrders, persistedOrders) {
+        if (!Array.isArray(calculatedOrders) || !Array.isArray(persistedOrders)) {
+            return 0;
+        }
+
+        if (calculatedOrders.length === 0 && persistedOrders.length === 0) {
+            return 0;
+        }
+
+        // Build lookup map by price for matching
+        const persistedMap = new Map();
+        for (const order of persistedOrders) {
+            const key = Number(order.price).toFixed(8);
+            persistedMap.set(key, order);
+        }
+
+        let sumSquaredDiff = 0;
+        let matchCount = 0;
+
+        // Compare each calculated order with its persisted counterpart
+        for (const calcOrder of calculatedOrders) {
+            const key = Number(calcOrder.price).toFixed(8);
+            const persOrder = persistedMap.get(key);
+
+            if (persOrder) {
+                const calcSize = Number(calcOrder.size) || 0;
+                const persSize = Number(persOrder.size) || 0;
+
+                // Only calculate relative difference if persisted size is non-zero
+                if (persSize > 0) {
+                    const relativeDiff = (calcSize - persSize) / persSize;
+                    sumSquaredDiff += relativeDiff * relativeDiff;
+                    matchCount++;
+                } else if (calcSize > 0) {
+                    // If persisted size is 0 but calculated size is > 0, treat as maximum divergence
+                    sumSquaredDiff += 1.0;
+                    matchCount++;
+                }
+            }
+        }
+
+        // Return normalized metric: average squared difference
+        return matchCount > 0 ? sumSquaredDiff / matchCount : 0;
     }
 
     /**

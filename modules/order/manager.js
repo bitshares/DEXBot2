@@ -1694,8 +1694,39 @@ class OrderManager {
         const EPS = 1e-12;
         if (availableFunds - allocatedSum > EPS) {
             surplus = availableFunds - allocatedSum;
-            this.funds.cacheFunds[side] = (this.funds.cacheFunds[side] || 0) + surplus;
+            const oldCacheFundsValue = this.funds.cacheFunds[side] || 0;
+            const newCacheFundsValue = oldCacheFundsValue + surplus;
+            this.funds.cacheFunds[side] = newCacheFundsValue;
             this.logger.log(`Allocated sum (${allocatedSum.toFixed(8)}) smaller than available (${availableFunds.toFixed(8)}). Adding surplus ${surplus.toFixed(8)} to cacheFunds.${side}`, 'info');
+            
+            // Persist cacheFunds and trigger grid comparison when value changes
+            try {
+                const { AccountOrders } = require('../account_orders');
+                if (this.config && this.config.botKey) {
+                    const accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
+                    accountDb.updateCacheFunds(this.config.botKey, this.funds.cacheFunds);
+                    this.logger.log(`Persisted cacheFunds.${side} = ${newCacheFundsValue.toFixed(8)}`, 'debug');
+                }
+                
+                // Trigger grid comparison to detect divergence after cacheFunds change
+                const { Grid } = require('./grid');
+                const persistedGrid = accountDb?.loadBotGrid(this.config.botKey) || [];
+                const calculatedGrid = Array.from(this.orders.values());
+                
+                const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, this, this.funds.cacheFunds);
+                
+                if (comparisonResult.buy.metric > 0 || comparisonResult.sell.metric > 0) {
+                    this.logger.log(
+                        `Grid divergence detected after cacheFunds change: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`,
+                        'info'
+                    );
+                }
+            } catch (err) {
+                this.logger?.log && this.logger.log(
+                    `Warning: Could not persist/compare grid after cacheFunds update: ${err.message}`,
+                    'warn'
+                );
+            }
         }
 
         // Track remaining funds locally since this.funds.available gets reset by recalculateFunds
