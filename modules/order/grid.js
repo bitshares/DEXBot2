@@ -476,11 +476,10 @@ class Grid {
         Object.values(manager._ordersByState).forEach(set => set.clear());
         Object.values(manager._ordersByType).forEach(set => set.clear());
         
-        // CRITICAL: Preserve pendingProceeds before reset, as they contain fill proceeds awaiting rotation
-        const savedPendingProceeds = { ...manager.funds.pendingProceeds };
+        // NOTE: pendingProceeds are RESET during grid initialization (full regeneration)
+        // They will be restored from persistence if needed during bot startup
         manager.resetFunds();
-        // Restore preserved pendingProceeds after reset
-        manager.funds.pendingProceeds = { ...savedPendingProceeds };
+        // Do NOT preserve pendingProceeds here - grid regeneration clears all state
         
         sizedOrders.forEach(order => {
             manager._updateOrder(order);
