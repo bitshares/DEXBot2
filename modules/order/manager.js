@@ -1016,7 +1016,6 @@ class OrderManager {
                     const gridOrder = findMatchingGridOrderByOpenOrder(parsedOrder, { orders: this.orders, ordersByState: this._ordersByState, assets: this.assets, calcToleranceFn: (p, s, t) => calculatePriceTolerance(p, s, t, this.assets), logger: this.logger });
                     if (gridOrder) {
                         matchedChainOrders.add(parsedOrder.orderId);
-                        this.logger.log(`Matched chain ${parsedOrder.orderId} to grid ${gridOrder.id} (state was ${gridOrder.state})`, 'info');
 
                         // IMPORTANT: do NOT mutate the existing order object in-place.
                         // _updateOrder uses the previously stored object's state/type to update indices.
