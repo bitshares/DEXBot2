@@ -1450,6 +1450,7 @@ class OrderManager {
                     ORDER_TYPES.BUY,
                     count,
                     excludeOrderIds,
+                    filledCounts[ORDER_TYPES.SELL],
                     {
                         avoidPrices: partialMoves.map(m => m.newPrice),
                         preferredSlots: partialMoves
@@ -1497,6 +1498,7 @@ class OrderManager {
                     ORDER_TYPES.SELL,
                     count,
                     excludeOrderIds,
+                    filledCounts[ORDER_TYPES.BUY],
                     {
                         avoidPrices: partialMoves.map(m => m.newPrice),
                         preferredSlots: partialMoves
@@ -1593,7 +1595,7 @@ class OrderManager {
     * @param {string|null} options.overrideGridId - If provided, use this grid slot (and its price) as the first rotation target instead of a spread slot
      * @returns {Array} Array of rotation objects { oldOrder, newPrice, newSize, newGridId }
      */
-    async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), options = {}) {
+    async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), filledCount = 0, options = {}) {
         if (count <= 0) return [];
 
         // Get orderIds that are pending price correction - exclude these from rotation
@@ -1715,23 +1717,79 @@ class OrderManager {
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
         const simpleDistribution = orderCount > 0 ? availableFunds / orderCount : 0;
 
-        // Calculate geometric distribution. Cap only on the total value by scaling if needed.
+        // Calculate geometric distribution across ALL grid slots
+        // This ensures the rotation order size reflects what a full grid reset would allocate
         let geometricSizes = [];
         let allocatedSizes = [];
         let allocatedSum = 0;
         if (orderCount > 0) {
             const Grid = require('./grid');
-            geometricSizes = Grid.calculateRotationOrderSizes(
-                availableFunds,
-                0, // no existing grid for new orders
-                orderCount,
-                targetType,
+            
+            // Get all orders on this side (both ACTIVE and VIRTUAL)
+            // CRITICAL: Add filledCount to account for filled orders that were just converted to SPREAD placeholders
+            // When opposite-side orders fill, they're converted to SPREAD orders, expanding the total grid
+            const allOrdersOnSide = [
+                ...this.getOrdersByTypeAndState(targetType, ORDER_STATES.ACTIVE),
+                ...this.getOrdersByTypeAndState(targetType, ORDER_STATES.VIRTUAL)
+            ];
+            const totalSlots = allOrdersOnSide.length + filledCount;
+            
+            // Get total funds using the same snapshot method as grid initialization
+            const snapshot = this.getChainFundsSnapshot ? this.getChainFundsSnapshot() : {
+                allocatedBuy: this.funds.total.chain.buy || 0,
+                allocatedSell: this.funds.total.chain.sell || 0
+            };
+            const totalFunds = side === 'sell' ? snapshot.allocatedSell : snapshot.allocatedBuy;
+            
+            // Create dummy orders matching the actual grid structure (all active + virtual)
+            const dummyOrders = Array(totalSlots).fill(null).map((_, i) => ({
+                id: `dummy-${i}`,
+                type: targetType,
+                price: 0 // price doesn't matter for sizing
+            }));
+            
+            // Calculate sizes using the same logic as grid.initializeGrid
+            const precision = side === 'buy' ? (this.assets?.assetB?.precision ?? 8) : (this.assets?.assetA?.precision ?? 8);
+            const sellFunds = side === 'sell' ? totalFunds : 0;
+            const buyFunds = side === 'buy' ? totalFunds : 0;
+            
+            const sizedOrders = Grid.calculateOrderSizes(
+                dummyOrders,
                 this.config,
-                0, // no min size
-                side === 'buy' ? (this.assets?.assetB?.precision ?? 8) : (this.assets?.assetA?.precision ?? 8)
+                sellFunds,
+                buyFunds,
+                0,  // minSellSize
+                0,  // minBuySize
+                precision,
+                precision
             );
-
+            
+            // Extract sizes for the orders being rotated
+            geometricSizes = sizedOrders.slice(0, orderCount).map(o => o.size);
+            
             const totalGeometric = geometricSizes.reduce((s, v) => s + (Number(v) || 0), 0);
+            const totalAllSlots = sizedOrders.reduce((s, o) => s + (Number(o.size) || 0), 0);
+            const weight = side === 'buy' ? this.config.weightDistribution?.buy : this.config.weightDistribution?.sell;
+
+            // DEBUG: show detailed geometric calculation
+            try {
+                this.logger?.log?.(
+                    `DEBUG Rotation Details: side=${side}, totalSlots=${totalSlots} (ACTIVE+VIRTUAL), weight=${weight}, orderCount=${orderCount}`,
+                    'debug'
+                );
+                this.logger?.log?.(
+                    `DEBUG Funds: chainSnapshot=${totalFunds.toFixed(8)}`,
+                    'debug'
+                );
+                this.logger?.log?.(
+                    `DEBUG AllSlots: [${sizedOrders.map(o => Number(o.size).toFixed(8)).join(', ')}], sum=${totalAllSlots.toFixed(8)}`,
+                    'debug'
+                );
+                this.logger?.log?.(
+                    `DEBUG Rotation: geometric=[${geometricSizes.map(s => Number(s).toFixed(8)).join(', ')}], totalGeometric=${totalGeometric.toFixed(8)}`,
+                    'debug'
+                );
+            } catch (e) { this.logger?.log?.(`Warning: failed to log rotation geometric details: ${e.message}`, 'warn'); }
 
             if (totalGeometric > 0 && totalGeometric > availableFunds) {
                 // Scale down all geometric sizes proportionally so the total equals availableFunds
@@ -1742,6 +1800,7 @@ class OrderManager {
                     allocatedSizes.push(allocated);
                     allocatedSum += allocated;
                 }
+                try { this.logger?.log?.(`DEBUG Rotation Scaled Allocated: [${allocatedSizes.map(s => Number(s).toFixed(8)).join(', ')}], sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log scaled allocated sizes: ${e.message}`, 'warn'); }
             } else {
                 // Use geometric sizes as-is (may sum to less than availableFunds)
                 for (let i = 0; i < orderCount; i++) {
@@ -1749,6 +1808,7 @@ class OrderManager {
                     allocatedSizes.push(g);
                     allocatedSum += g;
                 }
+                try { this.logger?.log?.(`DEBUG Rotation Allocated (unscaled): [${allocatedSizes.map(s => Number(s).toFixed(8)).join(', ')}], sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log allocated sizes: ${e.message}`, 'warn'); }
             }
         }
 
@@ -1757,32 +1817,36 @@ class OrderManager {
         const EPS = 1e-12;
         if (availableFunds - allocatedSum > EPS) {
             surplus = availableFunds - allocatedSum;
+            try { this.logger?.log?.(`DEBUG Rotation Surplus: available=${availableFunds.toFixed(8)}, allocated=${allocatedSum.toFixed(8)}, surplus=${surplus.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log rotation surplus: ${e.message}`, 'warn'); }
             const oldCacheFundsValue = this.funds.cacheFunds[side] || 0;
             const newCacheFundsValue = oldCacheFundsValue + surplus;
             this.funds.cacheFunds[side] = newCacheFundsValue;
             this.logger.log(`Allocated sum (${allocatedSum.toFixed(8)}) smaller than available (${availableFunds.toFixed(8)}). Adding surplus ${surplus.toFixed(8)} to cacheFunds.${side}`, 'info');
 
             // Persist cacheFunds and trigger grid comparison when value changes
+            let accountDb = null;
             try {
                 const { AccountOrders } = require('../account_orders');
                 if (this.config && this.config.botKey) {
-                    const accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
+                    accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
                     accountDb.updateCacheFunds(this.config.botKey, this.funds.cacheFunds);
                     this.logger.log(`Persisted cacheFunds.${side} = ${newCacheFundsValue.toFixed(8)}`, 'debug');
                 }
 
                 // Trigger grid comparison to detect divergence after cacheFunds change
-                const { Grid } = require('./grid');
-                const persistedGrid = accountDb?.loadBotGrid(this.config.botKey) || [];
-                const calculatedGrid = Array.from(this.orders.values());
+                if (accountDb) {
+                    const Grid = require('./grid');
+                    const persistedGrid = accountDb.loadBotGrid(this.config.botKey) || [];
+                    const calculatedGrid = Array.from(this.orders.values());
 
-                const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, this, this.funds.cacheFunds);
+                    const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, this, this.funds.cacheFunds);
 
-                if (comparisonResult.buy.metric > 0 || comparisonResult.sell.metric > 0) {
-                    this.logger.log(
-                        `Grid divergence detected after cacheFunds change: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`,
-                        'info'
-                    );
+                    if (comparisonResult.buy.metric > 0 || comparisonResult.sell.metric > 0) {
+                        this.logger.log(
+                            `Grid divergence detected after cacheFunds change: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`,
+                            'info'
+                        );
+                    }
                 }
             } catch (err) {
                 this.logger?.log && this.logger.log(
