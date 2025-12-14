@@ -174,7 +174,7 @@ function validateOrderAmountsWithinLimits(amountToSell, minToReceive, sellPrecis
 
     if (!withinLimits) {
         console.warn(
-            `[validateOrderAmountsWithinLimits] Order amounts exceed safe limits. ` +
+            `[validateOrderAmountsWithinLimits] Order amounts exceed safe limits or are invalid. ` +
             `Sell: ${amountToSell} (precision ${sellPrecision}) = ${sellInt}, ` +
             `Receive: ${minToReceive} (precision ${receivePrecision}) = ${receiveInt}. ` +
             `Max allowed: ${MAX_INT64}`

@@ -296,7 +296,7 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     const sellPrecision = await _getAssetPrecision(sellAssetId);
     const receivePrecision = await _getAssetPrecision(receiveAssetId);
 
-    const currentSellInt = order.for_sale;
+    const currentSellInt = Number(order.for_sale);
     const currentSellFloat = blockchainToFloat(currentSellInt, sellPrecision);
 
     const priceRatioBase = order.sell_price.base.amount;
@@ -346,6 +346,7 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
 
     // First, compute the receive amount with the current delta (not adjusted yet)
     let newReceiveInt;
+
     if (newParams.minToReceive !== undefined && newParams.minToReceive !== null) {
         newReceiveInt = floatToBlockchainInt(newParams.minToReceive, receivePrecision);
     } else if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
@@ -398,6 +399,7 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     }
 
     const adjustedSellFloat = blockchainToFloat(adjustedSellInt, sellPrecision);
+
     const finalReceiveFloat = blockchainToFloat(newReceiveInt, receivePrecision);
     if (!validateOrderAmountsWithinLimits(adjustedSellFloat, finalReceiveFloat, sellPrecision, receivePrecision)) {
         throw new Error(
