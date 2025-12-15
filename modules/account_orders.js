@@ -70,7 +70,7 @@ function nowIso() {
  * - Track bot metadata and state
  * - Calculate asset balances from stored grids
  * 
- * Each bot has its own file: orders-{botkey}.json
+ * Each bot has its own file: {botkey}.json
  * This eliminates race conditions when multiple bots write simultaneously.
  * 
  * @class
@@ -80,7 +80,7 @@ class AccountOrders {
    * Create an AccountOrders instance.
    * @param {Object} options - Configuration options
    * @param {string} options.botKey - Bot identifier (e.g., 'xrp-bts-0', 'h-bts-1')
-   *                                   If provided, uses orders-{botKey}.json
+   *                                   If provided, uses {botKey}.json
    * @param {string} options.profilesPath - Custom path for orders.json (legacy single-file mode)
    */
   constructor(options = {}) {
@@ -89,7 +89,7 @@ class AccountOrders {
     // Determine file path: per-bot file if botKey provided, otherwise legacy shared file
     if (this.botKey) {
       const ordersDir = path.join(__dirname, '..', 'profiles', 'orders');
-      this.profilesPath = path.join(ordersDir, `orders-${this.botKey}.json`);
+      this.profilesPath = path.join(ordersDir, `${this.botKey}.json`);
     } else {
       this.profilesPath = options.profilesPath || PROFILES_ORDERS_FILE;
     }
