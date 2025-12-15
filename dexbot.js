@@ -27,6 +27,10 @@ const accountBots = require('./modules/account_bots');
 const { parseJsonWithComments } = accountBots;
 const { AccountOrders, createBotKey } = require('./modules/account_orders');
 
+// Module-level accountOrders instance for standalone functions (runBotInstances, restart handlers)
+// Class methods should use this.accountOrders instead
+const accountOrders = new AccountOrders();
+
 // Primary CLI driver that manages tracked bots and helper utilities such as key/bot editors.
 const PROFILES_BOTS_FILE = path.join(__dirname, 'profiles', 'bots.json');
 const PROFILES_DIR = path.join(__dirname, 'profiles');
@@ -221,7 +225,7 @@ class DEXBot {
     async placeInitialOrders() {
         if (!this.manager) {
             this.manager = new OrderManager(this.config);
-            this.manager.accountOrders = accountOrders;  // Enable pendingProceeds persistence
+            this.manager.accountOrders = this.accountOrders;  // Enable pendingProceeds persistence
         }
         // If botFunds are percentage-based and account info is available, try to
         // fetch on-chain balances first so percentages resolve correctly.
@@ -244,7 +248,7 @@ class DEXBot {
             // CRITICAL: Reset pendingProceeds when initial grid is placed
             // Fresh start means no prior partial fills exist
             this.manager.funds.pendingProceeds = { buy: 0, sell: 0 };
-            accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+            this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
             return;
         }
 
@@ -321,7 +325,7 @@ class DEXBot {
         for (const group of orderGroups) {
             await placeOrderGroup(group);
         }
-        accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+        this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
     }
 
     /**
@@ -736,7 +740,7 @@ class DEXBot {
 
                     // Always persist snapshot after processing fills if we did anything
                     if (validFills.length > 0) {
-                        accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+                        this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
                     }
                 } catch (err) {
                     this.manager?.logger?.log(`Error processing fill: ${err.message}`, 'error');
@@ -778,7 +782,7 @@ class DEXBot {
                 // CRITICAL: Reset pendingProceeds when grid is regenerated
                 // New grid means old partial fill proceeds are no longer relevant
                 this.manager.funds.pendingProceeds = { buy: 0, sell: 0 };
-                accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+                this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
 
                 if (fs.existsSync(this.triggerFile)) {
                     fs.unlinkSync(this.triggerFile);
@@ -794,9 +798,9 @@ class DEXBot {
         if (fs.existsSync(this.triggerFile)) {
             await performResync();
         } else {
-            const persistedGrid = accountOrders.loadBotGrid(this.config.botKey);
-            const persistedCacheFunds = accountOrders.loadCacheFunds(this.config.botKey);
-            const persistedPendingProceeds = accountOrders.loadPendingProceeds(this.config.botKey);
+            const persistedGrid = this.accountOrders.loadBotGrid(this.config.botKey);
+            const persistedCacheFunds = this.accountOrders.loadCacheFunds(this.config.botKey);
+            const persistedPendingProceeds = this.accountOrders.loadPendingProceeds(this.config.botKey);
             
             // Restore cacheFunds to manager if found
             if (persistedCacheFunds) {
@@ -825,7 +829,7 @@ class DEXBot {
                     chainOpenOrders,
                     manager: this.manager,
                     logger: this.manager.logger,
-                    storeGrid: (orders) => accountOrders.storeMasterGrid(this.config.botKey, orders, this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds),
+                    storeGrid: (orders) => this.accountOrders.storeMasterGrid(this.config.botKey, orders, this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds),
                     attemptResumeFn: attemptResumePersistedGridByPriceMatch,
                 });
                 shouldRegenerate = decision.shouldRegenerate;
@@ -869,7 +873,7 @@ class DEXBot {
                     await this.placeInitialOrders();
                 }
 
-                accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+                this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
             } else {
                 this.manager.logger.log('Found active session. Loading and syncing existing grid.', 'info');
 
@@ -954,7 +958,7 @@ class DEXBot {
                     this.manager.logger.logFundsStatus(this.manager);
                 }
 
-                accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
+                this.accountOrders.storeMasterGrid(this.config.botKey, Array.from(this.manager.orders.values()), this.manager.funds.cacheFunds, this.manager.funds.pendingProceeds);
             }
         }
 
