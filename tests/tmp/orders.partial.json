@@ -8,8 +8,8 @@
         "assetB": null,
         "active": false,
         "index": null,
-        "createdAt": "2025-12-08T21:43:25.682Z",
-        "updatedAt": "2025-12-08T21:43:25.682Z"
+        "createdAt": "2025-12-15T19:31:13.316Z",
+        "updatedAt": "2025-12-15T19:31:13.316Z"
       },
       "grid": [
         {
@@ -18,12 +18,20 @@
           "state": "partial",
           "price": 2,
           "size": 6.5,
-          "orderId": ""
+          "orderId": "1.7.5000"
         }
       ],
-      "createdAt": "2025-12-08T21:43:25.682Z",
-      "lastUpdated": "2025-12-08T21:43:25.682Z"
+      "cacheFunds": {
+        "buy": 0,
+        "sell": 0
+      },
+      "pendingProceeds": {
+        "buy": 0,
+        "sell": 0
+      },
+      "createdAt": "2025-12-15T19:31:13.316Z",
+      "lastUpdated": "2025-12-15T19:31:13.316Z"
     }
   },
-  "lastUpdated": "2025-12-08T21:43:25.682Z"
+  "lastUpdated": "2025-12-15T19:31:13.317Z"
 }
