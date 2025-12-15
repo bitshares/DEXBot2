@@ -329,7 +329,7 @@ Fills are tracked with a 5-second deduplication window to prevent duplicate orde
 ### 🔢 Price Tolerance & Integer Rounding
 The bot calculates price tolerances to account for blockchain integer rounding discrepancies. This ensures reliable matching of on-chain orders with grid orders despite minor precision differences.
 
-### 📊 Automatic Grid Recalculation via Threshold Detection
+### ⚡ Automatic Grid Recalculation via Threshold Detection
 DEXBot automatically regenerates grid order sizes when market conditions or cached proceeds exceed configurable thresholds. This ensures orders remain optimally sized without manual intervention:
 
 **Two Independent Triggering Mechanisms:**
