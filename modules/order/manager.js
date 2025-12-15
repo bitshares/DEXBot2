@@ -1765,7 +1765,13 @@ class OrderManager {
             );
             
             // Extract sizes for the orders being rotated
-            geometricSizes = sizedOrders.slice(0, orderCount).map(o => o.size);
+            // For SELL: sizes are [smallest, ..., largest] → take from END (largest)
+            // For BUY: sizes are [largest, ..., smallest] → take from BEGINNING (largest)
+            if (side === 'sell') {
+                geometricSizes = sizedOrders.slice(-orderCount).map(o => o.size);
+            } else {
+                geometricSizes = sizedOrders.slice(0, orderCount).map(o => o.size);
+            }
             
             const totalGeometric = geometricSizes.reduce((s, v) => s + (Number(v) || 0), 0);
             const totalAllSlots = sizedOrders.reduce((s, o) => s + (Number(o.size) || 0), 0);
@@ -1781,12 +1787,16 @@ class OrderManager {
                     `DEBUG Funds: chainSnapshot=${totalFunds.toFixed(8)}`,
                     'debug'
                 );
+                const allSlotsSized = sizedOrders.map(o => Number(o.size).toFixed(8));
+                const allSlotsDisplay = allSlotsSized.length > 1 ? `[${allSlotsSized[0]}, ... ${allSlotsSized[allSlotsSized.length - 1]}]` : `[${allSlotsSized.join(', ')}]`;
                 this.logger?.log?.(
-                    `DEBUG AllSlots: [${sizedOrders.map(o => Number(o.size).toFixed(8)).join(', ')}], sum=${totalAllSlots.toFixed(8)}`,
+                    `DEBUG AllSlots: ${allSlotsDisplay}, sum=${totalAllSlots.toFixed(8)}`,
                     'debug'
                 );
+                const geometricSized = geometricSizes.map(s => Number(s).toFixed(8));
+                const geometricDisplay = geometricSized.length > 1 ? `[${geometricSized[0]}, ... ${geometricSized[geometricSized.length - 1]}]` : `[${geometricSized.join(', ')}]`;
                 this.logger?.log?.(
-                    `DEBUG Rotation: geometric=[${geometricSizes.map(s => Number(s).toFixed(8)).join(', ')}], totalGeometric=${totalGeometric.toFixed(8)}`,
+                    `DEBUG Rotation: geometric=${geometricDisplay}, totalGeometric=${totalGeometric.toFixed(8)}`,
                     'debug'
                 );
             } catch (e) { this.logger?.log?.(`Warning: failed to log rotation geometric details: ${e.message}`, 'warn'); }
@@ -1800,7 +1810,7 @@ class OrderManager {
                     allocatedSizes.push(allocated);
                     allocatedSum += allocated;
                 }
-                try { this.logger?.log?.(`DEBUG Rotation Scaled Allocated: [${allocatedSizes.map(s => Number(s).toFixed(8)).join(', ')}], sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log scaled allocated sizes: ${e.message}`, 'warn'); }
+                try { const allocSized = allocatedSizes.map(s => Number(s).toFixed(8)); const allocDisplay = allocSized.length > 1 ? `[${allocSized[0]}, ... ${allocSized[allocSized.length - 1]}]` : `[${allocSized.join(', ')}]`; this.logger?.log?.(`DEBUG Rotation Scaled Allocated: ${allocDisplay}, sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log scaled allocated sizes: ${e.message}`, 'warn'); }
             } else {
                 // Use geometric sizes as-is (may sum to less than availableFunds)
                 for (let i = 0; i < orderCount; i++) {
@@ -1808,7 +1818,7 @@ class OrderManager {
                     allocatedSizes.push(g);
                     allocatedSum += g;
                 }
-                try { this.logger?.log?.(`DEBUG Rotation Allocated (unscaled): [${allocatedSizes.map(s => Number(s).toFixed(8)).join(', ')}], sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log allocated sizes: ${e.message}`, 'warn'); }
+                try { const allocSized = allocatedSizes.map(s => Number(s).toFixed(8)); const allocDisplay = allocSized.length > 1 ? `[${allocSized[0]}, ... ${allocSized[allocSized.length - 1]}]` : `[${allocSized.join(', ')}]`; this.logger?.log?.(`DEBUG Rotation Allocated (unscaled): ${allocDisplay}, sum=${allocatedSum.toFixed(8)}`, 'debug'); } catch (e) { this.logger?.log?.(`Warning: failed to log allocated sizes: ${e.message}`, 'warn'); }
             }
         }
 
