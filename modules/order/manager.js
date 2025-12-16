@@ -274,8 +274,10 @@ class OrderManager {
 
     /**
      * Central calculation for available funds.
-     * Formula: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
-     * (btsFeesOwed only subtracted if BTS is the asset for this side)
+     * Formula: available = max(0, chainFree - virtuel - cacheFunds) + (pendingProceeds - btsFeesOwed)
+     *
+     * Deducts BTS fees from pendingProceeds if BTS is the asset for this side,
+     * and updates both btsFeesOwed and pendingProceeds accordingly.
      *
      * @param {string} side - 'buy' or 'sell'
      * @returns {number} Available funds for the given side
@@ -286,13 +288,21 @@ class OrderManager {
         const chainFree = side === 'buy' ? (this.accountTotals?.buyFree || 0) : (this.accountTotals?.sellFree || 0);
         const virtuel = side === 'buy' ? (this.funds.virtuel?.buy || 0) : (this.funds.virtuel?.sell || 0);
         const cacheFunds = side === 'buy' ? (this.funds.cacheFunds?.buy || 0) : (this.funds.cacheFunds?.sell || 0);
-        const pending = side === 'buy' ? (this.funds.pendingProceeds?.buy || 0) : (this.funds.pendingProceeds?.sell || 0);
+        let pending = side === 'buy' ? (this.funds.pendingProceeds?.buy || 0) : (this.funds.pendingProceeds?.sell || 0);
 
-        // Only subtract btsFeesOwed if BTS is the asset for this side
+        // Deduct BTS fees from pendingProceeds if BTS is the asset for this side
         const asset = side === 'buy' ? this.config.assetA : this.config.assetB;
-        const btsFeesOwed = (asset === 'BTS') ? (this.funds.btsFeesOwed || 0) : 0;
+        if (asset === 'BTS' && this.funds.btsFeesOwed > 0) {
+            const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, pending);
+            if (feesOwedThisSide > 0) {
+                this.funds.btsFeesOwed -= feesOwedThisSide;
+                this.funds.pendingProceeds[side] -= feesOwedThisSide;
+                this.logger.log(`BTS fees deducted: ${feesOwedThisSide.toFixed(8)} BTS. Remaining fees: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'debug');
+                pending -= feesOwedThisSide;
+            }
+        }
 
-        return Math.max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pending;
+        return Math.max(0, chainFree - virtuel - cacheFunds) + pending;
     }
 
     /**
@@ -1737,23 +1747,9 @@ class OrderManager {
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
         // Calculate available funds using centralized function
-        // Formula: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
+        // Deducts BTS fees from pendingProceeds automatically
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
         let availableFunds = this.calculateAvailableFunds(side);
-
-        // If BTS fees were already accounted for in calculateAvailableFunds, track deduction here
-        const hasBtsPair = this.config.assetA === 'BTS' || this.config.assetB === 'BTS';
-        if (hasBtsPair && this.funds.btsFeesOwed > 0) {
-            const isBtsOnThisSide = (side === 'buy' && this.config.assetA === 'BTS') || (side === 'sell' && this.config.assetB === 'BTS');
-            if (isBtsOnThisSide) {
-                const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, this.funds.pendingProceeds?.[side] ?? 0);
-                if (feesOwedThisSide > 0) {
-                    this.funds.btsFeesOwed -= feesOwedThisSide;
-                    this.funds.pendingProceeds[side] -= feesOwedThisSide;
-                    this.logger.log(`Rotation deducting BTS fees: ${feesOwedThisSide.toFixed(8)} BTS. Remaining fees: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
-                }
-            }
-        }
 
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
         const simpleDistribution = orderCount > 0 ? availableFunds / orderCount : 0;
