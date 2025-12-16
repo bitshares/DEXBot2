@@ -68,11 +68,23 @@ const GRID_LIMITS = Object.freeze({
         // Represents average squared relative error across non-spread orders
         SUMMED_RELATIVE_SQUARED_DIFFERENCE: 'summedRelativeSquaredDiff',
 
-        // Divergence threshold for automatic grid regeneration (as percentage)
+        // Divergence threshold for automatic grid regeneration (as promille)
+        // 1 promille = 0.1% quadratic difference
         // When compareGrids() metric exceeds this value, updateGridOrderSizes will be triggered
-        // Default: 1 = 1% average relative error threshold
-        // Example: 1 = 1% divergence, 10 = 10% error, 100+ = major divergence
-        DIVERGENCE_THRESHOLD_Percent: 1
+        //
+        // Threshold Reference Table (Average Real Order Error):
+        // Formula: real_error = √(promille / 1000)
+        // ┌──────────────────────────────────────────────────────────────┐
+        // │ Promille │ Avg Error │ Description                           │
+        // ├──────────────────────────────────────────────────────────────┤
+        // │ 0.1      │ ~1.0%     │ Very strict (almost no drift allowed) │
+        // │ 0.5      │ ~2.2%     │ Strict                                │
+        // │ 1        │ ~3.2%     │ Default (balanced)                    │
+        // │ 2        │ ~4.5%     │ Lenient                               │
+        // │ 5        │ ~7.1%     │ Very lenient                          │
+        // │ 10       │ ~10%      │ Extremely lenient                     │
+        // └──────────────────────────────────────────────────────────────┘
+        DIVERGENCE_THRESHOLD_Promille: 1
     })
 });
 

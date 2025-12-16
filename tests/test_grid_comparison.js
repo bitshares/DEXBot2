@@ -332,8 +332,43 @@ console.log('\n=== Auto-Update Tests (By Side) ===\n');
 }
 
 console.log('\n=== Test Summary ===');
-console.log(`Threshold: ${GRID_COMPARISON.DIVERGENCE_THRESHOLD_Percent}`);
+console.log(`Threshold: ${GRID_COMPARISON.DIVERGENCE_THRESHOLD_Promille} promille`);
 console.log('Separate metrics for buy/sell sides');
 console.log('Independent auto-updates by side');
+
+console.log('\n=== Promille to Average Order Error Conversion Table ===');
+console.log('Formula: metric = Σ((calculated - persisted) / persisted)² / count');
+console.log('Promille value = metric × 1000');
+console.log('Average error = approximate average real order difference\n');
+
+// Helper function to calculate approximate average error from quadratic metric
+// For uniform errors: metric = error², so error = √metric
+// Promille = metric × 1000, therefore: error = √(promille / 1000)
+const conversionTable = [
+    { promille: 0.1, metric: 0.0001, avgError: '~1.0%', description: 'Very strict' },
+    { promille: 0.5, metric: 0.0005, avgError: '~2.2%', description: 'Strict' },
+    { promille: 1, metric: 0.001, avgError: '~3.2%', description: 'Default (balanced)' },
+    { promille: 2, metric: 0.002, avgError: '~4.5%', description: 'Lenient' },
+    { promille: 5, metric: 0.005, avgError: '~7.1%', description: 'Very lenient' },
+    { promille: 10, metric: 0.01, avgError: '~10%', description: 'Extremely lenient' }
+];
+
+console.log('┌─────────────────────────────────────────────────────────────┐');
+console.log('│ Promille │  Metric  │ Avg Error │ Description               │');
+console.log('├─────────────────────────────────────────────────────────────┤');
+conversionTable.forEach(row => {
+    const metricStr = row.metric.toFixed(6).padEnd(8);
+    const promilleStr = String(row.promille).padEnd(8);
+    const avgErrorStr = row.avgError.padEnd(9);
+    const descStr = row.description.padEnd(27);
+    console.log(`│ ${promilleStr} │ ${metricStr} │ ${avgErrorStr} │ ${descStr} │`);
+});
+console.log('└─────────────────────────────────────────────────────────────┘\n');
+
+console.log('Example: 10% uniform error across all orders:');
+console.log('  - metric = (0.1)² = 0.01');
+console.log('  - promille = 0.01 × 1000 = 10 promille');
+console.log('  - Exceeds default threshold (1 promille) → triggers update\n');
+
 console.log('Run: npm test -- tests/test_grid_comparison.js');
 console.log('Or: node tests/test_grid_comparison.js\n');

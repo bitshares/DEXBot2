@@ -364,7 +364,7 @@ You can adjust thresholds in `modules/constants.js`:
 ```javascript
 GRID_REGENERATION_PERCENTAGE: 1,  // Cache funds threshold (%)
 GRID_COMPARISON: {
-    DIVERGENCE_THRESHOLD_Percent: 1  // Grid divergence threshold (%)
+    DIVERGENCE_THRESHOLD_Promille: 1  // Grid divergence threshold (promille = 0.1%)
 }
 ```
 

@@ -1881,7 +1881,7 @@ class OrderManager {
                 // Centralized grid comparison trigger after cacheFunds change:
                 // 1. First check: simple percentage-based (GRID_REGENERATION_PERCENTAGE)
                 // 2. If simple check passes, update order sizes and skip expensive quadratic comparison
-                // 3. If simple check fails, run expensive quadratic comparison (DIVERGENCE_THRESHOLD_Percent)
+                // 3. If simple check fails, run expensive quadratic comparison (DIVERGENCE_THRESHOLD_Promille)
                 if (accountDb) {
                     const Grid = require('./grid');
 
