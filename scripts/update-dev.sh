@@ -151,10 +151,19 @@ if command -v pm2 &> /dev/null; then
         if [ ${#RUNNING_BOTS[@]} -gt 0 ]; then
             log_info "PM2 bots detected (${#RUNNING_BOTS[@]} running): ${RUNNING_BOTS[*]}"
             log_info "Reloading running bots only..."
-            if pm2 reload "${RUNNING_BOTS[@]}" 2>/dev/null; then
+            RELOAD_FAILED=false
+            for bot_name in "${RUNNING_BOTS[@]}"; do
+                if pm2 reload "$bot_name" 2>/dev/null; then
+                    log_info "Reloaded: $bot_name"
+                else
+                    log_warning "Failed to reload: $bot_name"
+                    RELOAD_FAILED=true
+                fi
+            done
+            if [ "$RELOAD_FAILED" = false ]; then
                 log_success "PM2 bots reloaded successfully"
             else
-                log_warning "PM2 reload failed"
+                log_warning "Some PM2 reloads failed"
             fi
         else
             log_info "No running PM2 bots found"
