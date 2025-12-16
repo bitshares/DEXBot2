@@ -207,7 +207,7 @@ class DEXBot {
     async placeInitialOrders() {
         if (!this.manager) {
             this.manager = new OrderManager(this.config);
-            this.manager.accountOrders = accountOrders;  // Enable pendingProceeds persistence
+            this.manager.accountOrders = this.accountOrders;  // Enable pendingProceeds persistence
         }
         try {
             const botFunds = this.config && this.config.botFunds ? this.config.botFunds : {};
