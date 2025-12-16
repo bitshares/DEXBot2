@@ -77,6 +77,17 @@ fi
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 log_info "Current branch: $CURRENT_BRANCH"
 
+# Auto-checkout to main branch if not already on it
+if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
+    log_info "Switching to $REPO_BRANCH branch..."
+    if git checkout "$REPO_BRANCH"; then
+        log_success "Switched to $REPO_BRANCH branch"
+    else
+        log_error "Failed to checkout $REPO_BRANCH branch"
+        exit 1
+    fi
+fi
+
 # Step 2: Protect profiles directory (ensure it won't be touched)
 log_info "Step 2: Protecting profiles directory..."
 if [ -d "$PROJECT_ROOT/profiles" ]; then
