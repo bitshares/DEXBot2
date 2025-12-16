@@ -105,6 +105,15 @@ if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
         log_error "Failed to checkout $REPO_BRANCH branch"
         exit 1
     fi
+else
+    log_info "Step 3: Cleaning working directory..."
+    # Always clean working directory before pull (profiles/ is protected in .gitignore)
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        log_warning "Local changes detected, discarding..."
+        git checkout -- .
+        git clean -fd
+        log_info "Working directory cleaned"
+    fi
 fi
 
 # Step 4: Fetch latest from GitHub
