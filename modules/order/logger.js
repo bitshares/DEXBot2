@@ -42,22 +42,50 @@ class Logger {
     }
 
     logOrderGrid(orders, marketPrice) {
-        console.log('\n===== ORDER GRID =====');
+        console.log('\n===== ORDER GRID (SAMPLE) =====');
         if (this.marketName) console.log(`Market: ${this.marketName} @ ${marketPrice}`);
         console.log('Price\t\tType\t\tState\t\tSize');
         console.log('-----------------------------------------------');
+
         const sorted = [...orders].sort((a, b) => b.price - a.price);
-        sorted.forEach(order => {
-            const typeColor = this.colors[order.type] || '';
-            const stateColor = this.colors[order.state] || '';
-            console.log(
-                `${order.price.toFixed(4)}\t` +
-                `${typeColor}${order.type.padEnd(8)}${this.colors.reset}\t` +
-                `${stateColor}${order.state.padEnd(8)}${this.colors.reset}\t` +
-                `${order.size.toFixed(8)}`
-            );
-        });
+
+        // Separate by type
+        const allSells = sorted.filter(o => o.type === 'sell');
+        const allSpreads = sorted.filter(o => o.type === 'spread');
+        const allBuys = sorted.filter(o => o.type === 'buy');
+
+        // SELL: top 3 (highest prices, edge) + last 3 (lowest prices, next to spread)
+        const sellEdge = allSells.slice(0, 3);
+        const sellNearSpread = allSells.slice(-3);
+        sellEdge.forEach(order => this._logOrderRow(order));
+        console.log('');
+        console.log('');
+        sellNearSpread.forEach(order => this._logOrderRow(order));
+
+        // SPREAD: first 3
+        const spreadSample = allSpreads.slice(0, 3);
+        spreadSample.forEach(order => this._logOrderRow(order));
+
+        // BUY: top 3 (highest prices, next to spread) + last 3 (lowest prices, edge)
+        const buyNearSpread = allBuys.slice(0, 3);
+        const buyEdge = allBuys.slice(-3);
+        buyNearSpread.forEach(order => this._logOrderRow(order));
+        console.log('');
+        console.log('');
+        buyEdge.forEach(order => this._logOrderRow(order));
+
         console.log('===============================================\n');
+    }
+
+    _logOrderRow(order) {
+        const typeColor = this.colors[order.type] || '';
+        const stateColor = this.colors[order.state] || '';
+        console.log(
+            `${order.price.toFixed(4)}\t` +
+            `${typeColor}${order.type.padEnd(8)}${this.colors.reset}\t` +
+            `${stateColor}${order.state.padEnd(8)}${this.colors.reset}\t` +
+            `${order.size.toFixed(8)}`
+        );
     }
 
     /**
