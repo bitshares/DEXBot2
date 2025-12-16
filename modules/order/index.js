@@ -11,7 +11,7 @@
  * - logger: Color-coded console output for debugging
  * 
  * Fund tracking model (see manager.js for details):
- * - available = max(0, chainFree - virtuel) + pendingProceeds
+ * - available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
  * - total.chain = chainFree + committed.chain
  * - total.grid = committed.grid + virtuel
  */

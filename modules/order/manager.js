@@ -24,7 +24,7 @@
  * - pendingProceeds: Temporary proceeds from fills awaiting rotation consumption
  * 
  * Calculated values:
- * - available = max(0, chainFree - virtuel) + pendingProceeds
+ * - available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
  * - total.chain = chainFree + committed.chain
  * - total.grid = committed.grid + virtuel
  * 
@@ -59,7 +59,8 @@ const Logger = require('./logger');
  * 
  * Funds structure (this.funds):
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │ available    = max(0, chainFree - virtuel) + pendingProceeds           │
+ * │ available    = max(0, chainFree - virtuel - cacheFunds                │
+ * │                     - btsFeesOwed) + pendingProceeds                   │
  * │               Free funds that can be used for new orders or rotations  │
  * ├─────────────────────────────────────────────────────────────────────────┤
  * │ total.chain  = chainFree + committed.chain                             │
@@ -285,18 +286,37 @@ class OrderManager {
     }
 
     /**
+     * Central calculation for available funds.
+     * Formula: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
+     *
+     * @param {string} side - 'buy' or 'sell'
+     * @returns {number} Available funds for the given side
+     */
+    calculateAvailableFunds(side) {
+        if (!side || (side !== 'buy' && side !== 'sell')) return 0;
+
+        const chainFree = side === 'buy' ? (this.accountTotals?.buyFree || 0) : (this.accountTotals?.sellFree || 0);
+        const virtuel = side === 'buy' ? (this.funds.virtuel?.buy || 0) : (this.funds.virtuel?.sell || 0);
+        const cacheFunds = side === 'buy' ? (this.funds.cacheFunds?.buy || 0) : (this.funds.cacheFunds?.sell || 0);
+        const pending = side === 'buy' ? (this.funds.pendingProceeds?.buy || 0) : (this.funds.pendingProceeds?.sell || 0);
+        const btsFeesOwed = this.funds.btsFeesOwed || 0;
+
+        return Math.max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pending;
+    }
+
+    /**
      * Recalculate all fund values based on current order states.
-     * 
+     *
      * This method iterates all orders and computes:
      * - committed.grid: Sum of ACTIVE order sizes (internal tracking)
      * - committed.chain: Sum of ACTIVE orders with orderId (confirmed on-chain)
      * - virtuel: Sum of VIRTUAL order sizes (reserved for future placement)
-     * 
+     *
      * Then calculates derived values:
-     * - available = max(0, chainFree - virtuel) + pendingProceeds
+     * - available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
      * - total.chain = chainFree + committed.chain
      * - total.grid = committed.grid + virtuel
-     * 
+     *
      * Called automatically by _updateOrder() whenever order state changes.
      */
     recalculateFunds() {
@@ -352,13 +372,10 @@ class OrderManager {
         };
         this.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
 
-        // Set available = chainFree - virtuel - gridBuy/gridSell + pendingProceeds
-        // pendingProceeds tracks fill proceeds that haven't been consumed by rotation yet
-        // gridBuy/gridSell are funds locked in active/partial orders and should not be in available
-        const pendingBuy = this.funds.pendingProceeds?.buy || 0;
-        const pendingSell = this.funds.pendingProceeds?.sell || 0;
-        this.funds.available.buy = Math.max(0, chainFreeBuy - virtuelBuy - gridBuy) + pendingBuy;
-        this.funds.available.sell = Math.max(0, chainFreeSell - virtuelSell - gridSell) + pendingSell;
+        // Set available using centralized calculation function
+        // Formula: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
+        this.funds.available.buy = this.calculateAvailableFunds('buy');
+        this.funds.available.sell = this.calculateAvailableFunds('sell');
     }
 
     _updateOrder(order) {
@@ -1695,22 +1712,21 @@ class OrderManager {
             // For SELL: highest price first (edge closest to sell orders)
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
-        // Calculate new order size using proceeds from this rotation cycle
-        // Prefer pendingProceeds so sizes match the just-filled funds, not unrelated chainFree
+        // Calculate available funds using centralized function
+        // Formula: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        let availableFunds = this.funds.pendingProceeds?.[side] ?? 0;
+        let availableFunds = this.calculateAvailableFunds(side);
 
-        // Reduce available funds by BTS blockchain fees if BTS is in the pair
-        // BTS fees are deducted from the buy side (quote asset) when BTS is assetB
-        // BTS fees are deducted from the sell side (base asset) when BTS is assetA
+        // If BTS fees were already accounted for in calculateAvailableFunds, track deduction here
         const hasBtsPair = this.config.assetA === 'BTS' || this.config.assetB === 'BTS';
         if (hasBtsPair && this.funds.btsFeesOwed > 0) {
             const isBtsOnThisSide = (side === 'buy' && this.config.assetB === 'BTS') || (side === 'sell' && this.config.assetA === 'BTS');
             if (isBtsOnThisSide) {
-                const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, availableFunds);
-                availableFunds -= feesOwedThisSide;
-                this.funds.btsFeesOwed -= feesOwedThisSide;
-                this.logger.log(`Reducing ${side}-side order by BTS fees: ${feesOwedThisSide.toFixed(8)} BTS. Remaining fees: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
+                const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, this.funds.pendingProceeds?.[side] ?? 0);
+                if (feesOwedThisSide > 0) {
+                    this.funds.btsFeesOwed -= feesOwedThisSide;
+                    this.logger.log(`Rotation deducting BTS fees: ${feesOwedThisSide.toFixed(8)} BTS. Remaining fees: ${this.funds.btsFeesOwed.toFixed(8)} BTS`, 'info');
+                }
             }
         }
 

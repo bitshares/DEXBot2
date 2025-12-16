@@ -9,7 +9,7 @@
  * - Fund status display (logFundsStatus)
  * 
  * Fund display (logFundsStatus) shows:
- * - available: max(0, chainFree - virtuel) + pendingProceeds
+ * - available: max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
  * - total.chain: chainFree + committed.chain (on-chain balance)
  * - total.grid: committed.grid + virtuel (grid allocation)
  * - virtuel: VIRTUAL order sizes (reserved for future placement)
@@ -63,7 +63,7 @@ class Logger {
     /**
      * Print a summary of fund status for diagnostics.
      * Displays the complete fund structure from manager.funds:
-     * - available: Free funds for new orders (chainFree - virtuel + pendingProceeds)
+     * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed + pendingProceeds)
      * - total.chain: Total on-chain balance (chainFree + committed.chain)
      * - total.grid: Total grid allocation (committed.grid + virtuel)
      * - virtuel: VIRTUAL order sizes (reserved for future on-chain placement)
