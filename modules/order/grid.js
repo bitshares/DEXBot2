@@ -1037,6 +1037,12 @@ class Grid {
             Grid.updateGridOrderSizesForSide(manager, ORDER_TYPES.BUY, funds);
             buyUpdated = true;
 
+            // Track which sides were updated so rotation can apply new sizes on-chain
+            if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
+            if (!manager._gridSidesUpdated.includes(ORDER_TYPES.BUY)) {
+                manager._gridSidesUpdated.push(ORDER_TYPES.BUY);
+            }
+
             manager.logger?.log?.(
                 `Buy side order sizes updated due to high divergence metric (${buyMetric.toFixed(6)})`,
                 'info'
@@ -1056,6 +1062,12 @@ class Grid {
             Grid.updateGridOrderSizesForSide(manager, ORDER_TYPES.SELL, funds);
             sellUpdated = true;
 
+            // Track which sides were updated so rotation can apply new sizes on-chain
+            if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
+            if (!manager._gridSidesUpdated.includes(ORDER_TYPES.SELL)) {
+                manager._gridSidesUpdated.push(ORDER_TYPES.SELL);
+            }
+
             manager.logger?.log?.(
                 `Sell side order sizes updated due to high divergence metric (${sellMetric.toFixed(6)})`,
                 'info'
@@ -1072,11 +1084,11 @@ class Grid {
     /**
      * Helper method to compare orders for a single side (buy or sell).
      * Calculates normalized sum of squared relative differences.
-     * 
+     *
      * Matches orders by grid ID (buy-0, buy-1, sell-0, etc.) rather than price.
      * This ensures comparison is stable across price changes and config drift.
      * Unmatched orders (length mismatch) are treated as maximum divergence.
-     * 
+     *
      * @param {Array} calculatedOrders - Calculated orders for one side (BUY or SELL only)
      * @param {Array} persistedOrders - Persisted orders for same side
      * @returns {number} Metric (0 = match, higher = divergence), or 0 if no orders
