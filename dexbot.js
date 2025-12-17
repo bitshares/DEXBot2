@@ -759,15 +759,21 @@ class DEXBot {
                 } catch (err) {
                     this.manager?.logger?.log(`Error processing fill: ${err.message}`, 'error');
                 } finally {
-                    this._processingFill = false;
-                    // Process any fills that arrived while we were busy
-                    if (this._pendingFills.length > 0) {
+                    // Atomically check and drain pending fills queue
+                    // Re-acquire lock before checking to prevent race condition where
+                    // new callbacks can start processing during the check window (1-5ms)
+                    while (this._pendingFills.length > 0) {
+                        this._processingFill = true;  // RE-LOCK: Prevent new callbacks
                         const pending = this._pendingFills;
                         this._pendingFills = [];
-                        // Re-invoke the listener with pending fills
-                        setTimeout(() => {
-                            chainOrders.listenForFills(this.account, () => { }); // dummy to trigger
-                        }, 100);
+                        this._processingFill = false;  // Release lock
+
+                        // Schedule retry if queue had items
+                        if (pending.length > 0) {
+                            setTimeout(() => {
+                                chainOrders.listenForFills(this.account, () => { }); // dummy to trigger
+                            }, 100);
+                        }
                     }
                 }
             }
