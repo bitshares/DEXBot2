@@ -91,22 +91,23 @@ else
 fi
 
 # Step 3: Auto-checkout to main branch if not already on it
+CONSTANTS_STASHED=false
 if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
     log_info "Step 3: Switching to $REPO_BRANCH branch..."
-    # Discard any local changes before switching (clean working directory required)
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        # Backup constants.json to preserve user settings
-        if [ -f "$PROJECT_ROOT/constants.json" ]; then
-            cp "$PROJECT_ROOT/constants.json" "$PROJECT_ROOT/.constants.json.backup"
+    # Stash local changes to modules/constants.js before switching
+    if ! git diff --quiet -- modules/constants.js 2>/dev/null; then
+        log_info "Stashing local changes to modules/constants.js..."
+        if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
+            CONSTANTS_STASHED=true
+            log_success "Local modules/constants.js changes stashed"
+        else
+            log_warning "Failed to stash modules/constants.js"
         fi
-        # Clean working directory
+    fi
+    # Discard any remaining changes before switching (clean working directory required)
+    if ! git diff --quiet || ! git diff --cached --quiet; then
         git checkout -- .
         git clean -fd
-        # Restore constants.json
-        if [ -f "$PROJECT_ROOT/.constants.json.backup" ]; then
-            mv "$PROJECT_ROOT/.constants.json.backup" "$PROJECT_ROOT/constants.json"
-            log_info "Local changes cleaned, constants.json preserved (profiles/ excluded by .gitignore)"
-        fi
     fi
     if git checkout "$REPO_BRANCH"; then
         log_success "Switched to $REPO_BRANCH branch"
@@ -116,20 +117,20 @@ if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
     fi
 else
     log_info "Step 3: Cleaning working directory..."
-    # Always clean working directory before pull (profiles/ excluded by .gitignore, constants.json backed up)
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        # Backup constants.json to preserve user settings
-        if [ -f "$PROJECT_ROOT/constants.json" ]; then
-            cp "$PROJECT_ROOT/constants.json" "$PROJECT_ROOT/.constants.json.backup"
+    # Stash local changes to modules/constants.js before cleaning
+    if ! git diff --quiet -- modules/constants.js 2>/dev/null; then
+        log_info "Stashing local changes to modules/constants.js..."
+        if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
+            CONSTANTS_STASHED=true
+            log_success "Local modules/constants.js changes stashed"
+        else
+            log_warning "Failed to stash modules/constants.js"
         fi
-        # Clean working directory
+    fi
+    # Always clean working directory before pull (profiles/ excluded by .gitignore)
+    if ! git diff --quiet || ! git diff --cached --quiet; then
         git checkout -- .
         git clean -fd
-        # Restore constants.json
-        if [ -f "$PROJECT_ROOT/.constants.json.backup" ]; then
-            mv "$PROJECT_ROOT/.constants.json.backup" "$PROJECT_ROOT/constants.json"
-            log_info "Local changes cleaned, constants.json preserved (profiles/ excluded by .gitignore)"
-        fi
     fi
 fi
 
@@ -161,6 +162,17 @@ if git pull --rebase origin "$REPO_BRANCH"; then
 else
     log_error "Failed to pull latest code"
     exit 1
+fi
+
+# Step 6.5: Reapply stashed modules/constants.js changes
+if [ "$CONSTANTS_STASHED" = true ]; then
+    log_info "Step 6.5: Reapplying stashed modules/constants.js changes..."
+    if git stash pop; then
+        log_success "Successfully reapplied modules/constants.js changes"
+    else
+        log_warning "Stash reapply had conflicts or failed. Manual merge may be needed."
+        log_info "To resolve: git stash show and git stash drop when ready"
+    fi
 fi
 
 # Step 7: Install/update dependencies
