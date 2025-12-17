@@ -550,7 +550,9 @@ class DEXBot {
                                 continue;
                             }
 
-                            const fillKey = `${fillOp.order_id}:${fill.block_num}`;
+                            // Use (order_id, block_num, history_id) as unique key to handle multiple fills in same block
+                            // History ID is unique per operation entry: format is "1.11.XXXXX"
+                            const fillKey = `${fillOp.order_id}:${fill.block_num}:${fill.id || ''}`;
                             const now = Date.now();
                             if (this._recentlyProcessedFills.has(fillKey)) {
                                 const lastProcessed = this._recentlyProcessedFills.get(fillKey);
@@ -578,6 +580,7 @@ class DEXBot {
                             console.log(`Receives: ${receivesAmount} (asset ${receivesAsset})`);
                             console.log(`is_maker: ${fillOp.is_maker}`);
                             console.log(`Block: ${fill.block_num}, Time: ${fill.block_time}`);
+                            console.log(`History ID: ${fill.id || 'N/A'}`);
                             console.log(`=========================\n`);
                         }
                     }
