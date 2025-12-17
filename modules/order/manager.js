@@ -792,13 +792,6 @@ class OrderManager {
 
             if (chainOrder) {
                 // Order still exists on chain - check price tolerance
-
-                // Skip price correction for PARTIAL orders - they have natural price drift from partial fills
-                if (gridOrder.state === ORDER_STATES.PARTIAL) {
-                    chainOrderIdsOnGrid.add(gridOrder.orderId);
-                    continue;
-                }
-
                 // Mark as ACTIVE now that we confirmed it's on chain
                 gridOrder.state = ORDER_STATES.ACTIVE;
 
