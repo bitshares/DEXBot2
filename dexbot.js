@@ -741,21 +741,19 @@ class DEXBot {
                         // Execute batch transaction
                         await this.updateOrdersOnChainBatch(rebalanceResult);
 
-                        // After rotation, correct any orders marked for size update during grid trigger
-                        if (this.manager.ordersNeedingPriceCorrection && this.manager.ordersNeedingPriceCorrection.length > 0) {
-                            this.manager.logger.log(`Correcting ${this.manager.ordersNeedingPriceCorrection.length} order(s) with size changes after rotation...`, 'info');
-                            const sizeCorrection = await OrderUtils.correctAllPriceMismatches(
-                                this.manager, this.account, this.privateKey, chainOrders
-                            );
-                            if (sizeCorrection.failed > 0) {
-                                this.manager.logger.log(`${sizeCorrection.failed} size correction(s) failed`, 'error');
-                            }
-                        }
-                    }
-
-                    // Always persist snapshot after processing fills if we did anything
-                    if (validFills.length > 0) {
+                        // Always persist snapshot after placing orders on-chain
                         persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+
+                        // After rotation, run grid comparisons to detect divergence and update _gridSidesUpdated
+                        await OrderUtils.runGridComparisons(this.manager, this.accountOrders, this.config.botKey);
+
+                        // Apply order corrections for sides marked by grid comparisons
+                        await OrderUtils.applyGridDivergenceCorrections(
+                            this.manager,
+                            this.accountOrders,
+                            this.config.botKey,
+                            this.updateOrdersOnChainBatch.bind(this)
+                        );
                     }
 
                     // Attempt to retry any previously failed persistence operations

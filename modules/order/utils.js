@@ -1085,6 +1085,141 @@ function retryPersistenceIfNeeded(manager) {
 }
 
 // ---------------------------------------------------------------------------
+// Grid comparisons
+// ---------------------------------------------------------------------------
+/**
+ * Run grid comparisons after rotation to detect divergence.
+ * Executes both simple cache ratio check and quadratic comparison.
+ *
+ * @param {Object} manager - The OrderManager instance
+ * @param {Object} accountOrders - AccountOrders instance for loading persisted grid
+ * @param {string} botKey - Bot key for grid retrieval
+ */
+async function runGridComparisons(manager, accountOrders, botKey) {
+    if (!manager || !accountOrders) return;
+
+    try {
+        const Grid = require('./grid');
+        const persistedGrid = accountOrders.loadBotGrid(botKey) || [];
+        const calculatedGrid = Array.from(manager.orders.values());
+
+        manager.logger?.log?.(
+            `Starting grid comparisons: persistedGrid=${persistedGrid.length} orders, calculatedGrid=${calculatedGrid.length} orders, cacheFunds=buy:${manager.funds.cacheFunds.buy.toFixed(8)}/sell:${manager.funds.cacheFunds.sell.toFixed(8)}`,
+            'debug'
+        );
+
+        // Step 1: Simple percentage-based check
+        // Populates _gridSidesUpdated if cache ratio exceeds threshold
+        const simpleCheckResult = Grid.checkAndUpdateGridIfNeeded(manager, manager.funds.cacheFunds);
+
+        manager.logger?.log?.(
+            `Simple check result: buyUpdated=${simpleCheckResult.buyUpdated}, sellUpdated=${simpleCheckResult.sellUpdated}`,
+            'debug'
+        );
+
+        // Step 2: Quadratic comparison (if simple check didn't trigger)
+        // Detects deeper structural divergence and also populates _gridSidesUpdated
+        if (!simpleCheckResult.buyUpdated && !simpleCheckResult.sellUpdated) {
+            const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, manager, manager.funds.cacheFunds);
+
+            manager.logger?.log?.(
+                `Quadratic comparison complete: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}, buyUpdated=${comparisonResult.buy.updated}, sellUpdated=${comparisonResult.sell.updated}`,
+                'debug'
+            );
+
+            if (comparisonResult.buy.metric > 0 || comparisonResult.sell.metric > 0) {
+                manager.logger?.log?.(
+                    `Grid divergence detected after rotation: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`,
+                    'info'
+                );
+            }
+        } else {
+            manager.logger?.log?.(
+                `Simple check triggered grid updates, skipping quadratic comparison`,
+                'debug'
+            );
+        }
+    } catch (err) {
+        manager?.logger?.log?.(`Warning: Could not run grid comparisons after rotation: ${err.message}`, 'warn');
+    }
+}
+
+// Grid divergence corrections
+// ---------------------------------------------------------------------------
+/**
+ * Apply order corrections for sides marked by grid comparisons.
+ * Marks orders on divergence-detected sides for size correction and executes batch update.
+ *
+ * @param {Object} manager - The OrderManager instance
+ * @param {Object} accountOrders - AccountOrders instance for persistence
+ * @param {string} botKey - Bot key for grid persistence
+ * @param {Function} updateOrdersOnChainBatchFn - Callback function to execute batch updates (from bot/dexbot context)
+ */
+async function applyGridDivergenceCorrections(manager, accountOrders, botKey, updateOrdersOnChainBatchFn) {
+    if (!manager?._gridSidesUpdated || manager._gridSidesUpdated.length === 0) {
+        return;
+    }
+
+    const { ORDER_STATES } = require('../constants');
+
+    // Build array of orders needing correction from sides marked by grid comparisons
+    for (const orderType of manager._gridSidesUpdated) {
+        const ordersOnSide = Array.from(manager.orders.values())
+            .filter(o => o.type === orderType && o.orderId && o.state === ORDER_STATES.ACTIVE);
+
+        for (const order of ordersOnSide) {
+            // Mark for size correction (sizeChanged=true means we won't price-correct, just size)
+            manager.ordersNeedingPriceCorrection.push({
+                gridOrder: { ...order },
+                chainOrderId: order.orderId,
+                rawChainOrder: null,
+                expectedPrice: order.price,
+                actualPrice: order.price,
+                expectedSize: order.size,
+                size: order.size,
+                type: order.type,
+                sizeChanged: true
+            });
+        }
+    }
+
+    if (manager.ordersNeedingPriceCorrection.length > 0) {
+        manager.logger?.log?.(
+            `Marked ${manager.ordersNeedingPriceCorrection.length} orders for size correction after grid divergence detection`,
+            'info'
+        );
+
+        // Clear the tracking flag
+        manager._gridSidesUpdated = [];
+
+        // Build rotation objects for size corrections
+        const ordersToRotate = manager.ordersNeedingPriceCorrection.map(correction => ({
+            oldOrder: { orderId: correction.chainOrderId },
+            newPrice: correction.expectedPrice,
+            newSize: correction.size,
+            type: correction.type
+        }));
+
+        // Execute a batch correction for these marked orders
+        try {
+            await updateOrdersOnChainBatchFn({
+                ordersToPlace: [],
+                ordersToRotate: ordersToRotate,
+                partialMoves: []
+            });
+
+            // Clear corrections after applying
+            manager.ordersNeedingPriceCorrection = [];
+
+            // Re-persist grid after corrections are applied to keep persisted state in sync
+            persistGridSnapshot(manager, accountOrders, botKey);
+        } catch (err) {
+            manager?.logger?.log?.(`Warning: Could not execute grid divergence corrections: ${err.message}`, 'warn');
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 module.exports = {
@@ -1130,5 +1265,9 @@ module.exports = {
 
     // Persistence
     persistGridSnapshot,
-    retryPersistenceIfNeeded
+    retryPersistenceIfNeeded,
+
+    // Grid comparisons
+    runGridComparisons,
+    applyGridDivergenceCorrections
 };

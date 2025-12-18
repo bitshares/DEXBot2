@@ -292,10 +292,12 @@ class OrderManager {
         const pending = side === 'buy' ? (this.funds.pendingProceeds?.buy || 0) : (this.funds.pendingProceeds?.sell || 0);
 
         // Check if BTS fees would apply to this side (pure calculation, no modification)
-        const asset = side === 'buy' ? this.config.assetA : this.config.assetB;
+        // Determine which side actually has BTS as the asset
+        const btsSide = (this.config.assetA === 'BTS') ? 'sell' :
+                       (this.config.assetB === 'BTS') ? 'buy' : null;
         let applicableBtsFeesOwed = 0;
-        if (asset === 'BTS' && this.funds.btsFeesOwed > 0) {
-            // Fees would be deducted from pendingProceeds, up to the amount available
+        if (btsSide === side && this.funds.btsFeesOwed > 0) {
+            // BTS fees would be deducted from pendingProceeds, up to the amount available
             applicableBtsFeesOwed = Math.min(this.funds.btsFeesOwed, pending);
         }
 
@@ -309,12 +311,13 @@ class OrderManager {
      * @param {string} side - 'buy' or 'sell'
      */
     deductBtsFees(side) {
-        if (!side || (side !== 'buy' && side !== 'sell')) return;
+        // BTS fees can ONLY be deducted from the side where we actually received BTS
+        // Determine which side has BTS as the actual asset
+        const btsSide = (this.config.assetA === 'BTS') ? 'sell' :
+                       (this.config.assetB === 'BTS') ? 'buy' : null;
 
-        const asset = side === 'buy' ? this.config.assetA : this.config.assetB;
-        // CRITICAL FIX: Only deduct BTS fees from the side that actually has BTS as the asset
-        // If this side's asset is NOT BTS, don't deduct fees from these proceeds
-        if (asset !== 'BTS' || this.funds.btsFeesOwed <= 0) return;
+        // Only deduct fees from the side that actually has BTS proceeds
+        if (!btsSide || side !== btsSide || this.funds.btsFeesOwed <= 0) return;
 
         const pending = this.funds.pendingProceeds?.[side] || 0;
         const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, pending);
@@ -2045,69 +2048,17 @@ class OrderManager {
             this.funds.cacheFunds[side] = newCacheFundsValue;
             this.logger.log(`Allocated sum (${allocatedSum.toFixed(8)}) smaller than available (${availableFunds.toFixed(8)}). Adding surplus ${surplus.toFixed(8)} to cacheFunds.${side}`, 'info');
 
-            // Persist cacheFunds and trigger grid comparison when value changes
-            let accountDb = null;
+            // Persist cacheFunds when value changes
             try {
                 const { AccountOrders } = require('../account_orders');
                 if (this.config && this.config.botKey) {
-                    accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
+                    const accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
                     accountDb.updateCacheFunds(this.config.botKey, this.funds.cacheFunds);
                     this.logger.log(`Persisted cacheFunds.${side} = ${newCacheFundsValue.toFixed(8)}`, 'debug');
                 }
-
-                // Centralized grid comparison trigger after cacheFunds change:
-                // 1. First check: simple percentage-based (GRID_REGENERATION_PERCENTAGE)
-                // 2. If simple check passes, update order sizes and skip expensive quadratic comparison
-                // 3. If simple check fails, run expensive quadratic comparison (DIVERGENCE_THRESHOLD_Promille)
-                if (accountDb) {
-                    const Grid = require('./grid');
-
-                    // Step 1: Simple percentage-based check
-                    const simpleCheckResult = Grid.checkAndUpdateGridIfNeeded(this, this.funds.cacheFunds);
-
-                    // Step 2: If grid was updated for this side, recalculate allocatedSizes from the updated grid
-                    const thisUpdated = (side === 'buy' && simpleCheckResult.buyUpdated) || (side === 'sell' && simpleCheckResult.sellUpdated);
-                    if (thisUpdated && orderCount > 0) {
-                        // Re-query orders and get new sizes from the updated grid
-                        // Include all order states to match what updateGridOrderSizesForSide does
-                        const updatedOrders = Array.from(this.orders.values())
-                            .filter(o => o.type === targetType);
-
-                        // Sort to match the rotation order: closest to spread first
-                        if (side === 'buy') {
-                            updatedOrders.sort((a, b) => b.price - a.price); // Highest price first
-                        } else {
-                            updatedOrders.sort((a, b) => a.price - b.price); // Lowest price first
-                        }
-
-                        // Take the first orderCount sizes (closest to spread = the ones being rotated)
-                        allocatedSizes = updatedOrders.slice(0, orderCount).map(o => o.size);
-                        allocatedSum = allocatedSizes.reduce((sum, s) => sum + (Number(s) || 0), 0);
-
-                        this.logger.log(
-                            `Recalculated rotation sizes after grid update: [${allocatedSizes.map(s => s.toFixed(8)).join(', ')}], sum=${allocatedSum.toFixed(8)}`,
-                            'info'
-                        );
-                    }
-
-                    // Step 3: If simple check didn't trigger, run expensive quadratic comparison
-                    if (!simpleCheckResult.buyUpdated && !simpleCheckResult.sellUpdated) {
-                        const persistedGrid = accountDb.loadBotGrid(this.config.botKey) || [];
-                        const calculatedGrid = Array.from(this.orders.values());
-
-                        const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, this, this.funds.cacheFunds);
-
-                        if (comparisonResult.buy.metric > 0 || comparisonResult.sell.metric > 0) {
-                            this.logger.log(
-                                `Grid divergence detected after cacheFunds change: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`,
-                                'info'
-                            );
-                        }
-                    }
-                }
             } catch (err) {
                 this.logger?.log && this.logger.log(
-                    `Warning: Could not persist/compare grid after cacheFunds update: ${err.message}`,
+                    `Warning: Could not persist cacheFunds after rotation: ${err.message}`,
                     'warn'
                 );
             }

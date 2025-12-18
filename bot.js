@@ -637,11 +637,20 @@ class DEXBot {
 
                         // Execute batch transaction
                         await this.updateOrdersOnChainBatch(rebalanceResult);
-                    }
 
-                    // Always persist snapshot after processing fills if we did anything
-                    if (validFills.length > 0) {
+                        // Always persist snapshot after placing orders on-chain
                         persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+
+                        // After rotation, run grid comparisons to detect divergence and update _gridSidesUpdated
+                        await OrderUtils.runGridComparisons(this.manager, this.accountOrders, this.config.botKey);
+
+                        // Apply order corrections for sides marked by grid comparisons
+                        await OrderUtils.applyGridDivergenceCorrections(
+                            this.manager,
+                            this.accountOrders,
+                            this.config.botKey,
+                            this.updateOrdersOnChainBatch.bind(this)
+                        );
                     }
 
                     // Attempt to retry any previously failed persistence operations
@@ -681,22 +690,6 @@ class DEXBot {
             this.manager.funds.cacheFunds = { ...persistedCacheFunds };
         }
 
-        // CRITICAL: Restore pendingProceeds from partial fills
-        // This ensures fill proceeds from before the restart are not lost
-        if (persistedPendingProceeds) {
-            this.manager.funds.pendingProceeds = { ...persistedPendingProceeds };
-            console.log(`[bot.js] ✓ Restored pendingProceeds from startup: Buy ${(persistedPendingProceeds.buy || 0).toFixed(8)}, Sell ${(persistedPendingProceeds.sell || 0).toFixed(8)}`);
-        } else {
-            console.log(`[bot.js] ℹ No pendingProceeds to restore (fresh start or no partial fills)`);
-        }
-
-        // CRITICAL: Restore BTS fees owed from blockchain operations
-        // This ensures fees are properly deducted from proceeds, preventing fund loss on restart
-        if (persistedBtsFeesOwed > 0) {
-            this.manager.funds.btsFeesOwed = persistedBtsFeesOwed;
-            console.log(`[bot.js] ✓ Restored BTS fees owed: ${persistedBtsFeesOwed.toFixed(8)} BTS`);
-        }
-        
         // Use this.accountId which was set during initialize()
         const chainOpenOrders = this.config.dryRun ? [] : await chainOrders.readOpenOrders(this.accountId);
 
@@ -735,6 +728,28 @@ class DEXBot {
             if (shouldRegenerate && chainOpenOrders.length === 0) {
                 console.log('[bot.js] Persisted grid found, but no matching active orders on-chain. Generating new grid.');
             }
+        }
+
+        // Restore pendingProceeds and BTS fees ONLY if we're NOT regenerating the grid
+        // When grid regenerates, everything resets to clean state
+        if (!shouldRegenerate) {
+            // CRITICAL: Restore pendingProceeds from partial fills (only if resuming existing grid)
+            // This ensures fill proceeds from before the restart are not lost
+            if (persistedPendingProceeds) {
+                this.manager.funds.pendingProceeds = { ...persistedPendingProceeds };
+                console.log(`[bot.js] ✓ Restored pendingProceeds from startup: Buy ${(persistedPendingProceeds.buy || 0).toFixed(8)}, Sell ${(persistedPendingProceeds.sell || 0).toFixed(8)}`);
+            } else {
+                console.log(`[bot.js] ℹ No pendingProceeds to restore (fresh start or no partial fills)`);
+            }
+
+            // CRITICAL: Restore BTS fees owed from blockchain operations (only if resuming existing grid)
+            // This ensures fees are properly deducted from proceeds, preventing fund loss on restart
+            if (persistedBtsFeesOwed > 0) {
+                this.manager.funds.btsFeesOwed = persistedBtsFeesOwed;
+                console.log(`[bot.js] ✓ Restored BTS fees owed: ${persistedBtsFeesOwed.toFixed(8)} BTS`);
+            }
+        } else {
+            console.log(`[bot.js] ℹ Grid regenerating - resetting pendingProceeds and BTS fees to clean state`);
         }
 
         if (shouldRegenerate) {

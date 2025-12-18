@@ -84,7 +84,7 @@ const GRID_LIMITS = Object.freeze({
         // │ 5        │ ~7.1%     │ Very lenient                          │
         // │ 10       │ ~10%      │ Extremely lenient                     │
         // └──────────────────────────────────────────────────────────────┘
-        DIVERGENCE_THRESHOLD_Promille: 1000
+        DIVERGENCE_THRESHOLD_Promille: 0.1
     })
 });
 
@@ -94,7 +94,7 @@ const GRID_LIMITS = Object.freeze({
 // - 'info':  Standard production output. State changes (Active/Filled), keys confirmations, and errors.
 // - 'warn':  Warnings (non-critical issues) and errors only.
 // - 'error': Critical errors only.
-const LOG_LEVEL = 'info';
+const LOG_LEVEL = 'debug';
 
 module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL };
 
