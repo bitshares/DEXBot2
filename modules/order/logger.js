@@ -86,11 +86,12 @@ class Logger {
     _logOrderRow(order) {
         const typeColor = this.colors[order.type] || '';
         const stateColor = this.colors[order.state] || '';
+        const price = order.price.toFixed(4).padEnd(17);
+        const type = order.type.padEnd(15);
+        const state = order.state.padEnd(15);
+        const size = order.size.toFixed(8);
         console.log(
-            `${order.price.toFixed(4)}\t` +
-            `${typeColor}${order.type.padEnd(8)}${this.colors.reset}\t` +
-            `${stateColor}${order.state.padEnd(8)}${this.colors.reset}\t` +
-            `${order.size.toFixed(8)}`
+            `${price}${typeColor}${type}${this.colors.reset}${stateColor}${state}${this.colors.reset}${size}`
         );
     }
 
