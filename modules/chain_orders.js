@@ -188,7 +188,7 @@ async function selectAccount() {
  * @param {number} timeoutMs - Connection timeout in milliseconds
  * @returns {Promise<Array>} Array of raw order objects from chain
  */
-async function readOpenOrders(accountId = null, timeoutMs = 30000, suppress_log = false) {
+async function readOpenOrders(accountId = null, timeoutMs = 30000, suppress_log = true) {
     await waitForConnected(timeoutMs);
     try {
         const accId = accountId || preferredAccountId;

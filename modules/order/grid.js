@@ -1007,8 +1007,8 @@ class Grid {
         const idealSells = manager ? getIdealOrders(calculatedSells, ORDER_TYPES.SELL) : calculatedSells;
 
         // Compare each side independently
-        const buyMetric = Grid._compareGridSide(idealBuys, persistedBuys);
-        const sellMetric = Grid._compareGridSide(idealSells, persistedSells);
+        const buyMetric = Grid._compareGridSide(idealBuys, persistedBuys, 'buy');
+        const sellMetric = Grid._compareGridSide(idealSells, persistedSells, 'sell');
 
         // Calculate average metric
         let totalMetric = 0;
@@ -1026,10 +1026,10 @@ class Grid {
 
         // Trigger auto-update for BUY side if metric exceeds threshold
         if (manager && buyMetric > (GRID_COMPARISON.DIVERGENCE_THRESHOLD_Promille / 1000)) {
-            const metricPromille = buyMetric * 1000;  // Convert metric to promille for logging
+            const metricPromille = buyMetric * 1000;  // Metric is 0-1 scale, convert to promille (0-1000)
             const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD_Promille;
             manager.logger?.log?.(
-                `Buy side divergence metric ${metricPromille.toFixed(6)} exceeds threshold ${threshold.toFixed(6)}. Triggering updateGridOrderSizesForSide...`,
+                `Buy side divergence metric ${metricPromille.toFixed(6)} promille exceeds threshold ${threshold.toFixed(6)} promille. Triggering updateGridOrderSizesForSide...`,
                 'info'
             );
 
@@ -1051,10 +1051,10 @@ class Grid {
 
         // Trigger auto-update for SELL side if metric exceeds threshold
         if (manager && sellMetric > (GRID_COMPARISON.DIVERGENCE_THRESHOLD_Promille / 1000)) {
-            const metricPromille = sellMetric * 1000;  // Convert metric to promille for logging
+            const metricPromille = sellMetric * 1000;  // Metric is 0-1 scale, convert to promille (0-1000)
             const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD_Promille;
             manager.logger?.log?.(
-                `Sell side divergence metric ${metricPromille.toFixed(6)} exceeds threshold ${threshold.toFixed(6)}. Triggering updateGridOrderSizesForSide...`,
+                `Sell side divergence metric ${metricPromille.toFixed(6)} promille exceeds threshold ${threshold.toFixed(6)} promille. Triggering updateGridOrderSizesForSide...`,
                 'info'
             );
 
@@ -1094,7 +1094,7 @@ class Grid {
      * @returns {number} Metric (0 = match, higher = divergence), or 0 if no orders
      * @private
      */
-    static _compareGridSide(calculatedOrders, persistedOrders) {
+    static _compareGridSide(calculatedOrders, persistedOrders, sideName = 'unknown') {
         if (!Array.isArray(calculatedOrders) || !Array.isArray(persistedOrders)) {
             return 0;
         }
@@ -1114,8 +1114,11 @@ class Grid {
         let sumSquaredDiff = 0;
         let matchCount = 0;
         let unmatchedCount = 0;
+        let maxRelativeDiff = 0;  // Track the largest relative difference for debugging
 
         // Compare each calculated order with its persisted counterpart by ID
+        const largeDeviations = [];  // Track orders with large deviations for debugging
+
         for (const calcOrder of calculatedOrders) {
             const persOrder = persistedMap.get(calcOrder.id);
 
@@ -1127,11 +1130,31 @@ class Grid {
                 if (persSize > 0) {
                     // Normal relative difference when both sizes are positive
                     const relativeDiff = (calcSize - persSize) / persSize;
+                    const relativePercent = Math.abs(relativeDiff) * 100;
+
+                    // Track large deviations for debugging
+                    if (relativePercent > 10) {  // More than 10% different
+                        largeDeviations.push({
+                            id: calcOrder.id,
+                            persSize: persSize.toFixed(8),
+                            calcSize: calcSize.toFixed(8),
+                            percentDiff: relativePercent.toFixed(2)
+                        });
+                    }
+
                     sumSquaredDiff += relativeDiff * relativeDiff;
+                    maxRelativeDiff = Math.max(maxRelativeDiff, Math.abs(relativeDiff));
                     matchCount++;
                 } else if (calcSize > 0) {
                     // If persisted size is 0 but calculated size is > 0, treat as maximum divergence
+                    largeDeviations.push({
+                        id: calcOrder.id,
+                        persSize: '0.00000000',
+                        calcSize: calcSize.toFixed(8),
+                        percentDiff: 'Infinity'
+                    });
                     sumSquaredDiff += 1.0;
+                    maxRelativeDiff = Math.max(maxRelativeDiff, 1.0);
                     matchCount++;
                 } else {
                     // Both are zero: perfect match
@@ -1140,7 +1163,14 @@ class Grid {
             } else {
                 // Unmatched by ID: grid structure mismatch (e.g., different number of orders)
                 // Treat as significant divergence
+                largeDeviations.push({
+                    id: calcOrder.id,
+                    persSize: 'NOT_FOUND',
+                    calcSize: (Number(calcOrder.size) || 0).toFixed(8),
+                    percentDiff: 'Unmatched'
+                });
                 sumSquaredDiff += 1.0;
+                maxRelativeDiff = Math.max(maxRelativeDiff, 1.0);
                 unmatchedCount++;
             }
         }
@@ -1149,14 +1179,33 @@ class Grid {
         for (const persOrder of persistedOrders) {
             if (!calculatedOrders.some(c => c.id === persOrder.id)) {
                 // Persisted order has no calculated counterpart: divergence
+                largeDeviations.push({
+                    id: persOrder.id,
+                    persSize: (Number(persOrder.size) || 0).toFixed(8),
+                    calcSize: 'NOT_FOUND',
+                    percentDiff: 'Unmatched'
+                });
                 sumSquaredDiff += 1.0;
+                maxRelativeDiff = Math.max(maxRelativeDiff, 1.0);
                 unmatchedCount++;
             }
         }
 
         // Return normalized metric: average squared difference
         const totalOrders = matchCount + unmatchedCount;
-        return totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
+        const metric = totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
+
+        // Log large deviations if metric is high
+        if (metric > 0.1) {  // More than 10 promille
+            console.log(`DEBUG [${sideName}] Grid comparison shows high divergence: metric=${metric.toFixed(6)}, maxRelativeDiff=${maxRelativeDiff.toFixed(4)}, largeDeviations=${largeDeviations.length}`);
+            if (largeDeviations.length > 0 && largeDeviations.length <= 5) {
+                largeDeviations.slice(0, 5).forEach(d => {
+                    console.log(`  - ${d.id}: pers=${d.persSize}, calc=${d.calcSize}, diff=${d.percentDiff}%`);
+                });
+            }
+        }
+
+        return metric;
     }
 
     /**
