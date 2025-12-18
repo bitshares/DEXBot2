@@ -387,6 +387,22 @@ The bot automatically detects orders that were filled while offline:
 
 This ensures seamless resumption after being offline without missing fill proceeds.
 
+### 📡 Periodic Blockchain Fetch
+DEXBot can automatically refresh your blockchain account balances at regular intervals to keep order values up-to-date:
+- **Default interval**: 240 minutes (4 hours)
+- **Configurable**: Set `BLOCKCHAIN_FETCH_INTERVAL_MIN` in `modules/constants.js`
+- **Automatic**: Runs in background without interrupting trading
+- **Disable**: Set interval to `0` or an invalid value to disable periodic fetches
+
+This ensures your bot's internal account balance tracking stays synchronized with the blockchain, especially useful for accounts that receive external transfers or participate in other trading activities.
+
+Configure via environment variable or `modules/constants.js`:
+```javascript
+TIMING: {
+    BLOCKCHAIN_FETCH_INTERVAL_MIN: 240  // fetch every 4 hours (0 = disabled)
+}
+```
+
 ### 📌 Trigger-File Grid Regeneration
 Create a trigger file `profiles/recalculate.<bot-key>.trigger` to request immediate grid regeneration on the next polling cycle. This allows external scripts to request recalculation without restarting the bot.
 
