@@ -297,16 +297,28 @@ Weight distribution examples (set `n` via `weightDistribution`):
 ## Output Example
 
 ```
-===== ORDER GRID =====
-Price           Type            State           Size
+===== ORDER GRID (SAMPLE) =====
+Market: IOB.XRP/BTS @ 1831.0833206976029
+Price            Type            State           Size
 -----------------------------------------------
-160000.00       sell            virtual         0.00555174
-...orders...
-40814.98        buy             virtual         386.55406154
+3660.2208        sell            virtual         0.11175292
+3645.6382        sell            virtual         0.11220173
+3631.1137        sell            virtual         0.11265234
 
-===== FUNDS STATUS =====
-Available: Buy 0.00 USD | Sell 0.00000000 BTC
-Committed: Buy 8676.13 USD | Sell 0.12420407 BTC
+1864.2743        sell            virtual         0.22000406
+1856.8469        sell            virtual         0.22088761
+1849.4491        sell            virtual         0.22177471
+1842.0808        spread          virtual         0.00000000
+1834.7418        spread          virtual         0.00000000
+1827.4175        spread          virtual         0.00000000
+1812.8274        buy             virtual         422.06696353
+1805.5761        buy             virtual         420.37869568
+1798.3538        buy             virtual         418.69718090
+
+924.5392         buy             virtual         215.25349670
+920.8410         buy             virtual         214.39248272
+917.1576         buy             virtual         213.53491279
+===============================================
 ```
 
 ## 🔍 Advanced Features
