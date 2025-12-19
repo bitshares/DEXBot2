@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+process.argv[2] = 'keys';
+require('../dexbot.js');
