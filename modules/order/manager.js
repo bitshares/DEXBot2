@@ -810,8 +810,8 @@ class OrderManager {
                     this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) no longer on chain - marking as VIRTUAL (fully filled)`, 'info');
                     const filledOrder = { ...gridOrder };
 
-                    // Create copy for update
-                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+                    // Create copy for update - convert to SPREAD placeholder
+                    const updatedOrder = { ...gridOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
 
                     this._updateOrder(updatedOrder);
                     filledOrders.push(filledOrder);
@@ -986,8 +986,8 @@ class OrderManager {
             this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED (filled ${filledAmount.toFixed(8)}), pendingProceeds: Buy ${(this.funds.pendingProceeds.buy || 0).toFixed(8)} | Sell ${(this.funds.pendingProceeds.sell || 0).toFixed(8)}`, 'info');
             const filledOrder = { ...matchedGridOrder };
 
-            // Create copy for update
-            const updatedOrder = { ...matchedGridOrder, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+            // Create copy for update - convert to SPREAD placeholder
+            const updatedOrder = { ...matchedGridOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
 
             this._updateOrder(updatedOrder);
             filledOrders.push(filledOrder);
@@ -1085,10 +1085,10 @@ class OrderManager {
                             this.logger.log(`[chainFree update] ${gridOrder.type} order moving ACTIVE->VIRTUAL: ${oldFree.toFixed(8)} + ${size.toFixed(8)} = ${this.accountTotals.sellFree.toFixed(8)} ${this.config?.assetA}`, 'debug');
                         }
                     }
-                    // Create a new object to avoid mutation bug
-                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
+                    // Create a new object to avoid mutation bug - convert to SPREAD placeholder
+                    const updatedOrder = { ...gridOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
                     this._updateOrder(updatedOrder);
-                    this.logger.log(`Order ${updatedOrder.id} (${orderId}) cancelled and reverted to VIRTUAL`, 'info');
+                    this.logger.log(`Order ${updatedOrder.id} (${orderId}) cancelled and reverted to VIRTUAL SPREAD`, 'info');
                 }
                 break;
             }
