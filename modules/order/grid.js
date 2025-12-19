@@ -55,6 +55,13 @@ class Grid {
     static createOrderGrid(config) {
         // Compute helper arrays of buy/sell price levels relative to the market price.
         const { marketPrice, minPrice, maxPrice, incrementPercent } = config;
+
+        // CRITICAL: Validate increment bounds before using in calculations
+        // Prevents division by zero (line 75: Math.log(stepUp)) and invalid prices
+        if (incrementPercent <= 0 || incrementPercent >= 100) {
+            throw new Error(`Invalid incrementPercent: ${incrementPercent}. Must be between 0.01 and 10 (exclusive of 0 and 100).`);
+        }
+
         // Use explicit step multipliers for clarity:
         const stepUp = 1 + (incrementPercent / 100);    // e.g. 1.02 for +2%
         const stepDown = 1 - (incrementPercent / 100);  // e.g. 0.98 for -2%
@@ -1343,6 +1350,13 @@ class Grid {
         const MAX_WEIGHT = 2;
         if (!Number.isFinite(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
             throw new Error(`Invalid weight distribution: ${weight}. Must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
+        }
+
+        // CRITICAL: Validate increment factor (0.01 to 0.10 for 1% to 10%)
+        // If incrementFactor is 0, base = 1, and all orders get equal weight (loses position weighting)
+        // If incrementFactor >= 1, base <= 0, causing invalid exponential calculation
+        if (incrementFactor <= 0 || incrementFactor >= 1) {
+            throw new Error(`Invalid incrementFactor: ${incrementFactor}. Must be between 0.0001 (0.01%) and 0.10 (10%).`);
         }
 
         // Step 1: Calculate base factor from increment
