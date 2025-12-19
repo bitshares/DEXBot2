@@ -62,7 +62,7 @@ const GRID_LIMITS = Object.freeze({
     // Checked independently for buy and sell sides
     // Example: If cacheFunds.buy = 100 and total.grid.buy = 1000, ratio = 10%
     // If threshold = 5%, then 10% >= 5% triggers update for buy side only
-    GRID_REGENERATION_PERCENTAGE: 1,
+    GRID_REGENERATION_PERCENTAGE: 2,
     // Grid comparison metrics
     // Stores the normalized sum of squared relative differences between calculated and persisted grids
     // Used to detect significant divergence between in-memory grid and persisted state
@@ -72,22 +72,26 @@ const GRID_LIMITS = Object.freeze({
         SUMMED_RELATIVE_SQUARED_DIFFERENCE: 'summedRelativeSquaredDiff',
 
         // Divergence threshold for automatic grid regeneration (as promille)
-        // 1 promille = 0.1% quadratic difference
+        // Promille = mean of squared relative errors × 1000 (RMS-based quadratic metric)
         // When compareGrids() metric exceeds this value, updateGridOrderSizes will be triggered
         //
-        // Threshold Reference Table (Average Real Order Error):
-        // Formula: real_error = √(promille / 1000)
+        // Distribution unevenness scaling: promille ≈ 1 + n where n = ratio of perfect orders
+        // Distribution ratio: 1/(1+n) orders with errors, n/(1+n) perfect orders
+        // Example: 1/10 distribution (n=9) requires 10× higher promille than 100% distribution
+        //
+        // Threshold Reference Table (for 1/10 distribution: 10% outliers, 90% perfect):
+        // Formula: RMS = √(promille / 1000)
         // ┌──────────────────────────────────────────────────────────────┐
-        // │ Promille │ Avg Error │ Description                           │
+        // │ Promille │ Avg Error │ RMS    │ Description                 │
         // ├──────────────────────────────────────────────────────────────┤
-        // │ 0.1      │ ~1.0%     │ Very strict (almost no drift allowed) │
-        // │ 0.5      │ ~2.2%     │ Strict                                │
-        // │ 1        │ ~3.2%     │ Default (balanced)                    │
-        // │ 2        │ ~4.5%     │ Lenient                               │
-        // │ 5        │ ~7.1%     │ Very lenient                          │
-        // │ 10       │ ~10%      │ Extremely lenient                     │
+        // │ 1        │ ~1.0%     │ 3.16%  │ Very strict                 │
+        // │ 5        │ ~2.2%     │ 6.96%  │ Strict                      │
+        // │ 10       │ ~3.2%     │ 10.1%  │ Default (balanced)          │
+        // │ 20       │ ~4.5%     │ 14.2%  │ Lenient                     │
+        // │ 50       │ ~7.1%     │ 22.5%  │ Very lenient                │
+        // │ 100      │ ~10%      │ 31.6%  │ Extremely lenient           │
         // └──────────────────────────────────────────────────────────────┘
-        DIVERGENCE_THRESHOLD_Promille: 1
+        DIVERGENCE_THRESHOLD_Promille: 10
     })
 });
 
