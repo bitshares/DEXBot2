@@ -328,13 +328,13 @@ async function changeMasterPassword(accountsData, currentPassword) {
         console.log('No master password is set yet.');
         return currentPassword;
     }
-    const oldPassword = await readPassword('Enter current master password:   ');
+    const oldPassword = await readPassword('Enter current master password: ');
     if (hashPassword(oldPassword) !== accountsData.masterPasswordHash) {
         console.log('Incorrect master password!');
         return currentPassword;
     }
-    const newPassword = await readPassword('Enter new master password:   ');
-    const confirmPassword = await readPassword('Confirm new master password: ');
+    const newPassword = await readPassword('Enter new master password:     ');
+    const confirmPassword = await readPassword('Confirm new master password:   ');
     if (newPassword !== confirmPassword) {
         console.log('Passwords do not match!');
         return currentPassword;

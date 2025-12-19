@@ -107,6 +107,34 @@ async function askAsset(promptText, defaultValue) {
     }
 }
 
+async function askAssetB(promptText, defaultValue, assetA) {
+    while (true) {
+        const displayDefault = defaultValue ? String(defaultValue).toUpperCase() : undefined;
+        const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
+
+        // Use readlineSync with mask to capture and display as uppercase
+        const answer = readlineSync.question(`${promptText}${suffix}: `, {
+            hideEchoBack: false
+        }).trim();
+
+        if (!answer) {
+            if (displayDefault) return displayDefault;
+            console.log('Asset name is required.');
+            continue;
+        }
+
+        const assetB = answer.toUpperCase();
+
+        // Validate that Asset B is different from Asset A
+        if (assetB === assetA) {
+            console.log(`Invalid: Asset B cannot be the same as Asset A (${assetA})`);
+            continue;
+        }
+
+        return assetB;
+    }
+}
+
 function askNumber(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
     const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
@@ -114,6 +142,11 @@ function askNumber(promptText, defaultValue) {
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
         console.log('Please enter a valid number.');
+        return askNumber(promptText, defaultValue);
+    }
+    // Validate that number is finite (not Infinity, -Infinity, or NaN)
+    if (!Number.isFinite(parsed)) {
+        console.log('Please enter a valid finite number.');
         return askNumber(promptText, defaultValue);
     }
     return parsed;
@@ -160,15 +193,136 @@ function isMultiplierString(value) {
     return typeof value === 'string' && /^[\s]*[0-9]+(?:\.[0-9]+)?x[\s]*$/i.test(value);
 }
 
+function askNumberWithBounds(promptText, defaultValue, minVal, maxVal) {
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
+    }
+    // Validate that number is finite (not Infinity, -Infinity, or NaN)
+    if (!Number.isFinite(parsed)) {
+        console.log('Please enter a valid finite number.');
+        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
+    }
+    // Validate bounds
+    if (parsed < minVal) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be >= ${minVal}`);
+        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
+    }
+    if (parsed > maxVal) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be <= ${maxVal}`);
+        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
+    }
+    return parsed;
+}
+
+function askTargetSpreadPercent(promptText, defaultValue, incrementPercent) {
+    const minRequired = incrementPercent * 2;
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue.toFixed(2)}]` : '';
+    const raw = readlineSync.question(`${promptText} (>= ${minRequired.toFixed(2)})${suffix}: `).trim();
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askTargetSpreadPercent(promptText, defaultValue, incrementPercent);
+    }
+    // Validate that number is finite (not Infinity, -Infinity, or NaN)
+    if (!Number.isFinite(parsed)) {
+        console.log('Please enter a valid finite number.');
+        return askTargetSpreadPercent(promptText, defaultValue, incrementPercent);
+    }
+    // Validate >= 2x incrementPercent
+    if (parsed < minRequired) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be >= 2x incrementPercent (${minRequired.toFixed(2)})`);
+        return askTargetSpreadPercent(promptText, defaultValue, incrementPercent);
+    }
+    // Validate no negative
+    if (parsed < 0) {
+        console.log(`Invalid ${promptText}: ${parsed}. Cannot be negative`);
+        return askTargetSpreadPercent(promptText, defaultValue, incrementPercent);
+    }
+    return parsed;
+}
+
+function askIntegerInRange(promptText, defaultValue, minVal, maxVal) {
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
+    }
+    // Validate that number is integer (not float)
+    if (!Number.isInteger(parsed)) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be an integer (no decimals)`);
+        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
+    }
+    // Validate bounds
+    if (parsed < minVal || parsed > maxVal) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be between ${minVal} and ${maxVal}`);
+        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
+    }
+    return parsed;
+}
+
 function askNumberOrMultiplier(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
     const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
     if (raw === '') return defaultValue;
-    if (isMultiplierString(raw)) return raw.trim();
+    if (isMultiplierString(raw)) {
+        const trimmed = raw.trim();
+        const multiplier = parseFloat(trimmed);
+        if (multiplier <= 0) {
+            console.log(`Invalid ${promptText}: "${trimmed}". Multiplier must be > 0. No "0x" or negative values`);
+            return askNumberOrMultiplier(promptText, defaultValue);
+        }
+        return trimmed;
+    }
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
         console.log('Please enter a valid number or multiplier (e.g. 5x).');
         return askNumberOrMultiplier(promptText, defaultValue);
+    }
+    // Validate that number is > 0 (for price inputs)
+    if (parsed <= 0) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)`);
+        return askNumberOrMultiplier(promptText, defaultValue);
+    }
+    return parsed;
+}
+
+function askMaxPrice(promptText, defaultValue, minPrice) {
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    if (raw === '') return defaultValue;
+    if (isMultiplierString(raw)) {
+        const trimmed = raw.trim();
+        const multiplier = parseFloat(trimmed);
+        if (multiplier <= 0) {
+            console.log(`Invalid ${promptText}: "${trimmed}". Multiplier must be > 0. No "0x" or negative values`);
+            return askMaxPrice(promptText, defaultValue, minPrice);
+        }
+        return trimmed;
+    }
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number or multiplier (e.g. 5x).');
+        return askMaxPrice(promptText, defaultValue, minPrice);
+    }
+    // Validate that number is > 0 (for price inputs)
+    if (parsed <= 0) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)`);
+        return askMaxPrice(promptText, defaultValue, minPrice);
+    }
+    // Validate that maxPrice > minPrice
+    const minPriceValue = typeof minPrice === 'string' ? parseFloat(minPrice) : minPrice;
+    if (parsed <= minPriceValue) {
+        console.log(`Invalid ${promptText}: ${parsed}. Must be > minPrice (${minPriceValue})`);
+        return askMaxPrice(promptText, defaultValue, minPrice);
     }
     return parsed;
 }
@@ -232,35 +386,87 @@ function askMarketPrice(promptText, defaultValue) {
 }
 
 async function promptBotData(base = {}) {
+    // === Bot Configuration ===
     const name = askRequiredString('Bot name', base.name);
-    const assetA = await askAsset('Asset A for selling', base.assetA);
-    const assetB = await askAsset('Asset B for buying', base.assetB);
     const active = askBoolean('Active', base.active !== undefined ? base.active : DEFAULT_CONFIG.active);
     const dryRun = askBoolean('Dry run', base.dryRun !== undefined ? base.dryRun : DEFAULT_CONFIG.dryRun);
     const preferredAccount = askRequiredString('Preferred account', base.preferredAccount);
+
+    console.log('');
+    // === Trading Pair ===
+    const assetA = await askAsset('Asset A for selling', base.assetA);
+    const assetB = await askAssetB('Asset B for buying', base.assetB, assetA);
+
+    console.log('');
+    // === Price Range ===
     const marketPrice = askMarketPrice('marketPrice (pool, market or A/B)', base.marketPrice || 'pool');
     const minPrice = askNumberOrMultiplier('minPrice', base.minPrice !== undefined ? base.minPrice : DEFAULT_CONFIG.minPrice);
-    const maxPrice = askNumberOrMultiplier('maxPrice', base.maxPrice !== undefined ? base.maxPrice : DEFAULT_CONFIG.maxPrice);
-    let incrementPercent = askNumber('incrementPercent', base.incrementPercent !== undefined ? base.incrementPercent : DEFAULT_CONFIG.incrementPercent);
-    // Validate increment bounds (critical for grid calculation)
-    // Min 0.01: prevents excessive grid density
-    // Max 10: prevents negative or zero stepDown, ensures proper grid structure
-    if (incrementPercent < 0.01) {
-        console.log('\n⚠️  WARNING: incrementPercent too small (< 0.01). Setting to 0.01');
-        incrementPercent = 0.01;
-    }
-    if (incrementPercent > 10) {
-        console.log('\n⚠️  WARNING: incrementPercent too large (> 10). Setting to 10');
-        incrementPercent = 10;
-    }
-    const targetSpreadPercent = askNumber('targetSpreadPercent', base.targetSpreadPercent !== undefined ? base.targetSpreadPercent : DEFAULT_CONFIG.targetSpreadPercent);
+    // maxPrice must be > minPrice
+    const maxPrice = askMaxPrice('maxPrice', base.maxPrice !== undefined ? base.maxPrice : DEFAULT_CONFIG.maxPrice, minPrice);
+
+    console.log('');
+    // === Grid Configuration ===
+    // incrementPercent must be between 0.01 and 10 (prevents grid calculation errors)
+    const incrementPercent = askNumberWithBounds('incrementPercent', base.incrementPercent !== undefined ? base.incrementPercent : DEFAULT_CONFIG.incrementPercent, 0.01, 10);
+    // targetSpreadPercent must be >= 2x incrementPercent (default is 3x)
+    const defaultSpread = base.targetSpreadPercent !== undefined ? base.targetSpreadPercent : incrementPercent * 3;
+    const targetSpreadPercent = askTargetSpreadPercent('targetSpread %', defaultSpread, incrementPercent);
     const weightSell = askWeightDistribution('Weight distribution (sell)', base.weightDistribution && base.weightDistribution.sell !== undefined ? base.weightDistribution.sell : DEFAULT_CONFIG.weightDistribution.sell);
     const weightBuy = askWeightDistributionNoLegend('Weight distribution (buy)', base.weightDistribution && base.weightDistribution.buy !== undefined ? base.weightDistribution.buy : DEFAULT_CONFIG.weightDistribution.buy);
+
+    console.log('');
+    // === Funding & Orders ===
     // Prompt sell first, then buy to make the config output match the desired ordering
     const fundsSell = askNumberOrPercentage('botFunds sell amount', base.botFunds && base.botFunds.sell !== undefined ? base.botFunds.sell : DEFAULT_CONFIG.botFunds.sell);
     const fundsBuy = askNumberOrPercentage('botFunds buy amount', base.botFunds && base.botFunds.buy !== undefined ? base.botFunds.buy : DEFAULT_CONFIG.botFunds.buy);
-    const ordersSell = askNumber('activeOrders sell count', base.activeOrders && base.activeOrders.sell !== undefined ? base.activeOrders.sell : DEFAULT_CONFIG.activeOrders.sell);
-    const ordersBuy = askNumber('activeOrders buy count', base.activeOrders && base.activeOrders.buy !== undefined ? base.activeOrders.buy : DEFAULT_CONFIG.activeOrders.buy);
+    // activeOrders must be integers 1-50
+    const ordersSell = askIntegerInRange('activeOrders sell count', base.activeOrders && base.activeOrders.sell !== undefined ? base.activeOrders.sell : DEFAULT_CONFIG.activeOrders.sell, 1, 50);
+    const ordersBuy = askIntegerInRange('activeOrders buy count', base.activeOrders && base.activeOrders.buy !== undefined ? base.activeOrders.buy : DEFAULT_CONFIG.activeOrders.buy, 1, 50);
+
+    // ===== COMPREHENSIVE INPUT VALIDATION =====
+
+    // 1. Validate marketPrice (must be > 0)
+    if (typeof marketPrice === 'number') {
+        if (marketPrice <= 0) {
+            throw new Error(`Invalid marketPrice: ${marketPrice}. Must be > 0 (positive number, not 'pool' or 'market')`);
+        }
+    }
+
+    // 2. Validate minPrice and maxPrice
+    // (Already validated in askNumberOrMultiplier() - no need to re-validate)
+    if (typeof minPrice !== 'string' && typeof minPrice !== 'number') {
+        throw new Error(`Invalid minPrice: ${minPrice}. Must be a number or "Nx" multiplier (e.g., "4x")`);
+    }
+    if (typeof maxPrice !== 'string' && typeof maxPrice !== 'number') {
+        throw new Error(`Invalid maxPrice: ${maxPrice}. Must be a number or "Nx" multiplier (e.g., "4x")`);
+    }
+
+    // 3. Validate botFunds (must be > 0, <= 100%, any number format accepted)
+    const validateBotFunds = (funds, side) => {
+        let numValue;
+        if (typeof funds === 'string') {
+            // Percentage format "N%"
+            if (funds.includes('%')) {
+                numValue = parseFloat(funds);
+                if (!Number.isFinite(numValue) || numValue <= 0 || numValue > 100) {
+                    throw new Error(`Invalid botFunds ${side}: "${funds}". Percentage must be > 0% and <= 100%`);
+                }
+            } else {
+                // Should not happen with askNumberOrPercentage, but defensive
+                numValue = parseFloat(funds);
+                if (!Number.isFinite(numValue) || numValue <= 0) {
+                    throw new Error(`Invalid botFunds ${side}: ${funds}. Must be > 0 (number or percentage)`);
+                }
+            }
+        } else if (typeof funds === 'number') {
+            if (!Number.isFinite(funds) || funds <= 0) {
+                throw new Error(`Invalid botFunds ${side}: ${funds}. Must be > 0 (positive number)`);
+            }
+        }
+    };
+    validateBotFunds(fundsSell, 'sell');
+    validateBotFunds(fundsBuy, 'buy');
+
     return {
         name,
         active,
@@ -298,19 +504,27 @@ async function main() {
         console.log('');
         switch (selection) {
             case '1': {
-                const entry = await promptBotData();
-                config.bots.push(entry);
-                saveBotsConfig(config, filePath);
-                console.log(`Added bot '${entry.name}' to ${path.basename(filePath)}.`);
+                try {
+                    const entry = await promptBotData();
+                    config.bots.push(entry);
+                    saveBotsConfig(config, filePath);
+                    console.log(`\nAdded bot '${entry.name}' to ${path.basename(filePath)}.`);
+                } catch (err) {
+                    console.log(`\n❌ Invalid input: ${err.message}\n`);
+                }
                 break;
             }
             case '2': {
                 const idx = selectBotIndex(config.bots, 'Select bot to modify');
                 if (idx === null) break;
-                const entry = await promptBotData(config.bots[idx]);
-                config.bots[idx] = entry;
-                saveBotsConfig(config, filePath);
-                console.log(`Updated bot '${entry.name}' in ${path.basename(filePath)}.`);
+                try {
+                    const entry = await promptBotData(config.bots[idx]);
+                    config.bots[idx] = entry;
+                    saveBotsConfig(config, filePath);
+                    console.log(`\nUpdated bot '${entry.name}' in ${path.basename(filePath)}.`);
+                } catch (err) {
+                    console.log(`\n❌ Invalid input: ${err.message}\n`);
+                }
                 break;
             }
             case '3': {
@@ -321,19 +535,23 @@ async function main() {
                 if (confirm) {
                     const removed = config.bots.splice(idx, 1)[0];
                     saveBotsConfig(config, filePath);
-                    console.log(`Removed bot '${removed.name || placeholderName}' from ${path.basename(filePath)}.`);
+                    console.log(`\nRemoved bot '${removed.name || placeholderName}' from ${path.basename(filePath)}.`);
                 } else {
-                    console.log('Deletion cancelled.');
+                    console.log('\nDeletion cancelled.');
                 }
                 break;
             }
             case '4': {
                 const idx = selectBotIndex(config.bots, 'Select bot to copy');
                 if (idx === null) break;
-                const entry = await promptBotData(config.bots[idx]);
-                config.bots.splice(idx + 1, 0, entry);
-                saveBotsConfig(config, filePath);
-                console.log(`Copied bot '${entry.name}' into ${path.basename(filePath)}.`);
+                try {
+                    const entry = await promptBotData(config.bots[idx]);
+                    config.bots.splice(idx + 1, 0, entry);
+                    saveBotsConfig(config, filePath);
+                    console.log(`\nCopied bot '${entry.name}' into ${path.basename(filePath)}.`);
+                } catch (err) {
+                    console.log(`\n❌ Invalid input: ${err.message}\n`);
+                }
                 break;
             }
             case '5':

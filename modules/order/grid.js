@@ -411,7 +411,7 @@ class Grid {
         const sizedAllocatedBuy = sizedOrders.filter(o => o.type === ORDER_TYPES.BUY).reduce((sum, o) => sum + (Number(o.size) || 0), 0);
         const sizedAllocatedSell = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).reduce((sum, o) => sum + (Number(o.size) || 0), 0);
         manager.logger.log(`DEBUG Grid Sizing Output: allocatedBuy=${sizedAllocatedBuy.toFixed(8)}, allocatedSell=${sizedAllocatedSell.toFixed(8)}`, 'info');
-        manager.logger.log(`DEBUG Grid Sizing Discrepancy: buy=${(inputFundsBuy - sizedAllocatedBuy).toFixed(8)}, sell=${(inputFundsSell - sizedAllocatedSell).toFixed(8)}`, 'info');
+        manager.logger.log(`DEBUG Grid Sizing Discrepancy: buy=${(finalInputFundsBuy - sizedAllocatedBuy).toFixed(8)}, sell=${(finalInputFundsSell - sizedAllocatedSell).toFixed(8)}`, 'info');
 
         try {
             const sellsAfter = sizedOrders.filter(o => o.type === ORDER_TYPES.SELL).map(o => Number(o.size || 0));
