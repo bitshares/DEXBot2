@@ -935,7 +935,7 @@ class Grid {
      * This metric helps detect significant divergence between the current in-memory grid
      * (after updateGridOrderSizes) and what was previously persisted to disk.
      * 
-     * When a side's metric exceeds GRID_COMPARISON.DIVERGENCE_THRESHOLD_PERCENTAGE, automatically triggers
+     * When a side's RMS metric exceeds GRID_COMPARISON.RMS_PERCENTAGE, automatically triggers
      * updateGridOrderSizesForSide to regenerate sizes for that side only.
      * 
      * @param {Array} calculatedGrid - Current grid orders from manager (result of updateGridOrderSizes)
@@ -1034,12 +1034,12 @@ class Grid {
         let buyUpdated = false;
         let sellUpdated = false;
 
-        // Trigger auto-update for BUY side if metric exceeds threshold
-        if (manager && buyMetric > (GRID_COMPARISON.DIVERGENCE_THRESHOLD_PERCENTAGE / 100)) {
-            const metricPercent = buyMetric * 100;  // Metric is 0-1 scale, convert to percentage (0-100)
-            const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD_PERCENTAGE;
+        // Trigger auto-update for BUY side if RMS metric exceeds threshold
+        if (manager && buyMetric > (GRID_COMPARISON.RMS_PERCENTAGE / 100)) {
+            const metricPercent = buyMetric * 100;  // RMS is 0-1 scale, convert to percentage (0-100)
+            const threshold = GRID_COMPARISON.RMS_PERCENTAGE;
             manager.logger?.log?.(
-                `Buy side divergence metric ${metricPercent.toFixed(4)}% exceeds threshold ${threshold}%. Triggering updateGridOrderSizesForSide...`,
+                `Buy side RMS divergence ${metricPercent.toFixed(2)}% exceeds threshold ${threshold}%. Triggering updateGridOrderSizesForSide...`,
                 'info'
             );
 
@@ -1059,12 +1059,12 @@ class Grid {
             );
         }
 
-        // Trigger auto-update for SELL side if metric exceeds threshold
-        if (manager && sellMetric > (GRID_COMPARISON.DIVERGENCE_THRESHOLD_PERCENTAGE / 100)) {
-            const metricPercent = sellMetric * 100;  // Metric is 0-1 scale, convert to percentage (0-100)
-            const threshold = GRID_COMPARISON.DIVERGENCE_THRESHOLD_PERCENTAGE;
+        // Trigger auto-update for SELL side if RMS metric exceeds threshold
+        if (manager && sellMetric > (GRID_COMPARISON.RMS_PERCENTAGE / 100)) {
+            const metricPercent = sellMetric * 100;  // RMS is 0-1 scale, convert to percentage (0-100)
+            const threshold = GRID_COMPARISON.RMS_PERCENTAGE;
             manager.logger?.log?.(
-                `Sell side divergence metric ${metricPercent.toFixed(4)}% exceeds threshold ${threshold}%. Triggering updateGridOrderSizesForSide...`,
+                `Sell side RMS divergence ${metricPercent.toFixed(2)}% exceeds threshold ${threshold}%. Triggering updateGridOrderSizesForSide...`,
                 'info'
             );
 
@@ -1201,19 +1201,21 @@ class Grid {
             }
         }
 
-        // Return normalized metric: average squared difference
+        // Return RMS (Root Mean Square) metric: sqrt of average squared difference
+        // RMS is the quadratic mean, representing standard deviation of relative errors
         const totalOrders = matchCount + unmatchedCount;
-        const metric = totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
+        const meanSquaredDiff = totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
+        const metric = Math.sqrt(meanSquaredDiff);  // RMS calculation
 
         // Log divergence calculation breakdown
-        if (metric > 0.01) {  // More than 10 promille (0.01 in normalized form)
+        if (metric > 0.1) {  // More than 10% RMS divergence
             console.log(`\nDEBUG [${sideName}] Divergence Calculation Breakdown:`);
             console.log(`  Matched orders: ${matchCount}`);
             console.log(`  Unmatched orders: ${unmatchedCount}`);
             console.log(`  Total orders (denominator): ${totalOrders}`);
             console.log(`  Sum of squared differences: ${sumSquaredDiff.toFixed(8)}`);
-            console.log(`  Metric (normalized): ${metric.toFixed(8)}`);
-            console.log(`  Metric (promille): ${(metric * 1000).toFixed(6)}`);
+            console.log(`  Mean squared difference: ${meanSquaredDiff.toFixed(8)}`);
+            console.log(`  RMS (Root Mean Square): ${metric.toFixed(4)} (${(metric * 100).toFixed(2)}%)`);
             console.log(`  Max relative difference: ${(maxRelativeDiff * 100).toFixed(2)}%`);
             console.log(`  Large deviations (>10%): ${largeDeviations.length}`);
 

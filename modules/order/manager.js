@@ -1383,27 +1383,49 @@ class OrderManager {
 
             // Calculate proceeds before converting to SPREAD
             if (filledOrder.type === ORDER_TYPES.SELL) {
-                const proceeds = filledOrder.size * filledOrder.price;
-                proceedsBuy += proceeds;  // Collect in pendingProceeds only, NOT in chainFree (to avoid double-counting)
+                const rawProceeds = filledOrder.size * filledOrder.price;
+                // Deduct market fee from quote asset (assetB) that we're receiving
+                // (Skip fee for BTS - blockchain fees are handled separately)
+                let netProceeds = rawProceeds;
+                let feeInfo = '';
+                if (this.config.assetB !== 'BTS') {
+                    const feeResult = getAssetFees(this.config.assetB, rawProceeds);
+                    netProceeds = typeof feeResult === 'number' ? feeResult : rawProceeds;
+                    if (netProceeds !== rawProceeds) {
+                        feeInfo = ` (net after market fee: ${netProceeds.toFixed(8)})`;
+                    }
+                }
+                proceedsBuy += netProceeds;  // Collect in pendingProceeds only, NOT in chainFree (to avoid double-counting)
                 // SELL means we receive quote asset (buy side) and give up base asset (sell side)
                 // NOTE: Do NOT add proceeds to deltaBuyFree - proceeds go to pendingProceeds, not chainFree
-                deltaBuyTotal += proceeds;  // But DO update total (free + committed)
+                deltaBuyTotal += netProceeds;  // But DO update total (free + committed) with net amount after market fee
                 // sellFree was reduced at order creation; the locked size is now sold, so only the total decreases
                 deltaSellTotal -= filledOrder.size;
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
-                this.logger.log(`Sell filled: +${proceeds.toFixed(8)} ${quoteName}, -${filledOrder.size.toFixed(8)} ${baseName} committed (orderId=${filledOrder.id}, size=${filledOrder.size.toFixed(8)}, price=${filledOrder.price}, isPartial=${filledOrder.isPartial})`, 'info');
+                this.logger.log(`Sell filled: +${rawProceeds.toFixed(8)} ${quoteName}${feeInfo}, -${filledOrder.size.toFixed(8)} ${baseName} committed (orderId=${filledOrder.id}, size=${filledOrder.size.toFixed(8)}, price=${filledOrder.price}, isPartial=${filledOrder.isPartial})`, 'info');
             } else {
-                const proceeds = filledOrder.size / filledOrder.price;
-                proceedsSell += proceeds;  // Collect in pendingProceeds only, NOT in chainFree (to avoid double-counting)
+                const rawProceeds = filledOrder.size / filledOrder.price;
+                // Deduct market fee from base asset (assetA) that we're receiving
+                // (Skip fee for BTS - blockchain fees are handled separately)
+                let netProceeds = rawProceeds;
+                let feeInfo = '';
+                if (this.config.assetA !== 'BTS') {
+                    const feeResult = getAssetFees(this.config.assetA, rawProceeds);
+                    netProceeds = typeof feeResult === 'number' ? feeResult : rawProceeds;
+                    if (netProceeds !== rawProceeds) {
+                        feeInfo = ` (net after market fee: ${netProceeds.toFixed(8)})`;
+                    }
+                }
+                proceedsSell += netProceeds;  // Collect in pendingProceeds only, NOT in chainFree (to avoid double-counting)
                 // BUY means we receive base asset (assetA, sell side) and spend quote asset (assetB, buy side)
                 // NOTE: Do NOT add proceeds to deltaSellFree - proceeds go to pendingProceeds, not chainFree
-                deltaSellTotal += proceeds;  // But DO update total (free + committed)
+                deltaSellTotal += netProceeds;  // But DO update total (free + committed) with net amount after market fee
                 // buyFree was reduced at order creation; only total decreases to reflect the spend
                 deltaBuyTotal -= filledOrder.size;
                 const quoteName = this.config.assetB || 'quote';
                 const baseName = this.config.assetA || 'base';
-                this.logger.log(`Buy filled: +${proceeds.toFixed(8)} ${baseName}, -${filledOrder.size.toFixed(8)} ${quoteName} committed (orderId=${filledOrder.id}, size=${filledOrder.size.toFixed(8)}, price=${filledOrder.price}, isPartial=${filledOrder.isPartial})`, 'info');
+                this.logger.log(`Buy filled: +${rawProceeds.toFixed(8)} ${baseName}${feeInfo}, -${filledOrder.size.toFixed(8)} ${quoteName} committed (orderId=${filledOrder.id}, size=${filledOrder.size.toFixed(8)}, price=${filledOrder.price}, isPartial=${filledOrder.isPartial})`, 'info');
             }
 
             // Only convert to SPREAD if this is a FULLY filled order, not a partial

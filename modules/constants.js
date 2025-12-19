@@ -65,33 +65,29 @@ const GRID_LIMITS = Object.freeze({
     // If threshold = 5%, then 10% >= 5% triggers update for buy side only
     GRID_REGENERATION_PERCENTAGE: 3,
     // Grid comparison metrics
-    // Stores the normalized sum of squared relative differences between calculated and persisted grids
-    // Used to detect significant divergence between in-memory grid and persisted state
+    // Detects significant divergence between calculated (in-memory) and persisted grid state
+    // after order fills and rotations
     GRID_COMPARISON: Object.freeze({
-        // Metric: sum of ((calculated - persisted) / persisted)^2 / count
-        // Represents average squared relative error across non-spread orders
+        // Metric calculation: RMS (Root Mean Square) of relative order size differences
+        // Formula: RMS = √(mean of ((calculated - persisted) / persisted)²)
+        // Represents the quadratic mean of relative size errors
         SUMMED_RELATIVE_SQUARED_DIFFERENCE: 'summedRelativeSquaredDiff',
 
-        // Divergence threshold for automatic grid regeneration (as percentage)
-        // Metric = mean of squared relative errors (as decimal: 0.01 = 1% divergence)
+        // Divergence threshold for automatic grid regeneration (RMS as percentage)
         // When compareGrids() metric exceeds this threshold, updateGridOrderSizes will be triggered
         //
-        // Distribution unevenness scaling: threshold ≈ base × (1 + n) where n = ratio of perfect orders
-        // Distribution ratio: 1/(1+n) orders with errors, n/(1+n) perfect orders
-        // Example: 1/10 distribution (n=9) requires 10× higher threshold than 100% distribution
-        //
-        // Threshold Reference Table (for 1/10 distribution: 10% outliers, 90% perfect):
+        // RMS Threshold Reference Table (for 1/10 distribution: 10% outliers, 90% perfect):
         // ┌────────────────────────────────────────────────────────┐
-        // │ % Threshold │ Avg Error │ Description                 │
+        // │ RMS %       │ Avg Error │ Description                 │
         // ├────────────────────────────────────────────────────────┤
-        // │ 0.1%        │ ~1.0%     │ Very strict                 │
-        // │ 0.5%        │ ~2.2%     │ Strict                      │
-        // │ 1%          │ ~3.2%     │ Default (balanced)          │
-        // │ 2%          │ ~4.5%     │ Lenient                     │
-        // │ 5%          │ ~7.1%     │ Very lenient                │
-        // │ 10%         │ ~10%      │ Extremely lenient           │
+        // │ 3.162%      │ ~1.0%     │ Very strict                 │
+        // │ 7.071%      │ ~2.2%     │ Strict                      │
+        // │ 10%         │ ~3.2%     │ Default (balanced)          │
+        // │ 14.142%     │ ~4.5%     │ Lenient                     │
+        // │ 22.360%     │ ~7.1%     │ Very lenient                │
+        // │ 31.623%     │ ~10%      │ Extremely lenient           │
         // └────────────────────────────────────────────────────────┘
-        DIVERGENCE_THRESHOLD_PERCENTAGE: 1
+        RMS_PERCENTAGE: 10
     })
 });
 
