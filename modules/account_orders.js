@@ -1,18 +1,14 @@
 /**
  * Account Orders Module - Local persistence for order grid snapshots
- * 
- * This module manages the profiles/orders.json file which stores:
- * - Per-bot order grid snapshots (prices, sizes, states, chain IDs)
- * - Bot metadata (name, assets, active status)
- * - Timestamps for tracking changes
- * 
- * The grid snapshot allows the bot to resume from where it left off
- * without regenerating orders, maintaining consistency with on-chain state.
- * 
- * File structure:
+ *
+ * Per-Bot Architecture:
+ * Each bot has its own dedicated file: profiles/orders/{botKey}.json
+ * This eliminates race conditions when multiple bots write simultaneously.
+ *
+ * File structure (per-bot):
  * {
  *   "bots": {
- *     "botkey-0": {
+ *     "botkey": {
  *       "meta": { name, assetA, assetB, active, index },
  *       "grid": [ { id, type, state, price, size, orderId }, ... ],
  *       "cacheFunds": { buy: number, sell: number },
@@ -24,6 +20,9 @@
  *   },
  *   "lastUpdated": "ISO timestamp"
  * }
+ *
+ * The grid snapshot allows the bot to resume from where it left off
+ * without regenerating orders, maintaining consistency with on-chain state.
  */
 const fs = require('fs');
 const path = require('path');
@@ -105,6 +104,7 @@ class AccountOrders {
   }
 
   _loadData() {
+    // Load the file directly - per-bot files only contain their own bot's data
     return this._readFile(this.profilesPath);
   }
 
@@ -129,6 +129,10 @@ class AccountOrders {
   /**
    * Ensure storage entries exist for all provided bot configurations.
    * Creates new entries for unknown bots, updates metadata for existing ones.
+   *
+   * When in per-bot mode (botKey set): Only processes the matching bot entry and ignores others.
+   * When in shared mode (no botKey): Processes all bot entries and prunes stale ones.
+   *
    * @param {Array} botEntries - Array of bot configurations from bots.json
    */
   ensureBotEntries(botEntries = []) {
@@ -136,8 +140,16 @@ class AccountOrders {
     const validKeys = new Set();
     let changed = false;
 
+    // In per-bot mode: only process the matching bot
+    const entriesToProcess = this.botKey
+      ? botEntries.filter(bot => {
+          const key = bot.botKey || createBotKey(bot, botEntries.indexOf(bot));
+          return key === this.botKey;
+        })
+      : botEntries;
+
     // 1. Update/Create active bots
-    for (const [index, bot] of botEntries.entries()) {
+    for (const [index, bot] of entriesToProcess.entries()) {
       const key = bot.botKey || createBotKey(bot, index);
       validKeys.add(key);
 
@@ -185,12 +197,14 @@ class AccountOrders {
       bot.botKey = key;
     }
 
-    // 2. Prune zombie bots (remove entries not in botEntries)
-    for (const key of Object.keys(this.data.bots)) {
-      if (!validKeys.has(key)) {
-        console.log(`[AccountOrders] Pruning stale bot entry: ${key}`);
-        delete this.data.bots[key];
-        changed = true;
+    // 2. Prune zombie bots (remove entries not in botEntries) - only in shared mode
+    if (!this.botKey) {
+      for (const key of Object.keys(this.data.bots)) {
+        if (!validKeys.has(key)) {
+          console.log(`[AccountOrders] Pruning stale bot entry: ${key}`);
+          delete this.data.bots[key];
+          changed = true;
+        }
       }
     }
 
@@ -226,6 +240,10 @@ class AccountOrders {
   /**
    * Save the current order grid snapshot for a bot.
    * Called after grid changes (initialization, fills, syncs).
+   *
+   * In per-bot mode: Only stores the specified bot's data (ignores other bots in this.data).
+   * In shared mode: Stores all bot data.
+   *
    * @param {string} botKey - Bot identifier key
    * @param {Array} orders - Array of order objects from OrderManager
    * @param {Object} cacheFunds - Optional cached funds { buy: number, sell: number }
@@ -234,11 +252,12 @@ class AccountOrders {
    */
   storeMasterGrid(botKey, orders = [], cacheFunds = null, pendingProceeds = null, btsFeesOwed = null) {
     if (!botKey) return;
-    
+
     // CRITICAL: Reload from disk before writing to prevent race conditions between bot processes
-    // Each bot process has its own in-memory copy of orders.json - reloading ensures we preserve other bots' grids
-    this._loadData();
-    
+    // In per-bot mode: loads only this bot's data from its dedicated file
+    // In shared mode: loads all bots from the shared file
+    this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+
     const snapshot = Array.isArray(orders) ? orders.map(order => this._serializeOrder(order)) : [];
     if (!this.data.bots[botKey]) {
       const meta = this._buildMeta({ name: null, assetA: null, assetB: null, active: false }, botKey, null);
@@ -305,7 +324,14 @@ class AccountOrders {
    * @param {Object} cacheFunds - Cached funds { buy, sell }
    */
   updateCacheFunds(botKey, cacheFunds) {
-    if (!botKey || !this.data || !this.data.bots || !this.data.bots[botKey]) {
+    if (!botKey) return;
+
+    // Reload from disk in per-bot mode to ensure consistency
+    if (this.botKey) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
+    if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
       return;
     }
     this.data.bots[botKey].cacheFunds = cacheFunds || { buy: 0, sell: 0 };
@@ -337,7 +363,14 @@ class AccountOrders {
    * @param {Object} pendingProceeds - Pending proceeds { buy, sell }
    */
   updatePendingProceeds(botKey, pendingProceeds) {
-    if (!botKey || !this.data || !this.data.bots || !this.data.bots[botKey]) {
+    if (!botKey) return;
+
+    // Reload from disk in per-bot mode to ensure consistency
+    if (this.botKey) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
+    if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
       return;
     }
     this.data.bots[botKey].pendingProceeds = pendingProceeds || { buy: 0, sell: 0 };
@@ -371,7 +404,14 @@ class AccountOrders {
    * @param {number} btsFeesOwed - BTS blockchain fees owed
    */
   updateBtsFeesOwed(botKey, btsFeesOwed) {
-    if (!botKey || !this.data || !this.data.bots || !this.data.bots[botKey]) {
+    if (!botKey) return;
+
+    // Reload from disk in per-bot mode to ensure consistency
+    if (this.botKey) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
+    if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
       return;
     }
     this.data.bots[botKey].btsFeesOwed = Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0;

@@ -28,9 +28,8 @@ const accountBots = require('./modules/account_bots');
 const { parseJsonWithComments } = accountBots;
 const { AccountOrders, createBotKey } = require('./modules/account_orders');
 
-// Module-level accountOrders instance for standalone functions (runBotInstances, restart handlers)
-// Class methods should use this.accountOrders instead
-const accountOrders = new AccountOrders();
+// Note: accountOrders is now per-bot only. Each bot has its own AccountOrders instance
+// created in DEXBot.start() (line 663). This eliminates shared-file race conditions.
 
 // Primary CLI driver that manages tracked bots and helper utilities such as key/bot editors.
 const PROFILES_BOTS_FILE = path.join(__dirname, 'profiles', 'bots.json');
@@ -222,7 +221,7 @@ class DEXBot {
      * 2. Fetches account balances for percentage-based botFunds
      * 3. Generates the virtual order grid
      * 4. Places orders on-chain in an interleaved pattern (sell, buy, sell, buy...)
-     * 5. Persists the grid snapshot to profiles/orders.json
+     * 5. Persists the grid snapshot to profiles/orders/{botKey}.json
      */
     async placeInitialOrders() {
         if (!this.manager) {
@@ -1215,7 +1214,8 @@ async function runBotInstances(botEntries, { forceDryRun = false, sourceName = '
         dryRun: forceDryRun ? true : entry.dryRun,
     }));
 
-    accountOrders.ensureBotEntries(prepared);
+    // Note: ensureBotEntries is no longer needed here. Each bot creates its own AccountOrders
+    // instance with per-bot file when it starts, eliminating the need for shared initialization.
 
     const { errors, warnings } = collectValidationIssues(prepared, sourceName);
     if (warnings.length) {
@@ -1360,7 +1360,7 @@ async function stopBotByName(botName) {
  * Restart a bot by regenerating its grid and starting it fresh.
  * This method:
  * 1. Generates a new order grid from current configuration
- * 2. Persists the grid snapshot to profiles/orders.json
+ * 2. Persists the grid snapshot to profiles/orders/{botKey}.json
  * 3. Starts the bot with the new grid (password authentication happens during startup)
  *
  * @param {string|null} botName - Name of the bot to restart, or null for all active
@@ -1376,7 +1376,7 @@ async function restartBotByName(botName) {
         console.warn('Timed out waiting for BitShares connection before generating grid snapshots. Will attempt generation without connection where possible.');
     }
 
-    // Generate a fresh grid snapshot for the selected bots and persist to profiles/orders.json
+    // Generate a fresh grid snapshot for the selected bots and persist to profiles/orders/{botKey}.json
     const targets = botName ? entries.filter(b => b.name === botName) : entries.filter(b => b.active);
     if (botName && targets.length === 0) {
         console.error(`Could not find any bot named '${botName}' to restart.`);
@@ -1427,13 +1427,15 @@ async function restartBotByName(botName) {
                 console.warn(`Grid initialization for '${bot.name}' failed: ${e && e.message ? e.message : e}`);
             }
 
-            // Ensure persisted account-orders metadata exists for this bot and persist the generated grid
-            accountOrders.ensureBotEntries([bot]);
+            // Create per-bot AccountOrders instance and ensure metadata exists for this bot
+            const botAccountOrders = new AccountOrders({ botKey: bot.botKey });
+            botAccountOrders.ensureBotEntries([bot]);
+
             // CRITICAL: Reset pendingProceeds when grid is regenerated (restart command)
             // New grid means old partial fill proceeds are no longer relevant
             manager.funds.pendingProceeds = { buy: 0, sell: 0 };
-            persistGridSnapshot(manager, accountOrders, bot.botKey);
-            console.log(`Generated and stored grid snapshot for '${bot.name}' to profiles/orders.json`);
+            persistGridSnapshot(manager, botAccountOrders, bot.botKey);
+            console.log(`Generated and stored grid snapshot for '${bot.name}' to profiles/orders/${bot.botKey}.json`);
         } catch (err) {
             console.warn(`Failed to generate grid for '${bot.name}': ${err && err.message ? err.message : err}`);
         }

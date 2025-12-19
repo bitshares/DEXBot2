@@ -2007,7 +2007,7 @@ class OrderManager {
             try {
                 const { AccountOrders } = require('../account_orders');
                 if (this.config && this.config.botKey) {
-                    const accountDb = this.accountOrders || new AccountOrders({ profilesPath: this.config.profilesPath });
+                    const accountDb = this.accountOrders || new AccountOrders({ botKey: this.config.botKey });
                     accountDb.updateCacheFunds(this.config.botKey, this.funds.cacheFunds);
                     this.logger.log(`Persisted cacheFunds.${side} = ${newCacheFundsValue.toFixed(8)}`, 'debug');
                 }

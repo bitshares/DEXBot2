@@ -1235,7 +1235,7 @@ class Grid {
             manager.funds.cacheFunds[side] = 0;
             const { AccountOrders } = require('../account_orders');
             if (manager.config && manager.config.botKey) {
-                const accountDb = manager.accountOrders || new AccountOrders({ profilesPath: manager.config.profilesPath });
+                const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
                 accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
                 manager.logger?.log?.(`Cleared persisted cacheFunds.${side} after regeneration`, 'info');
             } else {
@@ -1257,7 +1257,7 @@ class Grid {
 
             const { AccountOrders } = require('../account_orders');
             if (manager.config && manager.config.botKey) {
-                const accountDb = manager.accountOrders || new AccountOrders({ profilesPath: manager.config.profilesPath });
+                const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
                 accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
                 manager.logger?.log?.(`Persisted cacheFunds.${side} (${Number(manager.funds.cacheFunds[side]).toFixed(8)}) after regeneration`, 'debug');
             }
