@@ -20,3 +20,4 @@ Thumbs.db
 # Logs
 *.log
 .env.pm2
+.claude/
