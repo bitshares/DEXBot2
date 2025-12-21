@@ -1113,9 +1113,21 @@ class Grid {
             return 0;
         }
 
+        // Filter out partial orders (state === 'partial') from divergence calculation
+        // Include: ACTIVE (on-chain) and VIRTUAL (not yet on-chain) orders - these represent the intended grid
+        // Exclude: PARTIAL (partially filled orders in transition) - these are temporary and will be resolved
+        // This ensures divergence metric reflects the true grid structure, not temporary fill states
+        const { ORDER_STATES } = require('../constants');
+        const filteredCalculated = calculatedOrders.filter(o => o.state !== ORDER_STATES.PARTIAL);
+        const filteredPersisted = persistedOrders.filter(o => o.state !== ORDER_STATES.PARTIAL);
+
+        if (filteredCalculated.length === 0 && filteredPersisted.length === 0) {
+            return 0;
+        }
+
         // Build lookup map by grid ID for stable matching
         const persistedMap = new Map();
-        for (const order of persistedOrders) {
+        for (const order of filteredPersisted) {
             if (order.id) {
                 persistedMap.set(order.id, order);
             }
@@ -1129,7 +1141,7 @@ class Grid {
         // Compare each calculated order with its persisted counterpart by ID
         const largeDeviations = [];  // Track orders with large deviations for debugging
 
-        for (const calcOrder of calculatedOrders) {
+        for (const calcOrder of filteredCalculated) {
             const persOrder = persistedMap.get(calcOrder.id);
 
             if (persOrder) {
@@ -1186,8 +1198,8 @@ class Grid {
         }
 
         // Also check for persisted orders that don't exist in calculated (opposite direction)
-        for (const persOrder of persistedOrders) {
-            if (!calculatedOrders.some(c => c.id === persOrder.id)) {
+        for (const persOrder of filteredPersisted) {
+            if (!filteredCalculated.some(c => c.id === persOrder.id)) {
                 // Persisted order has no calculated counterpart: divergence
                 largeDeviations.push({
                     id: persOrder.id,
@@ -1209,10 +1221,14 @@ class Grid {
 
         // Log divergence calculation breakdown
         if (metric > 0.1) {  // More than 10% RMS divergence
+            const partialExcludedCount = persistedOrders.length - filteredPersisted.length;
             console.log(`\nDEBUG [${sideName}] Divergence Calculation Breakdown:`);
             console.log(`  Matched orders: ${matchCount}`);
             console.log(`  Unmatched orders: ${unmatchedCount}`);
             console.log(`  Total orders (denominator): ${totalOrders}`);
+            if (partialExcludedCount > 0) {
+                console.log(`  Partial orders excluded: ${partialExcludedCount}`);
+            }
             console.log(`  Sum of squared differences: ${sumSquaredDiff.toFixed(8)}`);
             console.log(`  Mean squared difference: ${meanSquaredDiff.toFixed(8)}`);
             console.log(`  RMS (Root Mean Square): ${metric.toFixed(4)} (${(metric * 100).toFixed(2)}%)`);
