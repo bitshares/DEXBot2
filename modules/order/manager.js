@@ -957,12 +957,18 @@ class OrderManager {
             }
         }
 
-        const newSize = Math.max(0, currentSize - filledAmount);
-
         // Check if fully filled or partially filled
         // Use blockchain integer comparison for precision
         const precision = (orderType === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
-        const newSizeInt = floatToBlockchainInt(newSize, precision);
+
+        // CRITICAL FIX: Use integer-based subtraction of blockchain units to avoid floating point noise
+        // This prevents small floats (like 1e-18) from keeping an order in PARTIAL state when it's actually finished.
+        const currentSizeInt = floatToBlockchainInt(currentSize, precision);
+        const filledAmountInt = floatToBlockchainInt(filledAmount, precision);
+        const newSizeInt = Math.max(0, currentSizeInt - filledAmountInt);
+
+        // Convert back to float for the rest of the logic
+        const newSize = blockchainToFloat(newSizeInt, precision);
 
         if (newSizeInt <= 0) {
             // Fully filled
@@ -1891,7 +1897,13 @@ class OrderManager {
         this.logger.log(`Preparing rotation for ${count} ${side} order(s). Rotation Budget: ${rotationBudget.toFixed(8)} (from cacheFunds)`, 'info');
 
         const orderCount = Math.min(ordersToProcess.length, eligibleSpreadOrders.length);
-        const simpleDistribution = orderCount > 0 ? rotationBudget / orderCount : 0;
+        let simpleDistribution = 0;
+        if (orderCount > 0) {
+            const simpleDistributionRaw = rotationBudget / orderCount;
+            const precision = side === 'buy' ? (this.assets?.assetB?.precision ?? 8) : (this.assets?.assetA?.precision ?? 8);
+            simpleDistribution = blockchainToFloat(floatToBlockchainInt(simpleDistributionRaw, precision), precision);
+            this.logger.log(`Using simple distribution for rotation: ${simpleDistribution.toFixed(8)} (budget ${rotationBudget.toFixed(8)} / ${orderCount} orders)`, 'debug');
+        }
 
         // Calculate geometric distribution across ALL grid slots
         // This ensures the rotation order size reflects what a full grid reset would allocate
@@ -1979,9 +1991,13 @@ class OrderManager {
             if (totalGeometric > 0 && totalGeometric > rotationBudget) {
                 // Scale down all geometric sizes proportionally so the total equals rotationBudget
                 const scale = rotationBudget / totalGeometric;
+                const precision = side === 'buy' ? (this.assets?.assetB?.precision ?? 8) : (this.assets?.assetA?.precision ?? 8);
+
                 for (let i = 0; i < orderCount; i++) {
                     const g = geometricSizes[i] !== undefined ? geometricSizes[i] : 0;
-                    const allocated = g * scale;
+                    const allocatedRaw = g * scale;
+                    // Quantize the result of scaling to ensure it matches blockchain increments
+                    const allocated = blockchainToFloat(floatToBlockchainInt(allocatedRaw, precision), precision);
                     allocatedSizes.push(allocated);
                     allocatedSum += allocated;
                 }

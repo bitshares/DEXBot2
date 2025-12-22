@@ -530,12 +530,14 @@ class DEXBot {
 
                     // ALWAYS update target grid slot with new rotation size (not just when usingOverride)
                     // This ensures the grid order size matches what was actually placed on-chain
+                    // Use the rounded newAmountToSell/newMinToReceive that were actually used in the transaction
+                    const actualSize = newAmountToSell;
                     const slot = this.manager.orders.get(newGridId) || { id: newGridId, type: rotation.type, price: newPrice, size: 0, state: ORDER_STATES.VIRTUAL };
                     const updatedSlot = {
                         ...slot,
                         id: newGridId,
                         type: rotation.type,
-                        size: rotation.newSize,
+                        size: actualSize,
                         price: newPrice,
                         state: ORDER_STATES.VIRTUAL,
                         orderId: null
@@ -544,11 +546,11 @@ class DEXBot {
 
                     // Detect if rotation was placed with partial proceeds (size < grid slot size)
                     // This order should be marked PARTIAL, not ACTIVE, so it's filtered from divergence calculations
-                    const isPartialPlacement = slot.size > 0 && rotation.newSize < slot.size;
+                    const isPartialPlacement = slot.size > 0 && actualSize < slot.size;
 
                     this.manager.completeOrderRotation(oldOrder);
                     await this.manager.synchronizeWithChain({ gridOrderId: newGridId, chainOrderId: oldOrder.orderId, isPartialPlacement }, 'createOrder');
-                    this.manager.logger.log(`Order size updated: ${oldOrder.orderId} new price ${newPrice.toFixed(4)}, new size ${newSize.toFixed(8)}`, 'info');
+                    this.manager.logger.log(`Order size updated: ${oldOrder.orderId} new price ${newPrice.toFixed(4)}, new size ${actualSize.toFixed(8)}`, 'info');
                 }
             }
 

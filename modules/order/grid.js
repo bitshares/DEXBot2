@@ -21,9 +21,9 @@
  * - Grid loading (loadGrid): ACTIVE orders increment funds.committed
  * - Order activation: funds.virtuel decreases, funds.committed increases
  */
-const { ORDER_TYPES, DEFAULT_CONFIG, GRID_LIMITS } = require('../constants');
+const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS } = require('../constants');
 const { GRID_COMPARISON } = GRID_LIMITS;
-const { floatToBlockchainInt, resolveRelativePrice } = require('./utils');
+const { floatToBlockchainInt, blockchainToFloat, resolveRelativePrice } = require('./utils');
 
 // Grid sizing limits are centralized in modules/constants.js -> GRID_LIMITS
 
@@ -157,7 +157,7 @@ class Grid {
         manager.funds.cacheFunds = { ...savedCacheFunds };
         manager.funds.pendingProceeds = { ...savedPendingProceeds };
         manager.funds.btsFeesOwed = savedBtsFeesOwed;
-        
+
         grid.forEach(order => {
             manager._updateOrder(order);
             // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
@@ -491,12 +491,12 @@ class Grid {
         manager.orders.clear();
         Object.values(manager._ordersByState).forEach(set => set.clear());
         Object.values(manager._ordersByType).forEach(set => set.clear());
-        
+
         // NOTE: pendingProceeds are RESET during grid initialization (full regeneration)
         // They will be restored from persistence if needed during bot startup
         manager.resetFunds();
         // Do NOT preserve pendingProceeds here - grid regeneration clears all state
-        
+
         sizedOrders.forEach(order => {
             manager._updateOrder(order);
             // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
@@ -751,7 +751,7 @@ class Grid {
         if (manager.funds && manager.funds.pendingProceeds) {
             manager.funds.pendingProceeds[sideName] = 0;
         }
-        
+
         // Persist cleared pendingProceeds for this side so cleared state survives restart
         try {
             if (manager.config && manager.config.botKey && manager.accountOrders) {
@@ -782,12 +782,12 @@ class Grid {
             const surplusInt = totalInputInt - totalAllocatedInt;
             const surplus = blockchainToFloat(surplusInt, precision);
 
-                try {
-                    manager.logger?.log?.(
-                        `DEBUG Side Surplus (${sideName}): totalInput=${totalInput.toFixed(8)}, allocated=${blockchainToFloat(totalAllocatedInt, precision).toFixed(8)}, surplus=${surplus.toFixed(8)}`,
-                        'debug'
-                    );
-                } catch (e) { manager.logger?.log?.(`Warning: failed to log side surplus: ${e.message}`, 'warn'); }
+            try {
+                manager.logger?.log?.(
+                    `DEBUG Side Surplus (${sideName}): totalInput=${totalInput.toFixed(8)}, allocated=${blockchainToFloat(totalAllocatedInt, precision).toFixed(8)}, surplus=${surplus.toFixed(8)}`,
+                    'debug'
+                );
+            } catch (e) { manager.logger?.log?.(`Warning: failed to log side surplus: ${e.message}`, 'warn'); }
 
             // Add surplus back to cacheFunds
             if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
@@ -884,7 +884,7 @@ class Grid {
             manager.funds.pendingProceeds.buy = 0;
             manager.funds.pendingProceeds.sell = 0;
         }
-        
+
         // Persist cleared pendingProceeds so cleared state survives restart
         try {
             if (manager.config && manager.config.botKey && manager.accountOrders) {
@@ -967,11 +967,13 @@ class Grid {
             return { buy: { metric: 0, updated: false }, sell: { metric: 0, updated: false }, totalMetric: 0 };
         }
 
-        // Separate orders by type
-        const calculatedBuys = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.BUY);
-        const calculatedSells = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.SELL);
-        const persistedBuys = persistedGrid.filter(o => o && o.type === ORDER_TYPES.BUY);
-        const persistedSells = persistedGrid.filter(o => o && o.type === ORDER_TYPES.SELL);
+        const { ORDER_STATES } = require('../constants'); // Moved up for use in filtering
+        // Separate orders by type and filter out partial orders from the comparison calculation
+        // This ensures divergence metric reflects the true grid structure, not temporary fill states
+        const calculatedBuys = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.BUY && o.state !== ORDER_STATES.PARTIAL);
+        const calculatedSells = calculatedGrid.filter(o => o && o.type === ORDER_TYPES.SELL && o.state !== ORDER_STATES.PARTIAL);
+        const persistedBuys = persistedGrid.filter(o => o && o.type === ORDER_TYPES.BUY && o.state !== ORDER_STATES.PARTIAL);
+        const persistedSells = persistedGrid.filter(o => o && o.type === ORDER_TYPES.SELL && o.state !== ORDER_STATES.PARTIAL);
 
         // Helper: Calculate ideal orders if manager is present
         // This ensures the comparison reflects what the grid SHOULD be (with available funds included)
@@ -988,7 +990,15 @@ class Grid {
                 ? manager.funds?.available?.buy || 0
                 : manager.funds?.available?.sell || 0;
 
-            const totalInput = cache + grid + available;
+            // CRITICAL FIX: Since the 'orders' passed to this helper now exclude partial orders,
+            // we must also subtract the capital held in those partial orders from the total budget.
+            // Otherwise, we'd be trying to distribute 100% of funds across only a partial set of slots,
+            // leading to artificial divergence.
+            const partialsValue = calculatedGrid
+                .filter(o => o && o.type === type && o.state === ORDER_STATES.PARTIAL)
+                .reduce((sum, o) => sum + (Number(o.size) || 0), 0);
+
+            const totalInput = Math.max(0, cache + grid + available - partialsValue);
             const precision = isBuy ? manager.assets?.assetB?.precision : manager.assets?.assetA?.precision;
             const config = manager.config || {};
 
@@ -996,7 +1006,7 @@ class Grid {
                 const idealSizes = Grid.calculateRotationOrderSizes(
                     totalInput,
                     0, // gridValue is covered by totalInput
-                    orders.length,
+                    orders.length, // Use the length of the filtered orders
                     type,
                     config,
                     0,
@@ -1113,13 +1123,9 @@ class Grid {
             return 0;
         }
 
-        // Filter out partial orders (state === 'partial') from divergence calculation
-        // Include: ACTIVE (on-chain) and VIRTUAL (not yet on-chain) orders - these represent the intended grid
-        // Exclude: PARTIAL (partially filled orders in transition) - these are temporary and will be resolved
-        // This ensures divergence metric reflects the true grid structure, not temporary fill states
-        const { ORDER_STATES } = require('../constants');
-        const filteredCalculated = calculatedOrders.filter(o => o.state !== ORDER_STATES.PARTIAL);
-        const filteredPersisted = persistedOrders.filter(o => o.state !== ORDER_STATES.PARTIAL);
+        // Filtered lists already provided by caller (compareGrids)
+        const filteredCalculated = calculatedOrders;
+        const filteredPersisted = persistedOrders;
 
         if (filteredCalculated.length === 0 && filteredPersisted.length === 0) {
             return 0;
@@ -1397,8 +1403,34 @@ class Grid {
         // This ensures all funds are distributed and ratios are preserved
         const sizes = new Array(n).fill(0);
         const totalWeight = rawWeights.reduce((s, w) => s + w, 0) || 1;
-        for (let i = 0; i < n; i++) {
-            sizes[i] = (rawWeights[i] / totalWeight) * totalFunds;
+
+        if (precision !== null && precision !== undefined) {
+            // Quantitative allocation: use units to avoid floating point noise from the start
+            // This ensures every order in the grid is perfectly aligned with blockchain increments.
+            const totalUnits = floatToBlockchainInt(totalFunds, precision);
+            let unitsSummary = 0;
+            const units = new Array(n);
+
+            for (let i = 0; i < n; i++) {
+                units[i] = Math.round((rawWeights[i] / totalWeight) * totalUnits);
+                unitsSummary += units[i];
+            }
+
+            // Adjust for rounding discrepancy in units calculation (usually +/- 1 unit)
+            const diff = totalUnits - unitsSummary;
+            if (diff !== 0 && n > 0) {
+                // Adjust first order for simplicity (closest to market in mountain style)
+                units[0] = Math.max(0, units[0] + diff);
+            }
+
+            for (let i = 0; i < n; i++) {
+                sizes[i] = blockchainToFloat(units[i], precision);
+            }
+        } else {
+            // Fallback for cases without precision (not recommended for grid orders)
+            for (let i = 0; i < n; i++) {
+                sizes[i] = (rawWeights[i] / totalWeight) * totalFunds;
+            }
         }
 
         return sizes;
