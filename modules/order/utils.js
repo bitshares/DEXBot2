@@ -1352,6 +1352,35 @@ async function applyGridDivergenceCorrections(manager, accountOrders, botKey, up
 }
 
 // ---------------------------------------------------------------------------
+// Order building helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build create order arguments from an order object and asset information.
+ * Handles both SELL and BUY orders, calculating appropriate amounts based on order type.
+ *
+ * @param {Object} order - Order object with type, size, and price
+ * @param {Object} assetA - Base asset object with id property
+ * @param {Object} assetB - Quote asset object with id property
+ * @returns {Object} - { amountToSell, sellAssetId, minToReceive, receiveAssetId }
+ */
+function buildCreateOrderArgs(order, assetA, assetB) {
+    let amountToSell, sellAssetId, minToReceive, receiveAssetId;
+    if (order.type === 'sell') {
+        amountToSell = order.size;
+        sellAssetId = assetA.id;
+        minToReceive = order.size * order.price;
+        receiveAssetId = assetB.id;
+    } else {
+        amountToSell = order.size;
+        sellAssetId = assetB.id;
+        minToReceive = order.size / order.price;
+        receiveAssetId = assetA.id;
+    }
+    return { amountToSell, sellAssetId, minToReceive, receiveAssetId };
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 module.exports = {
@@ -1407,5 +1436,8 @@ module.exports = {
 
     // Grid comparisons
     runGridComparisons,
-    applyGridDivergenceCorrections
+    applyGridDivergenceCorrections,
+
+    // Order building
+    buildCreateOrderArgs
 };

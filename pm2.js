@@ -51,22 +51,13 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { parseJsonWithComments } = require('./modules/account_bots');
 
 const ROOT = __dirname;
 const PROFILES_DIR = path.join(ROOT, 'profiles');
 const BOTS_JSON = path.join(PROFILES_DIR, 'bots.json');
 const ECOSYSTEM_FILE = path.join(PROFILES_DIR, 'ecosystem.config.js');
 const LOGS_DIR = path.join(PROFILES_DIR, 'logs');
-
-// Parse JSON with comments support
-function parseJsonWithComments(content) {
-    const cleaned = content
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .split('\n')
-        .map(line => line.replace(/\/\/.*$/, ''))
-        .join('\n');
-    return JSON.parse(cleaned);
-}
 
 // Generate ecosystem.config.js from bots.json
 function generateEcosystemConfig(botNameFilter = null) {
