@@ -14,7 +14,6 @@ class MockManager {
         this.funds = {
             available: { buy: 100, sell: 0 }, // BUY available = 100
             total: { grid: { buy: 100, sell: 100 } },
-            pendingProceeds: { buy: 0, sell: 0 },
             cacheFunds: { buy: 0, sell: 0 }
         };
         this.assets = {

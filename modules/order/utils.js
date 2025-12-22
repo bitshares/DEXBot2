@@ -1121,9 +1121,8 @@ async function _fetchAssetMarketFees(assetSymbol, BitShares) {
  *
  * Usage: Instead of:
  *   accountOrders.storeMasterGrid(botKey, Array.from(manager.orders.values()),
- *                                  manager.funds.cacheFunds, manager.funds.pendingProceeds,
+ *                                  manager.funds.cacheFunds,
  *                                  manager.funds.btsFeesOwed);
- *   const proceedsOk = manager._persistPendingProceeds();
  *   const feesOk = manager._persistBtsFeesOwed();
  *
  * Just use:
@@ -1145,15 +1144,13 @@ function persistGridSnapshot(manager, accountOrders, botKey) {
             botKey,
             Array.from(manager.orders.values()),
             manager.funds.cacheFunds,
-            manager.funds.pendingProceeds,
             manager.funds.btsFeesOwed
         );
 
-        // Also try to persist individual fund components for redundancy
-        const proceedsOk = manager._persistPendingProceeds?.();
+        // Also try to persist fees component for redundancy
         const feesOk = manager._persistBtsFeesOwed?.();
 
-        return (proceedsOk !== false) && (feesOk !== false);
+        return (feesOk !== false);
     } catch (e) {
         if (manager.logger) {
             manager.logger.log(`Error during grid persistence: ${e.message}`, 'error');
@@ -1188,10 +1185,10 @@ function retryPersistenceIfNeeded(manager) {
     }
 
     try {
-        if (warning.type === 'pendingProceeds') {
-            const success = manager._persistPendingProceeds();
+        if (warning.type === 'pendingProceeds' || warning.type === 'cacheFunds') {
+            const success = typeof manager._persistCacheFunds === 'function' ? manager._persistCacheFunds() : true;
             if (success && manager.logger) {
-                manager.logger.log(`✓ Successfully retried pendingProceeds persistence`, 'info');
+                manager.logger.log(`✓ Successfully retried cacheFunds persistence (was: ${warning.type})`, 'info');
             }
             return success;
         } else if (warning.type === 'btsFeesOwed') {

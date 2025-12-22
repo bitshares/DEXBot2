@@ -9,7 +9,7 @@
  * - Fund status display (logFundsStatus)
  * 
  * Fund display (logFundsStatus) shows:
- * - available: max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
+ * - available: max(0, chainFree - virtuel - cacheFunds - btsFeesOwed)
  * - total.chain: chainFree + committed.chain (on-chain balance)
  * - total.grid: committed.grid + virtuel (grid allocation)
  * - virtuel: VIRTUAL order sizes (reserved for future placement)
@@ -98,7 +98,7 @@ class Logger {
     /**
      * Print a summary of fund status for diagnostics.
      * Displays the complete fund structure from manager.funds:
-     * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed + pendingProceeds)
+    * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed)
      * - total.chain: Total on-chain balance (chainFree + committed.chain)
      * - total.grid: Total grid allocation (committed.grid + virtuel)
      * - virtuel: VIRTUAL order sizes (reserved for future on-chain placement)
@@ -132,11 +132,9 @@ class Logger {
         const virtuelBuy = manager.funds?.virtuel?.buy ?? 0;
         const virtuelSell = manager.funds?.virtuel?.sell ?? 0;
 
-        // Cache and pending
+        // Cache
         const cacheBuy = manager.funds?.cacheFunds?.buy ?? 0;
         const cacheSell = manager.funds?.cacheFunds?.sell ?? 0;
-        const pendingBuy = manager.funds?.pendingProceeds?.buy ?? 0;
-        const pendingSell = manager.funds?.pendingProceeds?.sell ?? 0;
 
         // Committed
         const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
@@ -171,11 +169,9 @@ class Logger {
 
         console.log(`\n${debug}=== DEDUCTIONS & PENDING ===${reset}`);
         console.log(`cacheFunds: ${buy}Buy ${cacheBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${cacheSell.toFixed(8)}${reset} ${sellName}`);
-        console.log(`pendingProceeds: ${buy}Buy ${pendingBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${pendingSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`btsFeesOwed (all): ${btsFeesOwed.toFixed(8)} BTS`);
-        if (btsSide) console.log(`applicableBtsFeesOwed (${btsSide} side): ${Math.min(btsFeesOwed, (btsSide === 'buy' ? pendingBuy : pendingSell)).toFixed(8)} BTS`);
 
-        console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds ===${reset}`);
+        console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) ===${reset}`);
     }
 
     // Print a comprehensive status summary using manager state.

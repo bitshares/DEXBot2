@@ -145,17 +145,20 @@ class Grid {
 
         // CRITICAL: Preserve persistent funds before reset
         // cacheFunds: accumulated surplus from rotation sizing (persists across sessions)
-        // pendingProceeds: fill proceeds awaiting rotation
         // btsFeesOwed: accumulated blockchain fees
+        // Note: legacy `pendingProceeds` is deprecated. If present in-memory,
+        // merge it into `cacheFunds` so proceeds are not lost during reset.
         const savedCacheFunds = { ...manager.funds.cacheFunds };
-        const savedPendingProceeds = { ...manager.funds.pendingProceeds };
+        const savedPendingProceeds = manager.funds.pendingProceeds ? { ...manager.funds.pendingProceeds } : { buy: 0, sell: 0 };
         const savedBtsFeesOwed = manager.funds.btsFeesOwed;
 
         manager.resetFunds();
 
-        // Restore preserved persistent funds after reset
-        manager.funds.cacheFunds = { ...savedCacheFunds };
-        manager.funds.pendingProceeds = { ...savedPendingProceeds };
+        // Merge any legacy pendingProceeds into cacheFunds and restore fees
+        manager.funds.cacheFunds = {
+            buy: (savedCacheFunds.buy || 0) + (savedPendingProceeds.buy || 0),
+            sell: (savedCacheFunds.sell || 0) + (savedPendingProceeds.sell || 0)
+        };
         manager.funds.btsFeesOwed = savedBtsFeesOwed;
 
         grid.forEach(order => {
@@ -560,22 +563,7 @@ class Grid {
             manager.logger?.log?.(`Warning: failed to clear persisted cacheFunds during recalc: ${e.message}`, 'warn');
         }
 
-        // CRITICAL: Clear pendingProceeds and btsFeesOwed after grid regeneration
-        // Grid regeneration invalidates all previous proceeds as the grid structure changed.
-        // Stale proceeds from old orders could interfere with new rotation calculations.
-        // Fees from old orders are also no longer relevant with the new grid structure.
-        // Reset to zero and persist to ensure clean state on next restart.
-        if (manager.funds && manager.funds.pendingProceeds) {
-            manager.funds.pendingProceeds = { buy: 0, sell: 0 };
-            try {
-                if (manager.accountOrders && typeof manager.accountOrders.updatePendingProceeds === 'function') {
-                    manager.accountOrders.updatePendingProceeds(manager.config.botKey, manager.funds.pendingProceeds);
-                    manager.logger?.log?.('✓ Cleared pendingProceeds after grid regeneration', 'info');
-                }
-            } catch (e) {
-                manager.logger?.log?.(`Warning: failed to clear persisted pendingProceeds during regeneration: ${e.message}`, 'warn');
-            }
-        }
+        // NOTE: `pendingProceeds` storage removed. Any legacy proceeds are handled via migration.
 
         // Also clear BTS fees when grid is regenerated
         if (manager.funds && typeof manager.funds.btsFeesOwed === 'number' && manager.funds.btsFeesOwed > 0) {
@@ -618,9 +606,9 @@ class Grid {
     }
 
     /**
-     * Check if cache funds exceed regeneration threshold and update grid sizes if needed.
+     * Check if cache or available funds exceed regeneration threshold and update grid sizes if needed.
      * Independently checks buy and sell sides - can update just one side.
-     * Threshold: if (cacheFunds / total.grid) * 100 >= GRID_REGENERATION_PERCENTAGE, update that side.
+     * Threshold: if ((cacheFunds + availableFunds) / total.grid) * 100 >= GRID_REGENERATION_PERCENTAGE, update that side.
      *
      * @param {Object} manager - OrderManager instance with existing grid
      * @param {Object} cacheFunds - Cached funds { buy, sell } from previous rotations
@@ -651,10 +639,16 @@ class Grid {
 
         for (const s of sides) {
             if (s.grid <= 0) continue;
-            const ratio = (s.cache / s.grid) * 100;
+
+            // Include available funds in the regeneration check so newly added funds 
+            // trigger a grid resize during the next fill/comparison cycle.
+            const avail = manager.calculateAvailableFunds(s.name);
+            const totalPending = s.cache + avail;
+            const ratio = (totalPending / s.grid) * 100;
+
             if (ratio >= threshold) {
                 manager.logger?.log(
-                    `Cache funds ratio for ${s.name} side: ${ratio.toFixed(2)}% >= ${threshold}% threshold. Updating ${s.name} order sizes.`,
+                    `Unallocated funds ratio for ${s.name} side (cache=${s.cache.toFixed(8)}, available=${avail.toFixed(8)}): ${ratio.toFixed(2)}% >= ${threshold}% threshold. Updating ${s.name} order sizes.`,
                     'info'
                 );
                 Grid.updateGridOrderSizesForSide(manager, s.orderType, cacheFunds);
@@ -744,23 +738,7 @@ class Grid {
         // Update orders with new sizes
         Grid._updateOrdersForSide(manager, orderType, newSizes, orders);
 
-        // CLEAR Pending Proceeds for this side
-        // Since we included 'available' (which includes pendingProceeds) in the sizing,
-        // we must effectively "consume" them by clearing the pending bucket.
-        // The funds are now represented by the increased order sizes (Virtual/Active).
-        if (manager.funds && manager.funds.pendingProceeds) {
-            manager.funds.pendingProceeds[sideName] = 0;
-        }
-
-        // Persist cleared pendingProceeds for this side so cleared state survives restart
-        try {
-            if (manager.config && manager.config.botKey && manager.accountOrders) {
-                manager.accountOrders.updatePendingProceeds(manager.config.botKey, manager.funds.pendingProceeds);
-                manager.logger?.log?.(`Persisted cleared pendingProceeds.${sideName} after side update`, 'debug');
-            }
-        } catch (e) {
-            manager.logger?.log?.(`Warning: Failed to persist cleared pendingProceeds: ${e.message}`, 'warn');
-        }
+        // NOTE: `pendingProceeds` handling removed; available funds are consumed by sizing.
 
         // Recalculate funds after updating this side
         // This will update 'available', which should now be near 0 (minus dust)
@@ -879,21 +857,7 @@ class Grid {
         // Update sell orders with new sizes
         Grid._updateOrdersForSide(manager, ORDER_TYPES.SELL, sellNewSizes, sellOrders);
 
-        // CLEAR Pending Proceeds for both sides
-        if (manager.funds && manager.funds.pendingProceeds) {
-            manager.funds.pendingProceeds.buy = 0;
-            manager.funds.pendingProceeds.sell = 0;
-        }
-
-        // Persist cleared pendingProceeds so cleared state survives restart
-        try {
-            if (manager.config && manager.config.botKey && manager.accountOrders) {
-                manager.accountOrders.updatePendingProceeds(manager.config.botKey, manager.funds.pendingProceeds);
-                manager.logger?.log?.(`Persisted cleared pendingProceeds after grid update`, 'debug');
-            }
-        } catch (e) {
-            manager.logger?.log?.(`Warning: Failed to persist cleared pendingProceeds: ${e.message}`, 'warn');
-        }
+        // NOTE: `pendingProceeds` handling removed; no persistence needed.
 
         // Recalculate funds after updating sizes
         manager.recalculateFunds();

@@ -9,7 +9,7 @@
  * - Validating fund calculations (available, virtuel, committed)
  * 
  * Fund model overview (see manager.js for full details):
- * - available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
+ * - available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed)
  * - virtuel = sum of VIRTUAL order sizes (reserved for placement)
  * - committed.grid = sum of ACTIVE order sizes
  * - committed.chain = sum of ACTIVE orders with orderId on-chain

@@ -14,8 +14,7 @@ class MockManager {
         this.funds = {
             available: { buy: 100, sell: 100 },
             total: { grid: { buy: 100, sell: 100 } },
-            pendingProceeds: { buy: 50, sell: 50 },
-            cacheFunds: { buy: 0, sell: 0 }
+            cacheFunds: { buy: 50, sell: 50 }
         };
         this.assets = {
             assetA: { precision: 8 },
@@ -55,7 +54,7 @@ async function runTest() {
     // Expected Result:
     // Buy Grid -> 200 (100 grid + 100 avail)
     // Sell Grid -> 200 (100 grid + 100 avail)
-    // Pending -> Cleared (0)
+    // cacheFunds -> Cleared (0)
 
     const buys = createOrders(5, ORDER_TYPES.BUY, 20);
     const sells = createOrders(5, ORDER_TYPES.SELL, 20);
@@ -67,9 +66,9 @@ async function runTest() {
 
     // Assertions
 
-    // 1. Pending Proceeds should be cleared for BOTH
-    assert.strictEqual(manager.funds.pendingProceeds.buy, 0, 'Buy pending proceeds should be cleared');
-    assert.strictEqual(manager.funds.pendingProceeds.sell, 0, 'Sell pending proceeds should be cleared');
+    // 1. cacheFunds should be cleared for BOTH (proceeds consumed by rotation)
+    assert.strictEqual(manager.funds.cacheFunds.buy, 0, 'Buy cacheFunds should be cleared');
+    assert.strictEqual(manager.funds.cacheFunds.sell, 0, 'Sell cacheFunds should be cleared');
 
     // 2. Buy Grid resized
     const newBuys = Array.from(manager.orders.values()).filter(o => o.type === ORDER_TYPES.BUY);

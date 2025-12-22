@@ -535,6 +535,7 @@ class OrderManager {
         };
         // Make reserved an alias for virtuel
         this.funds.reserved = this.funds.virtuel;
+        // (Removed legacy `pendingProceeds` accessor; use `cacheFunds` instead.)
     }
 
     /**
@@ -1458,12 +1459,20 @@ class OrderManager {
         bumpTotal('buy', deltaBuyTotal);
         bumpTotal('sell', deltaSellTotal);
 
-        // Hold proceeds in cacheFunds so availability reflects them through rotation
-        const proceedsBefore = { buy: this.funds.cacheFunds.buy || 0, sell: this.funds.cacheFunds.sell || 0 };
-        this.funds.cacheFunds.buy = (this.funds.cacheFunds.buy || 0) + proceedsBuy;
-        this.funds.cacheFunds.sell = (this.funds.cacheFunds.sell || 0) + proceedsSell;
+        // SYNC FUND CYCLING: Move any existing 'available' funds into cacheFunds 
+        // before adding proceeds. This ensures depositors' funds are cycled 
+        // into the grid during the rotation that follows a fill.
+        const currentAvailBuy = this.calculateAvailableFunds('buy');
+        const currentAvailSell = this.calculateAvailableFunds('sell');
 
-        this.logger.log(`Proceeds added to cacheFunds: Before Buy ${proceedsBefore.buy.toFixed(8)} + ${proceedsBuy.toFixed(8)} = After ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | Before Sell ${proceedsBefore.sell.toFixed(8)} + ${proceedsSell.toFixed(8)} = After ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
+        // Hold proceeds + available in cacheFunds so availability reflects them through rotation
+        const proceedsBefore = { buy: this.funds.cacheFunds.buy || 0, sell: this.funds.cacheFunds.sell || 0 };
+        this.funds.cacheFunds.buy = (this.funds.cacheFunds.buy || 0) + proceedsBuy + currentAvailBuy;
+        this.funds.cacheFunds.sell = (this.funds.cacheFunds.sell || 0) + proceedsSell + currentAvailSell;
+
+        this.logger.log(`Proceeds + available funds added to cacheFunds: ` +
+            `Before Buy ${proceedsBefore.buy.toFixed(8)} + fill ${proceedsBuy.toFixed(8)} + avail ${currentAvailBuy.toFixed(8)} = After ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | ` +
+            `Before Sell ${proceedsBefore.sell.toFixed(8)} + fill ${proceedsSell.toFixed(8)} + avail ${currentAvailSell.toFixed(8)} = After ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
 
         // Note: deductBtsFees() now subtracts from cacheFunds
         if (hasBtsPair && this.funds.btsFeesOwed > 0) {

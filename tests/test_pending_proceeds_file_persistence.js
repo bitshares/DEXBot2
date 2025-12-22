@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * Test: Verify pendingProceeds are persisted to orders.json
+ * Test: Verify cacheFunds (migration target) are persisted to orders.json
  */
 
 const path = require('path');
 const { AccountOrders, createBotKey } = require('../modules/account_orders');
 
-async function testPendingProceedsPersistenceToFile() {
-    console.log('\n=== Test: PendingProceeds Persistence to File ===\n');
+async function testCacheFundsPersistenceToFile() {
+    console.log('\n=== Test: cacheFunds Persistence to File ===\n');
 
     const config = {
         name: 'test-bot-persistence',
@@ -19,8 +19,8 @@ async function testPendingProceedsPersistenceToFile() {
 
     const accountOrders = new AccountOrders();
 
-    // Test 1: storeMasterGrid with pendingProceeds
-    console.log('Test 1: Store grid with pendingProceeds');
+    // Test 1: storeMasterGrid with proceeds merged into cacheFunds
+    console.log('Test 1: Store grid with proceeds (merged into cacheFunds)');
     const orders = [
         { id: 'sell-1', type: 'sell', price: 1.5, size: 10, state: 'ACTIVE' },
         { id: 'buy-1', type: 'buy', price: 0.9, size: 10, state: 'ACTIVE' }
@@ -29,25 +29,27 @@ async function testPendingProceedsPersistenceToFile() {
     const cacheFunds = { buy: 500, sell: 500 };
     const pendingProceeds = { buy: 199.85817653, sell: 0.00000000 };
 
-    accountOrders.storeMasterGrid(config.botKey, orders, cacheFunds, pendingProceeds);
+    // New behavior: persist proceeds into cacheFunds (migration target)
+    const cacheWithProceeds = { buy: cacheFunds.buy + pendingProceeds.buy, sell: cacheFunds.sell + pendingProceeds.sell };
+    accountOrders.storeMasterGrid(config.botKey, orders, cacheWithProceeds);
     
-    // Verify it was stored in memory
+    // Verify it was stored in memory (cacheFunds should hold the proceeds)
     const savedBot = accountOrders.data.bots[config.botKey];
-    if (savedBot && savedBot.pendingProceeds) {
-        console.log(`✓ pendingProceeds stored in memory: Buy ${savedBot.pendingProceeds.buy.toFixed(8)}, Sell ${savedBot.pendingProceeds.sell.toFixed(8)}`);
+    if (savedBot && savedBot.cacheFunds) {
+        console.log(`✓ cacheFunds stored in memory: Buy ${savedBot.cacheFunds.buy.toFixed(8)}, Sell ${savedBot.cacheFunds.sell.toFixed(8)}`);
     } else {
-        console.log('✗ pendingProceeds NOT stored in memory');
+        console.log('✗ cacheFunds NOT stored in memory');
     }
 
     // Test 2: Load from disk (fresh instance)
     console.log('\nTest 2: Load from fresh instance (from disk)');
     const accountOrders2 = new AccountOrders();
-    const loadedProceeds = accountOrders2.loadPendingProceeds(config.botKey);
+    const loadedCacheFunds = accountOrders2.loadCacheFunds(config.botKey);
     
-    if (loadedProceeds && loadedProceeds.buy > 0) {
-        console.log(`✓ pendingProceeds loaded from disk: Buy ${loadedProceeds.buy.toFixed(8)}, Sell ${loadedProceeds.sell.toFixed(8)}`);
+    if (loadedCacheFunds && loadedCacheFunds.buy >= pendingProceeds.buy) {
+        console.log(`✓ proceeds merged into cacheFunds on disk: Buy ${loadedCacheFunds.buy.toFixed(8)}, Sell ${loadedCacheFunds.sell.toFixed(8)}`);
     } else {
-        console.log(`✗ pendingProceeds NOT loaded from disk. Got: Buy ${loadedProceeds.buy}, Sell ${loadedProceeds.sell}`);
+        console.log(`✗ proceeds NOT present in cacheFunds. Got: Buy ${loadedCacheFunds.buy}, Sell ${loadedCacheFunds.sell}`);
     }
 
     // Test 3: Verify loadBotGrid also returns grid
@@ -59,34 +61,34 @@ async function testPendingProceedsPersistenceToFile() {
         console.log('✗ Grid NOT loaded from disk');
     }
 
-    // Test 4: Update pendingProceeds separately
-    console.log('\nTest 4: Update pendingProceeds after initial storage');
-    const newProceeds = { buy: 250.12345678, sell: 50.87654321 };
-    accountOrders.updatePendingProceeds(config.botKey, newProceeds);
+    // Test 4: Update cacheFunds separately
+    console.log('\nTest 4: Update cacheFunds after initial storage (simulate proceeds accumulation)');
+    const newCache = { buy: 250.12345678, sell: 50.87654321 };
+    accountOrders.updateCacheFunds(config.botKey, newCache);
     
     const accountOrders3 = new AccountOrders();
-    const updatedProceeds = accountOrders3.loadPendingProceeds(config.botKey);
+    const updatedCache = accountOrders3.loadCacheFunds(config.botKey);
     
-    if (updatedProceeds.buy === newProceeds.buy && updatedProceeds.sell === newProceeds.sell) {
-        console.log(`✓ Updated pendingProceeds persisted: Buy ${updatedProceeds.buy.toFixed(8)}, Sell ${updatedProceeds.sell.toFixed(8)}`);
+    if (updatedCache.buy === newCache.buy && updatedCache.sell === newCache.sell) {
+        console.log(`✓ Updated cacheFunds persisted: Buy ${updatedCache.buy.toFixed(8)}, Sell ${updatedCache.sell.toFixed(8)}`);
     } else {
-        console.log(`✗ Updated pendingProceeds NOT persisted correctly. Got: Buy ${updatedProceeds.buy}, Sell ${updatedProceeds.sell}`);
+        console.log(`✗ Updated cacheFunds NOT persisted correctly. Got: Buy ${updatedCache.buy}, Sell ${updatedCache.sell}`);
     }
 
-    // Test 5: Clear pendingProceeds
-    console.log('\nTest 5: Clear pendingProceeds and verify persistence');
-    accountOrders.updatePendingProceeds(config.botKey, { buy: 0, sell: 0 });
+    // Test 5: Clear cacheFunds
+    console.log('\nTest 5: Clear cacheFunds and verify persistence');
+    accountOrders.updateCacheFunds(config.botKey, { buy: 0, sell: 0 });
     
     const accountOrders4 = new AccountOrders();
-    const clearedProceeds = accountOrders4.loadPendingProceeds(config.botKey);
+    const clearedCache = accountOrders4.loadCacheFunds(config.botKey);
     
-    if (clearedProceeds.buy === 0 && clearedProceeds.sell === 0) {
-        console.log(`✓ Cleared pendingProceeds persisted: Buy ${clearedProceeds.buy}, Sell ${clearedProceeds.sell}`);
+    if (clearedCache.buy === 0 && clearedCache.sell === 0) {
+        console.log(`✓ Cleared cacheFunds persisted: Buy ${clearedCache.buy}, Sell ${clearedCache.sell}`);
     } else {
-        console.log(`✗ Cleared pendingProceeds NOT persisted correctly`);
+        console.log(`✗ Cleared cacheFunds NOT persisted correctly`);
     }
 
     console.log('\n=== All persistence tests completed ===\n');
 }
 
-testPendingProceedsPersistenceToFile().catch(console.error);
+testCacheFundsPersistenceToFile().catch(console.error);

@@ -45,7 +45,6 @@ manager.funds = {
     total: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
     virtuel: { buy: 0, sell: 0 },
     committed: { grid: { buy: 0, sell: 0 }, chain: { buy: 0, sell: 0 } },
-    pendingProceeds: { buy: 0, sell: 0 },
     cacheFunds: { buy: 0, sell: 0 },
     btsFeesOwed: 0,
 };
@@ -65,7 +64,7 @@ const sellOrder = {
 manager.orders.set(sellOrder.id, sellOrder);
 
 console.log('BEFORE partial fill:');
-console.log(`  pendingProceeds.buy = ${manager.funds.pendingProceeds.buy.toFixed(2)} BTS`);
+console.log(`  cacheFunds.buy = ${manager.funds.cacheFunds.buy.toFixed(2)} BTS`);
 
 // Simulate _adjustFunds being called (this happens during syncFromFillHistory)
 // This is called via _updateOrder -> recalculateFunds (happens implicitly)
@@ -99,9 +98,9 @@ if (filledOrder.type === ORDER_TYPES.SELL) {
 }
 
 // This is what processFilledOrders does
-const beforeProceeds = manager.funds.pendingProceeds.buy || 0;
-manager.funds.pendingProceeds.buy = (manager.funds.pendingProceeds.buy || 0) + proceedsBuy;
-const afterProceeds = manager.funds.pendingProceeds.buy;
+const beforeProceeds = manager.funds.cacheFunds.buy || 0;
+manager.funds.cacheFunds.buy = (manager.funds.cacheFunds.buy || 0) + proceedsBuy;
+const afterProceeds = manager.funds.cacheFunds.buy;
 
 console.log('\nAFTER processFilledOrders():');
 console.log(`  Before: ${beforeProceeds.toFixed(2)} BTS`);
@@ -116,12 +115,12 @@ if (Math.abs(proceedsBuy - expectedProceeds) > 0.01) {
 }
 
 if (Math.abs(afterProceeds - expectedProceeds) > 0.01) {
-    errors.push(`ERROR: pendingProceeds.buy should be ${expectedProceeds.toFixed(2)}, got ${afterProceeds.toFixed(2)}`);
+    errors.push(`ERROR: cacheFunds.buy should be ${expectedProceeds.toFixed(2)}, got ${afterProceeds.toFixed(2)}`);
 }
 
 // Check that it's NOT double (which would be 2x)
 if (Math.abs(afterProceeds - (expectedProceeds * 2)) < 0.01) {
-    errors.push(`ERROR: pendingProceeds is DOUBLE-COUNTED (2x the expected amount)!`);
+    errors.push(`ERROR: cacheFunds is DOUBLE-COUNTED (2x the expected amount)!`);
 }
 
 if (errors.length === 0) {

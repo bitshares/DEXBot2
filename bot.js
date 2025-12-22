@@ -209,7 +209,7 @@ class DEXBot {
     async placeInitialOrders() {
         if (!this.manager) {
             this.manager = new OrderManager(this.config);
-            this.manager.accountOrders = this.accountOrders;  // Enable pendingProceeds persistence
+            this.manager.accountOrders = this.accountOrders;  // Enable cacheFunds persistence
         }
         try {
             const botFunds = this.config && this.config.botFunds ? this.config.botFunds : {};
@@ -611,7 +611,7 @@ class DEXBot {
             this.manager = new OrderManager(this.config || {});
             this.manager.account = this.account;
             this.manager.accountId = this.accountId;
-            this.manager.accountOrders = this.accountOrders;  // Enable pendingProceeds persistence
+            this.manager.accountOrders = this.accountOrders;  // Enable cacheFunds persistence
         }
 
         // Ensure fee cache is initialized before any fill processing that calls getAssetFees().
@@ -786,7 +786,6 @@ class DEXBot {
 
         const persistedGrid = this.accountOrders.loadBotGrid(this.config.botKey);
         const persistedCacheFunds = this.accountOrders.loadCacheFunds(this.config.botKey);
-        const persistedPendingProceeds = this.accountOrders.loadPendingProceeds(this.config.botKey);
         const persistedBtsFeesOwed = this.accountOrders.loadBtsFeesOwed(this.config.botKey);
 
         // Restore and consolidate cacheFunds
@@ -796,17 +795,7 @@ class DEXBot {
             this.manager.funds.cacheFunds.sell += Number(persistedCacheFunds.sell || 0);
         }
 
-        // MIGRATION: If legacy pendingProceeds exist, merge them into cacheFunds
-        // After this startup cycle, they will be persisted as part of cacheFunds
-        if (persistedPendingProceeds) {
-            const buyProc = Number(persistedPendingProceeds.buy || 0);
-            const sellProc = Number(persistedPendingProceeds.sell || 0);
-            if (buyProc > 0 || sellProc > 0) {
-                this.manager.funds.cacheFunds.buy += buyProc;
-                this.manager.funds.cacheFunds.sell += sellProc;
-                console.log(`[bot.js] ℹ Migrated legacy pendingProceeds into cacheFunds: Buy +${buyProc.toFixed(8)}, Sell +${sellProc.toFixed(8)}`);
-            }
-        }
+        // Legacy `pendingProceeds` handling removed; migrated via offline script.
 
         // Use this.accountId which was set during initialize()
         const chainOpenOrders = this.config.dryRun ? [] : await chainOrders.readOpenOrders(this.accountId);
@@ -859,7 +848,6 @@ class DEXBot {
             console.log(`[bot.js] ℹ Grid regenerating - resetting cacheFunds and BTS fees to clean state`);
             this.manager.funds.cacheFunds = { buy: 0, sell: 0 };
             this.manager.funds.btsFeesOwed = 0;
-            this.accountOrders.updatePendingProceeds(this.config.botKey, { buy: 0, sell: 0 }); // Clear legacy
         }
 
         if (shouldRegenerate) {

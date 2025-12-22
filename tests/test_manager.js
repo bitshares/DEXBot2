@@ -179,9 +179,9 @@ assert.strictEqual(mgr.funds.available.sell, 10);
     assert.strictEqual(activatedBuys[0].id, 'vbuy1', 'Should activate the closest virtual buy (95)');
     assert.strictEqual(activatedBuys[0].state, ORDER_STATES.VIRTUAL, 'Prepared orders remain VIRTUAL until confirmed on-chain');
 
-    // Provide proceeds for rotation sizing (rotation now uses pendingProceeds)
-    rotateMgr.funds.pendingProceeds = rotateMgr.funds.pendingProceeds || { buy: 0, sell: 0 };
-    rotateMgr.funds.pendingProceeds.sell = 1;
+    // Provide proceeds for rotation sizing (rotation now uses cacheFunds)
+    rotateMgr.funds.cacheFunds = rotateMgr.funds.cacheFunds || { buy: 0, sell: 0 };
+    rotateMgr.funds.cacheFunds.sell = 1;
 
     // Test prepareFurthestOrdersForRotation: should select the furthest active order for rotation
     const rotations = await rotateMgr.prepareFurthestOrdersForRotation(ORDER_TYPES.SELL, 1);

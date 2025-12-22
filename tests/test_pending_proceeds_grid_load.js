@@ -3,12 +3,12 @@ const { OrderManager, grid: Grid } = require('../modules/order');
 const { ORDER_TYPES } = require('../modules/constants');
 
 /**
- * Test that pendingProceeds survive grid loading
- * This validates that the fix preserves pendingProceeds through resetFunds
+ * Test that cacheFunds survive grid loading
+ * This validates that the fix preserves cacheFunds through resetFunds
  */
 
 async function testPendingProceedsPreservedDuringGridLoad() {
-    console.log('Test: pendingProceeds preserved during Grid.loadGrid()');
+    console.log('Test: cacheFunds preserved during Grid.loadGrid()');
     
     // Create a simple manager with some test config
     const testConfig = {
@@ -26,11 +26,11 @@ async function testPendingProceedsPreservedDuringGridLoad() {
 
     const manager = new OrderManager(testConfig);
     
-    // Simulate some pending proceeds (from a partial fill)
+    // Simulate some proceeds (from a partial fill) stored in cacheFunds
     const testPendingProceeds = { buy: 123.456, sell: 234.567 };
-    manager.funds.pendingProceeds = { ...testPendingProceeds };
-    
-    console.log(`  Before loadGrid: pendingProceeds = { buy: ${manager.funds.pendingProceeds.buy}, sell: ${manager.funds.pendingProceeds.sell} }`);
+    manager.funds.cacheFunds = { ...testPendingProceeds };
+
+    console.log(`  Before loadGrid: cacheFunds = { buy: ${manager.funds.cacheFunds.buy}, sell: ${manager.funds.cacheFunds.sell} }`);
     
     // Create a mock persisted grid
     const mockGrid = [
@@ -41,25 +41,25 @@ async function testPendingProceedsPreservedDuringGridLoad() {
     // Load the grid (this calls resetFunds internally)
     await Grid.loadGrid(manager, mockGrid);
     
-    console.log(`  After loadGrid: pendingProceeds = { buy: ${manager.funds.pendingProceeds.buy}, sell: ${manager.funds.pendingProceeds.sell} }`);
-    
-    // CRITICAL: Verify pendingProceeds were NOT cleared by resetFunds during loadGrid
+    console.log(`  After loadGrid: cacheFunds = { buy: ${manager.funds.cacheFunds.buy}, sell: ${manager.funds.cacheFunds.sell} }`);
+
+    // CRITICAL: Verify cacheFunds were NOT cleared by resetFunds during loadGrid
     assert.strictEqual(
-        manager.funds.pendingProceeds.buy, 
+        manager.funds.cacheFunds.buy, 
         testPendingProceeds.buy, 
-        'Buy pendingProceeds were cleared during loadGrid!'
+        'Buy cacheFunds were cleared during loadGrid!'
     );
     assert.strictEqual(
-        manager.funds.pendingProceeds.sell, 
+        manager.funds.cacheFunds.sell, 
         testPendingProceeds.sell, 
-        'Sell pendingProceeds were cleared during loadGrid!'
+        'Sell cacheFunds were cleared during loadGrid!'
     );
     
-    console.log('✅ pendingProceeds correctly preserved during Grid.loadGrid()');
+    console.log('✅ cacheFunds correctly preserved during Grid.loadGrid()');
 }
 
 async function testPendingProceedsPreservedDuringInitializeGrid() {
-    console.log('\nTest: pendingProceeds preserved during Grid.initializeGrid()');
+    console.log('\nTest: cacheFunds preserved during Grid.initializeGrid()');
     
     const testConfig = {
         assetA: 'BTS',
@@ -85,11 +85,11 @@ async function testPendingProceedsPreservedDuringInitializeGrid() {
     // Set up minimal account totals
     manager.accountTotals = { buy: 5000, sell: 5000, buyFree: 5000, sellFree: 5000 };
     
-    // Simulate some pending proceeds (from a partial fill)
+    // Simulate some proceeds (from a partial fill)
     const testPendingProceeds = { buy: 50.5, sell: 75.25 };
-    manager.funds.pendingProceeds = { ...testPendingProceeds };
-    
-    console.log(`  Before initializeGrid: pendingProceeds = { buy: ${manager.funds.pendingProceeds.buy}, sell: ${manager.funds.pendingProceeds.sell} }`);
+    manager.funds.cacheFunds = { ...testPendingProceeds };
+
+    console.log(`  Before initializeGrid: cacheFunds = { buy: ${manager.funds.cacheFunds.buy}, sell: ${manager.funds.cacheFunds.sell} }`);
     
     // Initialize grid (this calls resetFunds internally)
     try {
@@ -100,21 +100,21 @@ async function testPendingProceedsPreservedDuringInitializeGrid() {
         console.log(`  Note: initializeGrid threw (expected in test): ${err.message}`);
     }
     
-    console.log(`  After initializeGrid: pendingProceeds = { buy: ${manager.funds.pendingProceeds.buy}, sell: ${manager.funds.pendingProceeds.sell} }`);
-    
-    // CRITICAL: Verify pendingProceeds were NOT cleared by resetFunds during initializeGrid
+    console.log(`  After initializeGrid: cacheFunds = { buy: ${manager.funds.cacheFunds.buy}, sell: ${manager.funds.cacheFunds.sell} }`);
+
+    // CRITICAL: Verify cacheFunds were NOT cleared by resetFunds during initializeGrid
     assert.strictEqual(
-        manager.funds.pendingProceeds.buy, 
+        manager.funds.cacheFunds.buy, 
         testPendingProceeds.buy, 
-        'Buy pendingProceeds were cleared during initializeGrid!'
+        'Buy cacheFunds were cleared during initializeGrid!'
     );
     assert.strictEqual(
-        manager.funds.pendingProceeds.sell, 
+        manager.funds.cacheFunds.sell, 
         testPendingProceeds.sell, 
-        'Sell pendingProceeds were cleared during initializeGrid!'
+        'Sell cacheFunds were cleared during initializeGrid!'
     );
     
-    console.log('✅ pendingProceeds correctly preserved during Grid.initializeGrid()');
+    console.log('✅ cacheFunds correctly preserved during Grid.initializeGrid()');
 }
 
 // Run tests

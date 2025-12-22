@@ -25,10 +25,6 @@
         "buy": 0,
         "sell": 0
       },
-      "pendingProceeds": {
-        "buy": 0,
-        "sell": 0
-      },
       "createdAt": "2025-12-15T19:31:13.316Z",
       "lastUpdated": "2025-12-15T19:31:13.316Z"
     }

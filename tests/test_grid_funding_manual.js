@@ -14,8 +14,7 @@ class MockManager {
         this.funds = {
             available: { buy: 100, sell: 100 },
             total: { grid: { buy: 500, sell: 500 } },
-            pendingProceeds: { buy: 50, sell: 50 },
-            cacheFunds: { buy: 0, sell: 0 }
+            cacheFunds: { buy: 50, sell: 50 }
         };
         this.assets = {
             assetA: { precision: 8 },
@@ -69,8 +68,8 @@ async function runTest() {
 
     // Assertions
 
-    // 1. Pending Proceeds should be cleared
-    assert.strictEqual(manager.funds.pendingProceeds.buy, 0, 'Pending proceeds should be cleared');
+    // 1. cacheFunds should be cleared (proceeds applied to rotation)
+    assert.strictEqual(manager.funds.cacheFunds.buy, 0, 'cacheFunds should be cleared');
 
     // 2. Orders should be resized
     // Total input was 150. 5 orders. 

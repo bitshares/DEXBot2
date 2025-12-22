@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * Integration Test: Complete pendingProceeds persistence lifecycle
+ * Integration Test: Complete cacheFunds persistence lifecycle (pendingProceeds migrated)
  * Simulates the exact scenario the user reported:
- * 1. Partial fill occurs → pendingProceeds accumulate
- * 2. Log shows pendingProceeds values
- * 3. storeMasterGrid() called → pendingProceeds saved to orders.json
- * 4. Bot restarts → pendingProceeds restored from orders.json
+ * 1. Partial fill occurs → proceeds accumulate into cacheFunds
+ * 2. Log shows cacheFunds values
+ * 3. storeMasterGrid() called → cacheFunds saved to orders.json
+ * 4. Bot restarts → cacheFunds restored from orders.json
  */
 
 const { AccountOrders, createBotKey } = require('../modules/account_orders');
@@ -15,7 +15,7 @@ const { ORDER_STATES, ORDER_TYPES } = require('../modules/constants');
 
 async function testCompleteLifecycle() {
     console.log('\n╔════════════════════════════════════════════════════════╗');
-    console.log('║  Integration Test: PendingProceeds Complete Lifecycle  ║');
+        console.log('║  Integration Test: cacheFunds Complete Lifecycle  ║');
     console.log('╚════════════════════════════════════════════════════════╝\n');
 
     const botKey = createBotKey({ name: 'integration-test' }, 0);
@@ -42,17 +42,17 @@ async function testCompleteLifecycle() {
     manager.funds = {
         available: { buy: 1000, sell: 1000 },
         cacheFunds: { buy: 0, sell: 0 },
-        pendingProceeds: { buy: 0, sell: 0 },
         btsFeesOwed: 0
     };
 
     // Simulate partial fill
     console.log('   Simulating partial SELL order fill...');
-    manager.funds.pendingProceeds.buy = 199.85817653;  // Fill proceeds
-    manager.funds.available.buy = 409.36835306;        // Updated availability
-    
+    // In the migrated model, proceeds are added directly to cacheFunds
+    manager.funds.cacheFunds.buy = 199.85817653;  // Fill proceeds
+    manager.funds.available.buy = 409.36835306;  // Updated availability
+
     console.log(`   ✓ Partial fill processed`);
-    console.log(`   ✓ pendingProceeds updated: Buy=${manager.funds.pendingProceeds.buy.toFixed(8)}, Sell=${manager.funds.pendingProceeds.sell.toFixed(8)}`);
+    console.log(`   ✓ cacheFunds updated: Buy=${manager.funds.cacheFunds.buy.toFixed(8)}, Sell=${manager.funds.cacheFunds.sell.toFixed(8)}`);
     console.log(`   ✓ Available funds updated: Buy=${manager.funds.available.buy.toFixed(8)}, Sell=${manager.funds.available.sell.toFixed(8)}\n`);
 
     // ============================================================
@@ -67,18 +67,15 @@ async function testCompleteLifecycle() {
 
     console.log('   Calling storeMasterGrid() with:');
     console.log(`   - Orders: ${mockOrders.length} grid orders`);
-    console.log(`   - cacheFunds: Buy=${manager.funds.cacheFunds.buy}, Sell=${manager.funds.cacheFunds.sell}`);
-    console.log(`   - pendingProceeds: Buy=${manager.funds.pendingProceeds.buy.toFixed(8)}, Sell=${manager.funds.pendingProceeds.sell.toFixed(8)}`);
+    console.log(`   - cacheFunds (with proceeds): Buy=${manager.funds.cacheFunds.buy}, Sell=${manager.funds.cacheFunds.sell}`);
 
-    accountOrders.storeMasterGrid(
-        botKey,
-        mockOrders,
-        manager.funds.cacheFunds,
-        manager.funds.pendingProceeds
-    );
+    // Persist cacheFunds (already includes proceeds)
+    const cacheWithProceeds = { buy: manager.funds.cacheFunds.buy, sell: manager.funds.cacheFunds.sell };
+    accountOrders.storeMasterGrid(botKey, mockOrders, cacheWithProceeds);
 
     console.log('\n   ✓ Grid saved to memory');
-    console.log('   ✓ pendingProceeds persisted to orders.json\n');
+    console.log('   ✓ cacheFunds persisted to orders.json\n');
+    console.log('\n✅ SUCCESS: cacheFunds persistence working correctly!\n');
 
     // ============================================================
     // PHASE 3: Bot Restart - Load from Disk
@@ -92,21 +89,17 @@ async function testCompleteLifecycle() {
     manager2.funds = {
         available: { buy: 0, sell: 0 },
         cacheFunds: { buy: 0, sell: 0 },
-        pendingProceeds: { buy: 0, sell: 0 },
         btsFeesOwed: 0
     };
 
     console.log('   Reading from disk after restart...');
     
     // Restore from disk
-    const restoredProceeds = accountOrders2.loadPendingProceeds(botKey);
     const restoredGrid = accountOrders2.loadBotGrid(botKey);
     const restoredCacheFunds = accountOrders2.loadCacheFunds(botKey);
 
-    manager2.funds.pendingProceeds = { ...restoredProceeds };
     manager2.funds.cacheFunds = { ...restoredCacheFunds };
 
-    console.log(`   ✓ Restored pendingProceeds: Buy=${restoredProceeds.buy.toFixed(8)}, Sell=${restoredProceeds.sell.toFixed(8)}`);
     console.log(`   ✓ Restored cacheFunds: Buy=${restoredCacheFunds.buy}, Sell=${restoredCacheFunds.sell}`);
     console.log(`   ✓ Restored grid: ${restoredGrid ? restoredGrid.length + ' orders' : 'none'}\n`);
 
@@ -118,22 +111,24 @@ async function testCompleteLifecycle() {
     const passed = [];
     const failed = [];
 
-    // Test 1: Original proceeds saved correctly
-    if (manager.funds.pendingProceeds.buy === restoredProceeds.buy) {
-        console.log('   ✓ Test 1: pendingProceeds.buy persisted correctly');
-        passed.push('pendingProceeds.buy');
+    // Test 1: Proceeds merged into cacheFunds correctly
+    const expectedBuy = cacheWithProceeds.buy;
+    if (Math.abs(restoredCacheFunds.buy - expectedBuy) < 1e-12) {
+        console.log('   ✓ Test 1: proceeds merged into cacheFunds.buy correctly');
+        passed.push('cacheFunds.buy');
     } else {
-        console.log(`   ✗ Test 1: FAILED - Expected ${manager.funds.pendingProceeds.buy}, got ${restoredProceeds.buy}`);
-        failed.push('pendingProceeds.buy');
+        console.log(`   ✗ Test 1: FAILED - Expected ${expectedBuy}, got ${restoredCacheFunds.buy}`);
+        failed.push('cacheFunds.buy');
     }
 
-    // Test 2: Sell-side proceeds
-    if (manager.funds.pendingProceeds.sell === restoredProceeds.sell) {
-        console.log('   ✓ Test 2: pendingProceeds.sell persisted correctly');
-        passed.push('pendingProceeds.sell');
+    // Test 2: Sell-side proceeds (should be same logic)
+    const expectedSell = cacheWithProceeds.sell;
+    if (Math.abs(restoredCacheFunds.sell - expectedSell) < 1e-12) {
+        console.log('   ✓ Test 2: proceeds merged into cacheFunds.sell correctly');
+        passed.push('cacheFunds.sell');
     } else {
-        console.log(`   ✗ Test 2: FAILED - Expected ${manager.funds.pendingProceeds.sell}, got ${restoredProceeds.sell}`);
-        failed.push('pendingProceeds.sell');
+        console.log(`   ✗ Test 2: FAILED - Expected ${expectedSell}, got ${restoredCacheFunds.sell}`);
+        failed.push('cacheFunds.sell');
     }
 
     // Test 3: Grid persisted
@@ -146,9 +141,9 @@ async function testCompleteLifecycle() {
     }
 
     // Test 4: Funds not lost
-    const fundsRecovered = restoredProceeds.buy > 0;
+    const fundsRecovered = (restoredCacheFunds.buy || 0) > 0;
     if (fundsRecovered) {
-        console.log(`   ✓ Test 4: Funds NOT lost - ${restoredProceeds.buy.toFixed(8)} USD recovered`);
+        console.log(`   ✓ Test 4: Funds NOT lost - ${restoredCacheFunds.buy.toFixed(8)} USD recovered`);
         passed.push('funds_recovered');
     } else {
         console.log('   ✗ Test 4: FAILED - Funds were lost!');

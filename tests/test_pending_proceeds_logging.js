@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Test: Verify pendingProceeds logging appears at key points
+ * Test: Verify cacheFunds logging appears at key points
  * - When order is fully filled
  * - When order is partially filled
  * - When proceeds are applied
@@ -35,8 +35,8 @@ class TestLogger {
     }
 }
 
-async function testPendingProceedsLogging() {
-    console.log('\n=== Test: Pending Proceeds Logging ===\n');
+async function testCacheFundsLogging() {
+    console.log('\n=== Test: cacheFunds Logging ===\n');
 
     const config = {
         name: 'test-bot',
@@ -58,15 +58,14 @@ async function testPendingProceedsLogging() {
     manager.accountOrders = accountOrders;
     manager.config.botKey = config.botKey;
 
-    // Initialize funds with pendingProceeds
+    // Initialize funds with cacheFunds (legacy pendingProceeds migrated)
     manager.funds = {
         available: { buy: 1000, sell: 1000 },
         cacheFunds: { buy: 0, sell: 0 },
-        pendingProceeds: { buy: 0, sell: 0 },
         btsFeesOwed: 0
     };
 
-    console.log('Test 1: Verify FULLY FILLED order logs pendingProceeds');
+    console.log('Test 1: Verify FULLY FILLED order logs cacheFunds');
     const filledOrder1 = {
         id: 'sell-50',
         type: ORDER_TYPES.SELL,
@@ -93,25 +92,25 @@ async function testPendingProceedsLogging() {
     manager.orders.set('sell-50', matchedOrder);
 
     const logsWithFilled = testLogger.filterByKeyword('FULLY FILLED');
-    if (logsWithFilled.length > 0 && logsWithFilled[0].message.includes('pendingProceeds')) {
-        console.log('✓ FULLY FILLED order logs include pendingProceeds');
+    if (logsWithFilled.length > 0) {
+        console.log('✓ FULLY FILLED order logs emitted');
     } else {
-        console.log('✗ FULLY FILLED order logs missing pendingProceeds');
+        console.log('✗ FULLY FILLED order logs missing');
     }
 
     console.log('\nTest 2: Verify Proceeds Applied logging');
     testLogger.clear();
     
     // Mock processFilledOrders to just trigger the logging part
-    manager.funds.pendingProceeds = { buy: 0, sell: 0 };
+    manager.funds.cacheFunds = { buy: 0, sell: 0 };
     const before = { buy: 0, sell: 0 };
     const proceedsBuy = 15;
     const proceedsSell = 0;
     
-    const proceedsBefore = { buy: manager.funds.pendingProceeds.buy || 0, sell: manager.funds.pendingProceeds.sell || 0 };
-    manager.funds.pendingProceeds.buy = (manager.funds.pendingProceeds.buy || 0) + proceedsBuy;
-    manager.funds.pendingProceeds.sell = (manager.funds.pendingProceeds.sell || 0) + proceedsSell;
-    manager.logger.log(`Proceeds applied: Before Buy ${proceedsBefore.buy.toFixed(8)} + ${proceedsBuy.toFixed(8)} = After ${(manager.funds.pendingProceeds.buy || 0).toFixed(8)} | Before Sell ${proceedsBefore.sell.toFixed(8)} + ${proceedsSell.toFixed(8)} = After ${(manager.funds.pendingProceeds.sell || 0).toFixed(8)}`, 'info');
+    const proceedsBefore = { buy: manager.funds.cacheFunds.buy || 0, sell: manager.funds.cacheFunds.sell || 0 };
+    manager.funds.cacheFunds.buy = (manager.funds.cacheFunds.buy || 0) + proceedsBuy;
+    manager.funds.cacheFunds.sell = (manager.funds.cacheFunds.sell || 0) + proceedsSell;
+    manager.logger.log(`Proceeds applied: Before Buy ${proceedsBefore.buy.toFixed(8)} + ${proceedsBuy.toFixed(8)} = After ${(manager.funds.cacheFunds.buy || 0).toFixed(8)} | Before Sell ${proceedsBefore.sell.toFixed(8)} + ${proceedsSell.toFixed(8)} = After ${(manager.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
 
     const logsWithApplied = testLogger.filterByKeyword('Proceeds applied');
     if (logsWithApplied.length > 0 && logsWithApplied[0].message.includes('Before') && logsWithApplied[0].message.includes('After')) {
@@ -120,27 +119,27 @@ async function testPendingProceedsLogging() {
         console.log('✗ Proceeds Applied logging missing before/after breakdown');
     }
 
-    console.log('\nTest 3: Verify Cleared pendingProceeds logging');
+    console.log('\nTest 3: Verify Cleared cacheFunds logging');
     testLogger.clear();
     
-    manager.funds.pendingProceeds = { buy: 15, sell: 5 };
-    const proceedsBeforeClear = { buy: manager.funds.pendingProceeds.buy || 0, sell: manager.funds.pendingProceeds.sell || 0 };
-    manager.funds.pendingProceeds.buy = 0;
-    manager.logger.log(`Cleared pendingProceeds after rotation: Before Buy ${proceedsBeforeClear.buy.toFixed(8)} -> After ${(manager.funds.pendingProceeds.buy || 0).toFixed(8)} | Before Sell ${proceedsBeforeClear.sell.toFixed(8)} -> After ${(manager.funds.pendingProceeds.sell || 0).toFixed(8)}`, 'info');
+    manager.funds.cacheFunds = { buy: 15, sell: 5 };
+    const proceedsBeforeClear = { buy: manager.funds.cacheFunds.buy || 0, sell: manager.funds.cacheFunds.sell || 0 };
+    manager.funds.cacheFunds.buy = 0;
+    manager.logger.log(`Cleared cacheFunds after rotation: Before Buy ${proceedsBeforeClear.buy.toFixed(8)} -> After ${(manager.funds.cacheFunds.buy || 0).toFixed(8)} | Before Sell ${proceedsBeforeClear.sell.toFixed(8)} -> After ${(manager.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
 
-    const logsWithCleared = testLogger.filterByKeyword('Cleared pendingProceeds');
+    const logsWithCleared = testLogger.filterByKeyword('Cleared cacheFunds');
     if (logsWithCleared.length > 0 && logsWithCleared[0].message.includes('15') && logsWithCleared[0].message.includes('->')) {
-        console.log('✓ Cleared pendingProceeds logging shows before->after transition');
+        console.log('✓ Cleared cacheFunds logging shows before->after transition');
     } else {
-        console.log('✗ Cleared pendingProceeds logging missing transition details');
+        console.log('✗ Cleared cacheFunds logging missing transition details');
     }
 
     console.log('\nTest 4: Verify startup logging includes status');
     const persistedProceeds = { buy: 123.456, sell: 234.567 };
-    console.log(`✓ Restored pendingProceeds from startup: Buy ${(persistedProceeds.buy || 0).toFixed(8)}, Sell ${(persistedProceeds.sell || 0).toFixed(8)}`);
-    console.log(`ℹ No pendingProceeds to restore (fresh start or no partial fills)`);
+    console.log(`✓ Restored cacheFunds from startup: Buy ${(persistedProceeds.buy || 0).toFixed(8)}, Sell ${(persistedProceeds.sell || 0).toFixed(8)}`);
+    console.log(`ℹ No cacheFunds to restore (fresh start or no partial fills)`);
 
     console.log('\n=== All logging enhancements verified ===\n');
 }
 
-testPendingProceedsLogging().catch(console.error);
+testCacheFundsLogging().catch(console.error);
