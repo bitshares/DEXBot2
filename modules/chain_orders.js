@@ -305,10 +305,31 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     const currentReceiveFloat = blockchainToFloat(currentReceiveInt, receivePrecision);
 
     // Determine target sell amount first.
-    const newSellFloat = (newParams.amountToSell !== undefined && newParams.amountToSell !== null)
-        ? newParams.amountToSell
-        : currentSellFloat;
-    const newSellInt = floatToBlockchainInt(newSellFloat, sellPrecision);
+    // IMPORTANT: When amountToSell is undefined, use currentSellInt directly to avoid
+    // floating-point precision loss (blockchainToFloat -> floatToBlockchainInt roundtrip).
+    let newSellInt;
+    let newSellFloat;
+    if (newParams.amountToSell !== undefined && newParams.amountToSell !== null) {
+        newSellFloat = newParams.amountToSell;
+        newSellInt = floatToBlockchainInt(newSellFloat, sellPrecision);
+    } else {
+        // Keep current amount exactly as-is on-chain, bypassing float conversion
+        newSellInt = currentSellInt;
+        newSellFloat = blockchainToFloat(currentSellInt, sellPrecision);
+    }
+
+    // Debug logging for partial order updates
+    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null &&
+        (newParams.amountToSell === undefined || newParams.amountToSell === null)) {
+        console.log(`[buildUpdateOrderOp DEBUG] Partial order update (price-only):
+  orderId: ${orderId}
+  currentSellInt: ${currentSellInt}
+  newSellInt: ${newSellInt}
+  newSellFloat: ${newSellFloat}
+  minToReceive: ${newParams.minToReceive}
+  sellPrecision: ${sellPrecision}
+  receivePrecision: ${receivePrecision}`);
+    }
 
     // Determine an initial receive amount for price-change detection.
     // Policy:
@@ -343,6 +364,30 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     // IMPORTANT: BitShares limit_order_update takes a delta for amount_to_sell
     // But for the new_price, it takes the NEW total amounts.
     let deltaSellInt = newSellInt - currentSellInt;
+
+    // PRECISION FIX: If delta is ±1 and it's due to floating-point precision loss,
+    // use the current amount to avoid unnecessary blockchain changes.
+    // This happens when newAmountToSell was rounded, causing floatToBlockchainInt
+    // to produce a different value than what's currently on-chain.
+    if (Math.abs(deltaSellInt) === 1 && newParams.amountToSell !== undefined && newParams.amountToSell !== null) {
+        const roundedNewSellInt = floatToBlockchainInt(blockchainToFloat(newSellInt, sellPrecision), sellPrecision);
+        const roundedCurrentSellInt = floatToBlockchainInt(blockchainToFloat(currentSellInt, sellPrecision), sellPrecision);
+
+        // If they match after rounding to precision, use the current amount (delta = 0)
+        if (roundedNewSellInt === roundedCurrentSellInt || Math.abs(roundedNewSellInt - roundedCurrentSellInt) <= 1) {
+            console.log(`[buildUpdateOrderOp] Precision fix: Adjusting amount from ${newSellInt} to ${currentSellInt} (delta was ${deltaSellInt}, now 0)`);
+            newSellInt = currentSellInt;
+            deltaSellInt = 0;
+        }
+    }
+
+    // Debug logging for delta calculation
+    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null &&
+        (newParams.amountToSell === undefined || newParams.amountToSell === null)) {
+        console.log(`[buildUpdateOrderOp DEBUG] Delta calculation:
+  deltaSellInt: ${deltaSellInt}
+  (newSellInt: ${newSellInt} - currentSellInt: ${currentSellInt})`);
+    }
 
     // First, compute the receive amount with the current delta (not adjusted yet)
     let newReceiveInt;
@@ -429,10 +474,13 @@ async function buildUpdateOrderOp(accountName, orderId, newParams) {
     };
     // Only include delta_amount_to_sell if non-zero (BitShares rejects zero delta)
     if (deltaSellInt !== 0) {
+        console.log(`[buildUpdateOrderOp] Adding delta_amount_to_sell: ${deltaSellInt} for order ${orderId}`);
         op.op_data.delta_amount_to_sell = {
             amount: deltaSellInt,
             asset_id: sellAssetId
         };
+    } else {
+        console.log(`[buildUpdateOrderOp] No delta_amount_to_sell (deltaSellInt is 0) for order ${orderId}`);
     }
     if (newParams.expiration) op.op_data.expiration = newParams.expiration;
 

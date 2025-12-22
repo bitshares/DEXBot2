@@ -2193,9 +2193,31 @@ class OrderManager {
         if (partialOrder.type === ORDER_TYPES.SELL) {
             // SELL: size is base asset, receive quote asset
             newMinToReceive = partialOrder.size * newPrice;
+            // Round to quote asset (assetB) precision to ensure blockchain recognizes change (min 1 unit)
+            const quoteAssetPrecision = this.assets?.assetB?.precision || 8;
+            const scaleFactor = Math.pow(10, quoteAssetPrecision);
+            const newMinToReceiveBeforeRound = newMinToReceive;
+            newMinToReceive = Math.round(newMinToReceive * scaleFactor) / scaleFactor;
+            this.logger.log(
+                `[preparePartialOrderMove] SELL: size=${partialOrder.size}, newPrice=${newPrice.toFixed(4)}, ` +
+                `calculated=${newMinToReceiveBeforeRound.toFixed(8)}, rounded=${newMinToReceive.toFixed(8)} ` +
+                `(quoteAssetPrecision=${quoteAssetPrecision})`,
+                'info'
+            );
         } else {
             // BUY: size is quote asset, receive base asset
             newMinToReceive = partialOrder.size / newPrice;
+            // Round to base asset (assetA) precision to ensure blockchain recognizes change (min 1 unit)
+            const baseAssetPrecision = this.assets?.assetA?.precision || 8;
+            const scaleFactor = Math.pow(10, baseAssetPrecision);
+            const newMinToReceiveBeforeRound = newMinToReceive;
+            newMinToReceive = Math.round(newMinToReceive * scaleFactor) / scaleFactor;
+            this.logger.log(
+                `[preparePartialOrderMove] BUY: size=${partialOrder.size}, newPrice=${newPrice.toFixed(4)}, ` +
+                `calculated=${newMinToReceiveBeforeRound.toFixed(8)}, rounded=${newMinToReceive.toFixed(8)} ` +
+                `(baseAssetPrecision=${baseAssetPrecision})`,
+                'info'
+            );
         }
 
         this.logger.log(

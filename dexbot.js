@@ -456,12 +456,17 @@ class DEXBot {
         if (partialMoves && partialMoves.length > 0) {
             for (const moveInfo of partialMoves) {
                 try {
-                    const { partialOrder, newMinToReceive } = moveInfo;
+                    const { partialOrder, newPrice } = moveInfo;
                     if (!partialOrder.orderId) continue;
 
+                    // Pass newPrice instead of pre-calculated minToReceive so buildUpdateOrderOp can recalculate
+                    // minToReceive based on the ACTUAL current on-chain amount (not stale grid amount)
                     const op = await chainOrders.buildUpdateOrderOp(
                         this.account, partialOrder.orderId,
-                        { minToReceive: newMinToReceive }
+                        {
+                            newPrice: newPrice,
+                            orderType: partialOrder.type
+                        }
                     );
 
                     if (op) {
@@ -502,9 +507,47 @@ class DEXBot {
                     if (type === 'sell') {
                         newAmountToSell = newSize;
                         newMinToReceive = newSize * newPrice;
+                        // Round both to their respective asset precision
+                        const baseAssetPrecision = this.manager.assets?.assetA?.precision || 8;
+                        const quoteAssetPrecision = this.manager.assets?.assetB?.precision || 8;
+                        const baseScaleFactor = Math.pow(10, baseAssetPrecision);
+                        const quoteScaleFactor = Math.pow(10, quoteAssetPrecision);
+                        const newAmountToSellBeforeRound = newAmountToSell;
+                        const newMinToReceiveBeforeRound = newMinToReceive;
+                        newAmountToSell = Math.round(newAmountToSell * baseScaleFactor) / baseScaleFactor;
+                        // CRITICAL: After rounding amount, recalculate minToReceive based on ROUNDED amount
+                        // to ensure price consistency: rounded_amount * newPrice
+                        newMinToReceive = newAmountToSell * newPrice;
+                        newMinToReceive = Math.round(newMinToReceive * quoteScaleFactor) / quoteScaleFactor;
+                        this.manager.logger.log(
+                            `[Rotation SELL] oldOrder=${oldOrder.orderId}, newPrice=${newPrice.toFixed(4)}, ` +
+                            `newSize=${newSize.toFixed(8)} (amount before rounding=${newAmountToSellBeforeRound.toFixed(8)}, after=${newAmountToSell.toFixed(8)}), ` +
+                            `minReceive before=${newMinToReceiveBeforeRound.toFixed(8)}, after=${newMinToReceive.toFixed(8)} ` +
+                            `(basePrec=${baseAssetPrecision}, quotePrec=${quoteAssetPrecision})`,
+                            'info'
+                        );
                     } else {
                         newAmountToSell = newSize;
                         newMinToReceive = newSize / newPrice;
+                        // Round both to their respective asset precision
+                        const baseAssetPrecision = this.manager.assets?.assetA?.precision || 8;
+                        const quoteAssetPrecision = this.manager.assets?.assetB?.precision || 8;
+                        const baseScaleFactor = Math.pow(10, baseAssetPrecision);
+                        const quoteScaleFactor = Math.pow(10, quoteAssetPrecision);
+                        const newAmountToSellBeforeRound = newAmountToSell;
+                        const newMinToReceiveBeforeRound = newMinToReceive;
+                        newAmountToSell = Math.round(newAmountToSell * quoteScaleFactor) / quoteScaleFactor;
+                        // CRITICAL: After rounding amount, recalculate minToReceive based on ROUNDED amount
+                        // to ensure price consistency: rounded_amount / newPrice
+                        newMinToReceive = newAmountToSell / newPrice;
+                        newMinToReceive = Math.round(newMinToReceive * baseScaleFactor) / baseScaleFactor;
+                        this.manager.logger.log(
+                            `[Rotation BUY] oldOrder=${oldOrder.orderId}, newPrice=${newPrice.toFixed(4)}, ` +
+                            `newSize=${newSize.toFixed(8)} (amount before rounding=${newAmountToSellBeforeRound.toFixed(8)}, after=${newAmountToSell.toFixed(8)}), ` +
+                            `minReceive before=${newMinToReceiveBeforeRound.toFixed(8)}, after=${newMinToReceive.toFixed(8)} ` +
+                            `(basePrec=${baseAssetPrecision}, quotePrec=${quoteAssetPrecision})`,
+                            'info'
+                        );
                     }
 
                     const op = await chainOrders.buildUpdateOrderOp(
