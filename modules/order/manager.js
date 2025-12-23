@@ -580,6 +580,21 @@ class OrderManager {
         ]);
     }
 
+    /**
+     * Public method to fetch and update account balances from the blockchain.
+     * Called periodically by the blockchain fetch interval to keep funds up-to-date.
+     *
+     * @param {string|number} accountId - Optional account ID to fetch balances for.
+     *                                     If provided, temporarily sets this.accountId.
+     * @returns {Promise<void>}
+     */
+    async fetchAccountTotals(accountId) {
+        if (accountId) {
+            this.accountId = accountId;
+        }
+        await this._fetchAccountBalancesAndSetTotals();
+    }
+
     async _fetchAccountBalancesAndSetTotals() {
         // Attempt to read balances from the chain for configured account.
         try {
@@ -955,9 +970,7 @@ class OrderManager {
         const orderType = matchedGridOrder.type;
         const currentSize = Number(matchedGridOrder.size || 0);
 
-        // Get asset precisions for conversion
-        const assetAPrecision = this.assets?.assetA?.precision || 5;
-        const assetBPrecision = this.assets?.assetB?.precision || 5;
+        // Get asset IDs (precisions already declared above)
         const assetAId = this.assets?.assetA?.id;
         const assetBId = this.assets?.assetB?.id;
 

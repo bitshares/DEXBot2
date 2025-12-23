@@ -468,6 +468,17 @@ class DEXBot {
             this.manager.accountOrders = this.accountOrders;  // Enable cacheFunds persistence
         }
 
+        // Fetch account totals from blockchain at startup to initialize funds
+        try {
+            if (this.accountId && this.config.assetA && this.config.assetB) {
+                await this.manager._initializeAssets();
+                await this.manager.fetchAccountTotals(this.accountId);
+                this._log('Fetched blockchain account balances at startup');
+            }
+        } catch (err) {
+            this._warn(`Failed to fetch account totals at startup: ${err.message}`);
+        }
+
         // Ensure fee cache is initialized before any fill processing that calls getAssetFees().
         try {
             await OrderUtils.initializeFeeCache([this.config || {}], BitShares);
@@ -738,6 +749,67 @@ class DEXBot {
             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
         }
 
+        // Check if newly fetched blockchain funds or divergence trigger a grid update at startup
+        // Note: Grid checks only run if no fills are being processed
+        // Since fill listener was just set up, fills should not be processing yet at startup
+
+        // Step 1: Threshold check (available funds)
+        try {
+            // Only run grid checks if no fills are being processed
+            if (this.manager && this.manager.orders && this.manager.orders.size > 0) {
+                const gridCheckResult = Grid.checkAndUpdateGridIfNeeded(this.manager, this.manager.funds.cacheFunds);
+                if (gridCheckResult.buyUpdated || gridCheckResult.sellUpdated) {
+                    this._log(`Grid updated at startup due to available funds (buy: ${gridCheckResult.buyUpdated}, sell: ${gridCheckResult.sellUpdated})`);
+                    persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+
+                    // Apply grid corrections on-chain immediately to use new funds
+                    try {
+                        await OrderUtils.applyGridDivergenceCorrections(
+                            this.manager,
+                            this.accountOrders,
+                            this.config.botKey,
+                            this.updateOrdersOnChainBatch.bind(this)
+                        );
+                        this._log(`Grid corrections applied on-chain at startup`);
+                    } catch (err) {
+                        this._warn(`Error applying grid corrections at startup: ${err.message}`);
+                    }
+                }
+
+                // Step 2: Divergence check (only if threshold didn't trigger)
+                // Detects structural mismatch between calculated and persisted grid
+                if (!gridCheckResult.buyUpdated && !gridCheckResult.sellUpdated) {
+                    try {
+                        const persistedGrid = this.accountOrders.loadBotGrid(this.config.botKey) || [];
+                        const calculatedGrid = Array.from(this.manager.orders.values());
+                        const comparisonResult = Grid.compareGrids(calculatedGrid, persistedGrid, this.manager, this.manager.funds.cacheFunds);
+
+                        if (comparisonResult.buy.updated || comparisonResult.sell.updated) {
+                            this._log(`Grid divergence detected at startup: buy=${comparisonResult.buy.metric.toFixed(6)}, sell=${comparisonResult.sell.metric.toFixed(6)}`);
+                            persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+
+                            // Apply grid corrections on-chain immediately
+                            try {
+                                await OrderUtils.applyGridDivergenceCorrections(
+                                    this.manager,
+                                    this.accountOrders,
+                                    this.config.botKey,
+                                    this.updateOrdersOnChainBatch.bind(this)
+                                );
+                                this._log(`Grid divergence corrections applied on-chain at startup`);
+                            } catch (err) {
+                                this._warn(`Error applying divergence corrections at startup: ${err.message}`);
+                            }
+                        }
+                    } catch (err) {
+                        this._warn(`Error running divergence check at startup: ${err.message}`);
+                    }
+                }
+            }
+        } catch (err) {
+            this._warn(`Error checking grid at startup: ${err.message}`);
+        }
+
         /**
          * Perform a full grid resync: cancel orphan orders and regenerate grid.
          * Triggered by the presence of a `recalculate.<botKey>.trigger` file.
@@ -800,6 +872,9 @@ class DEXBot {
             this._warn(`Failed to setup file watcher: ${err.message}`);
         }
 
+        // Start periodic blockchain fetch to keep blockchain variables updated
+        this._setupBlockchainFetchInterval();
+
         // Main loop
         const loopDelayMs = Number(process.env.RUN_LOOP_MS || 5000);
         this._log(`DEXBot started. Running loop every ${loopDelayMs}ms (dryRun=${!!this.config.dryRun})`);
@@ -816,6 +891,84 @@ class DEXBot {
         })();
 
         console.log('DEXBot started. OrderManager running (dryRun=' + !!this.config.dryRun + ')');
+    }
+
+    /**
+     * Set up periodic blockchain account balance fetch interval.
+     * Fetches available funds at regular intervals to keep blockchain variables up-to-date.
+     * @private
+     */
+    _setupBlockchainFetchInterval() {
+        const { TIMING } = require('./constants');
+        const intervalMin = TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN;
+
+        // Validate the interval setting
+        if (!Number.isFinite(intervalMin) || intervalMin <= 0) {
+            this._log(`Blockchain fetch interval disabled (value: ${intervalMin}). Periodic blockchain updates will not run.`);
+            return;
+        }
+
+        // Validate manager and account ID
+        if (!this.manager || typeof this.manager.fetchAccountTotals !== 'function') {
+            this._warn('Cannot start blockchain fetch interval: manager or fetchAccountTotals method missing');
+            return;
+        }
+
+        if (!this.accountId) {
+            this._warn('Cannot start blockchain fetch interval: account ID not available');
+            return;
+        }
+
+        // Convert minutes to milliseconds
+        const intervalMs = intervalMin * 60 * 1000;
+
+        // Set up the periodic fetch
+        this._blockchainFetchInterval = setInterval(async () => {
+            try {
+                this._log(`Fetching blockchain account values (interval: every ${intervalMin}min)`);
+                await this.manager.fetchAccountTotals(this.accountId);
+
+                // Check if newly fetched blockchain funds trigger a grid update
+                // Only update grid if no fills are being processed (prevent concurrent modifications)
+                if (!this._processingFill && !this._runningDivergenceCorrections &&
+                    this.manager && this.manager.orders && this.manager.orders.size > 0) {
+                    const gridCheckResult = Grid.checkAndUpdateGridIfNeeded(this.manager, this.manager.funds.cacheFunds);
+                    if (gridCheckResult.buyUpdated || gridCheckResult.sellUpdated) {
+                        this._log(`Grid updated from periodic blockchain fetch (buy: ${gridCheckResult.buyUpdated}, sell: ${gridCheckResult.sellUpdated})`);
+                        persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+
+                        // Apply grid corrections on-chain to use new funds
+                        try {
+                            await OrderUtils.applyGridDivergenceCorrections(
+                                this.manager,
+                                this.accountOrders,
+                                this.config.botKey,
+                                this.updateOrdersOnChainBatch.bind(this)
+                            );
+                            this._log(`Grid corrections applied on-chain from periodic blockchain fetch`);
+                        } catch (err) {
+                            this._warn(`Error applying grid corrections during periodic fetch: ${err.message}`);
+                        }
+                    }
+                }
+            } catch (err) {
+                this._warn(`Error during periodic blockchain fetch: ${err && err.message ? err.message : err}`);
+            }
+        }, intervalMs);
+
+        this._log(`Started periodic blockchain fetch interval: every ${intervalMin} minute(s)`);
+    }
+
+    /**
+     * Stop the periodic blockchain fetch interval.
+     * @private
+     */
+    _stopBlockchainFetchInterval() {
+        if (this._blockchainFetchInterval !== null && this._blockchainFetchInterval !== undefined) {
+            clearInterval(this._blockchainFetchInterval);
+            this._blockchainFetchInterval = null;
+            this._log('Stopped periodic blockchain fetch interval');
+        }
     }
 }
 
