@@ -76,17 +76,8 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 # Delete log files
-DELETED=0
-FAILED=0
-
-find "$LOGS_DIR" -type f -name "*.log" 2>/dev/null | while read file; do
-    if rm "$file" 2>/dev/null; then
-        ((DELETED++))
-    else
-        ((FAILED++))
-        log_warning "Failed to delete: $(basename "$file")"
-    fi
-done
+find "$LOGS_DIR" -type f -name "*.log" 2>/dev/null -delete
+DELETED=$?
 
 # Re-count to confirm
 REMAINING=$(find "$LOGS_DIR" -type f -name "*.log" 2>/dev/null | wc -l)
