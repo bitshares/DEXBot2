@@ -1160,12 +1160,14 @@ class OrderManager {
                         // IMPORTANT: do NOT mutate the existing order object in-place.
                         // _updateOrder uses the previously stored object's state/type to update indices.
                         // If we mutate first, old indices won't be cleaned up.
+                        // Preserve PARTIAL state if already set (order with remaining amount being filled)
+                        const newState = gridOrder.state === ORDER_STATES.PARTIAL ? ORDER_STATES.PARTIAL : ORDER_STATES.ACTIVE;
                         const updatedOrder = {
                             ...gridOrder,
                             orderId: parsedOrder.orderId,
-                            state: ORDER_STATES.ACTIVE
+                            state: newState
                         };
-                        this.logger.log(`Grid ${updatedOrder.id} now ACTIVE with orderId ${parsedOrder.orderId}`, 'info');
+                        this.logger.log(`Grid ${updatedOrder.id} now ${newState.toUpperCase()} with orderId ${parsedOrder.orderId}`, 'info');
 
                         // Apply chain size to updated order (reconcile sizes)
                         if (parsedOrder.size !== null && parsedOrder.size !== undefined && Number.isFinite(Number(parsedOrder.size))) {
