@@ -82,18 +82,15 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 # Delete order files
-DELETED=0
-FAILED=0
+log_info "Deleting files..."
+find "$ORDERS_DIR" -type f 2>/dev/null -delete
+DELETE_STATUS=$?
 
-find "$ORDERS_DIR" -type f 2>/dev/null | while read file; do
-    if rm "$file" 2>/dev/null; then
-        ((DELETED++))
-        log_info "Deleted: $(basename "$file")"
-    else
-        ((FAILED++))
-        log_warning "Failed to delete: $(basename "$file")"
-    fi
-done
+if [ $DELETE_STATUS -eq 0 ]; then
+    log_success "Delete operation completed"
+else
+    log_warning "Delete operation encountered issues (exit code: $DELETE_STATUS)"
+fi
 
 # Re-count to confirm
 REMAINING=$(find "$ORDERS_DIR" -type f 2>/dev/null | wc -l)
