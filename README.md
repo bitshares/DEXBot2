@@ -477,6 +477,7 @@ Below is a short summary of the modules in this repository and what they provide
 - `modules/bitshares_client.js`: Shared BitShares client wrapper and connection utilities (`BitShares`, `createAccountClient`, `waitForConnected`).
 - `modules/btsdex_event_patch.js`: Runtime patch for `btsdex` library to improve history and account event handling.
 - `modules/account_orders.js`: Local persistence for per-bot order-grid snapshots, metadata, and cacheFunds (`profiles/orders/<bot-name>.json`). Manages bot-specific files with atomic updates and race-condition protection. **Note:** Legacy pendingProceeds data (pre-0.4.0) is migrated to cacheFunds via `scripts/migrate_pending_proceeds.js`.
+- `modules/dexbot_class.js`: Core `DEXBot` class — handles bot initialization, account setup, order placement, fill processing, grid rebalancing, and divergence detection. Shared implementation used by both `bot.js` (single-bot) and `dexbot.js` (multi-bot orchestration).
 
 ### 📊 Order Subsystem (`modules/order/`)
 
@@ -489,6 +490,7 @@ Core order generation, management, and grid algorithms:
 - `modules/order/grid.js`: Grid generation algorithms, order sizing, weight distribution, and minimum size validation.
 - `modules/order/runner.js`: Runner for calculation passes and dry-runs without blockchain interaction.
 - `modules/order/utils.js`: Utility functions (percent parsing, multiplier parsing, blockchain float/int conversion, market price helpers).
+- `modules/order/startup_reconcile.js`: Startup grid reconciliation and synchronization. Compares persisted grid state with on-chain open orders to detect offline fills and decide grid recovery strategy.
 
 ## 🔐 Environment Variables
 
