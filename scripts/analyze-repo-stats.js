@@ -217,6 +217,10 @@ class RepoAnalyzer {
             cumulativeEdits += this.stats.dailyStats[date].edits;
             return cumulativeEdits;
         });
+        // Calculate net lines over time (cumulative added - cumulative deleted)
+        const netLinesData = cumulativeAddedData.map((added, index) => {
+            return added - cumulativeDeletedData[index];
+        });
 
         const html = `<!DOCTYPE html>
 <html lang="en">
@@ -363,6 +367,13 @@ class RepoAnalyzer {
             <h2>📊 Cumulative Changes Over Time</h2>
             <div class="chart-wrapper" style="height: 400px;">
                 <canvas id="cumulativeChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>📝 Total Net Lines Over Time</h2>
+            <div class="chart-wrapper" style="height: 400px;">
+                <canvas id="netLinesChart"></canvas>
             </div>
         </div>
 
@@ -613,6 +624,73 @@ class RepoAnalyzer {
                         beginAtZero: true,
                         ticks: {
                             font: { size: 11 },
+                            callback: function(value) {
+                                return value.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Chart: Net lines over time
+        const ctxNetLines = document.getElementById('netLinesChart').getContext('2d');
+        const netLinesChart = new Chart(ctxNetLines, {
+            type: 'line',
+            data: {
+                labels: ${JSON.stringify(dailyDates)},
+                datasets: [
+                    {
+                        label: '📝 Net Lines (Added - Deleted)',
+                        data: ${JSON.stringify(netLinesData)},
+                        borderColor: '#8b5cf6',
+                        backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 4,
+                        pointBackgroundColor: '#8b5cf6',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 20,
+                            font: { size: 15 }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y.toLocaleString();
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            font: { size: 13 }
+                        }
+                    },
+                    y: {
+                        ticks: {
+                            font: { size: 13 },
                             callback: function(value) {
                                 return value.toLocaleString();
                             }

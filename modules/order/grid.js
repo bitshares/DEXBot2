@@ -387,6 +387,12 @@ class Grid {
                     `Warning: Could not calculate BTS fees: ${err.message}`,
                     'warn'
                 );
+                // Fall back to simple 100 BTS if fee calculation fails
+                btsFeesForCreation = 100;
+                manager.logger?.log?.(
+                    `Using fallback: 100 BTS reserved for fee buffer`,
+                    'warn'
+                );
             }
         }
 
@@ -721,9 +727,43 @@ class Grid {
         // Calculate new sizes using blockchain total only
         const precision = isBuy ? manager.assets?.assetB?.precision : manager.assets?.assetA?.precision;
 
-        // Use allocated funds directly for sizing (respects botFunds percentage if configured)
+        // Apply 4x fee buffer deduction (same as grid initialization)
+        // This reserves BTS fees for both creation and rotation cycles when resizing orders
+        let fundsForSizing = allocatedFunds;
+        let btsFeesReserved = 0;
+        const assetA = manager.config.assetA;
+        const assetB = manager.config.assetB;
+        const hasBtsPair = (assetA === 'BTS' || assetB === 'BTS');
+
+        if (hasBtsPair && allocatedFunds > 0 && orders.length > 0) {
+            try {
+                const { getAssetFees } = require('./utils');
+                const btsFeeData = getAssetFees('BTS', 1);
+                const FEE_MULTIPLIER = 4; // Creation (1x) + Rotation buffer (3x)
+                btsFeesReserved = btsFeeData.createFee * orders.length * FEE_MULTIPLIER;
+                fundsForSizing = Math.max(0, allocatedFunds - btsFeesReserved);
+
+                manager.logger?.log?.(
+                    `BTS fee reservation during resize (${sideName}): ${orders.length} orders × ${FEE_MULTIPLIER}x = ${btsFeesReserved.toFixed(8)} BTS, sizing with: ${fundsForSizing.toFixed(8)} BTS`,
+                    'info'
+                );
+            } catch (err) {
+                manager.logger?.log?.(
+                    `Warning: Could not calculate BTS fees during resize: ${err.message}`,
+                    'warn'
+                );
+                // Fall back to simple 100 BTS buffer if fee calculation fails
+                fundsForSizing = Math.max(0, allocatedFunds - 100);
+                manager.logger?.log?.(
+                    `Using fallback: 100 BTS reserved, sizing with ${fundsForSizing.toFixed(8)} BTS`,
+                    'warn'
+                );
+            }
+        }
+
+        // Use fee-deducted funds for sizing (respects botFunds percentage if configured)
         const newSizes = Grid.calculateRotationOrderSizes(
-            allocatedFunds,   // Use allocated funds as sole fund source
+            fundsForSizing,   // Use allocated funds minus 4x fee reservation
             0,                // availableFunds = 0 (already in allocatedFunds)
             orders.length,
             orderType,

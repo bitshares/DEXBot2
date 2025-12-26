@@ -170,8 +170,8 @@ function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB
                 btsFeesReservation = btsFeeData.createFee * totalTargetOrders * FEE_MULTIPLIER;
             }
         } catch (err) {
-            // If fee calculation fails, proceed without this reservation
-            btsFeesReservation = 0;
+            // Fall back to simple 100 BTS if fee calculation fails
+            btsFeesReservation = 100;
         }
     }
 

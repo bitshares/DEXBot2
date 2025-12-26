@@ -118,7 +118,7 @@ Define each bot in `profiles/bots.json`. A minimal structure looks like this:
     {
       "name": "your-name",
       "active": true,
-      "dryRun": true,
+      "dryRun": false,
       "preferredAccount": "example-account",
       "assetA": "IOB.XRP",
       "assetB": "BTS",
@@ -291,7 +291,7 @@ Fills are tracked with a 5-second deduplication window to prevent duplicate orde
 
 ### 💾 Persistent Grid & Price Caching
 DEXBot intelligently caches grid calculations and order prices to avoid unnecessary recalculation:
-- **Grid state persists** in `profiles/orders/<bot-name>.json` across bot restarts
+- **Grid state persists** in `profiles/orders/<bot-key>.json` across bot restarts
 - **Order prices preserved** from the last successful synchronization
 - **No recalculation on startup** if grid matches on-chain state
 - **Automatic resync only when** on-chain state differs (fills, cancellations)
@@ -336,7 +336,7 @@ DEXBot automatically regenerates grid order sizes when market conditions or cach
    - Enables **automatic fund cycling**: new deposits are immediately resized into grid
    - Updates buy and sell sides independently based on their respective ratios
 
-2. **Grid Divergence Threshold** (10% RMS by default)
+2. **Grid Divergence Threshold** (14.3% RMS by default)
    - Compares currently calculated grid with persisted grid state
    - **What is the RMS Threshold?** RMS (Root Mean Square) measures grid divergence as the quadratic mean of relative order size errors—this penalizes uneven distributions. For the same 3.2% average error, uneven distributions require higher RMS thresholds.
      ```
@@ -404,7 +404,7 @@ Environment variables:
 
 For users interested in understanding the math and mechanics behind DEXBot's order generation and grid algorithms:
 
-### 🔄 How It Works
+### 🛠️ How It Works
 
 1. **Grid Creation**: Generates buy/sell orders in geometric progression.
 2. **Order Sizing**: Applies weight distribution for optimal capital allocation.
@@ -463,7 +463,7 @@ Price            Type            State           Size
 
 Below is a short summary of the modules in this repository and what they provide. You can paste these lines elsewhere if you need a quick reference.
 
-### 🔌 Entry Points
+### 📍 Entry Points
 
 - `dexbot.js`: Main CLI entry point. Handles single-bot mode (start, stop, reset, drystart) and management commands (keys, bots, --cli-examples). Includes full DEXBot class with grid management, fill processing, and account operations.
 - `pm2.js`: Unified PM2 launcher. Orchestrates BitShares connection, PM2 check/install, ecosystem config generation from `profiles/bots.json`, master password authentication, and bot startup with automatic restart policies.
@@ -476,7 +476,7 @@ Below is a short summary of the modules in this repository and what they provide
 - `modules/chain_orders.js`: Account-level order operations: select account, create/update/cancel orders, listen for fills with deduplication, read open orders. Uses 'history' mode for fill processing which matches orders from blockchain events.
 - `modules/bitshares_client.js`: Shared BitShares client wrapper and connection utilities (`BitShares`, `createAccountClient`, `waitForConnected`).
 - `modules/btsdex_event_patch.js`: Runtime patch for `btsdex` library to improve history and account event handling.
-- `modules/account_orders.js`: Local persistence for per-bot order-grid snapshots, metadata, and cacheFunds (`profiles/orders/<bot-name>.json`). Manages bot-specific files with atomic updates and race-condition protection. **Note:** Legacy pendingProceeds data (pre-0.4.0) is migrated to cacheFunds via `scripts/migrate_pending_proceeds.js`.
+- `modules/account_orders.js`: Local persistence for per-bot order-grid snapshots, metadata, and cacheFunds (`profiles/orders/<bot-key>.json`). Manages bot-specific files with atomic updates and race-condition protection. **Note:** Legacy pendingProceeds data (pre-0.4.0) is migrated to cacheFunds via `scripts/migrate_pending_proceeds.js`.
 - `modules/dexbot_class.js`: Core `DEXBot` class — handles bot initialization, account setup, order placement, fill processing, grid rebalancing, and divergence detection. Shared implementation used by both `bot.js` (single-bot) and `dexbot.js` (multi-bot orchestration).
 
 ### 📊 Order Subsystem (`modules/order/`)

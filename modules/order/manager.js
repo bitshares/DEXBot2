@@ -1479,11 +1479,18 @@ class OrderManager {
 
         // Accumulate BTS fees based on number of FULL fills (partially filled orders do not incur the maker net fee)
         if (hasBtsPair && filledOrders.length > 0) {
-            const btsFeeData = getAssetFees('BTS', 0);
-            const fullFillCount = filledCounts[ORDER_TYPES.BUY] + filledCounts[ORDER_TYPES.SELL];
-            const btsFeesForFills = fullFillCount * btsFeeData.total;
-            this.funds.btsFeesOwed += btsFeesForFills;
-            this.logger.log(`BTS fees for ${fullFillCount} full fill(s) (ignoring ${filledOrders.length - fullFillCount} partial): ${btsFeesForFills.toFixed(8)} BTS (total owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'debug');
+            try {
+                const btsFeeData = getAssetFees('BTS', 0);
+                const fullFillCount = filledCounts[ORDER_TYPES.BUY] + filledCounts[ORDER_TYPES.SELL];
+                const btsFeesForFills = fullFillCount * btsFeeData.total;
+                this.funds.btsFeesOwed += btsFeesForFills;
+                this.logger.log(`BTS fees for ${fullFillCount} full fill(s) (ignoring ${filledOrders.length - fullFillCount} partial): ${btsFeesForFills.toFixed(8)} BTS (total owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'debug');
+            } catch (err) {
+                this.logger?.log?.(`Warning: Could not calculate BTS fees for fills: ${err.message}`, 'warn');
+                // Fall back to simple 100 BTS if fee calculation fails
+                this.funds.btsFeesOwed += 100;
+                this.logger?.log?.(`Using fallback: 100 BTS added to fees owed (total: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'warn');
+            }
         }
 
         // Apply proceeds directly to accountTotals so availability reflects fills immediately (no waiting for a chain refresh)
@@ -1563,12 +1570,19 @@ class OrderManager {
         // Add updateFee to BTS fees if partial orders were moved during rotation
         // Partial fills require an update operation on the blockchain, incurring an additional updateFee
         if (hasBtsPair && newOrders.partialMoves && newOrders.partialMoves.length > 0) {
-            const btsFeeData = getAssetFees('BTS', 0); // Get updateFee from cached fees
-            const updateFeePerPartial = btsFeeData.updateFee;
-            const totalUpdateFee = updateFeePerPartial * newOrders.partialMoves.length;
+            try {
+                const btsFeeData = getAssetFees('BTS', 0); // Get updateFee from cached fees
+                const updateFeePerPartial = btsFeeData.updateFee;
+                const totalUpdateFee = updateFeePerPartial * newOrders.partialMoves.length;
 
-            this.funds.btsFeesOwed += totalUpdateFee;
-            this.logger.log(`Added updateFee for ${newOrders.partialMoves.length} partial move(s): +${totalUpdateFee.toFixed(8)} BTS (total fees owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'info');
+                this.funds.btsFeesOwed += totalUpdateFee;
+                this.logger.log(`Added updateFee for ${newOrders.partialMoves.length} partial move(s): +${totalUpdateFee.toFixed(8)} BTS (total fees owed: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'info');
+            } catch (err) {
+                this.logger?.log?.(`Warning: Could not calculate BTS updateFee for partial moves: ${err.message}`, 'warn');
+                // Fall back to simple 100 BTS if fee calculation fails
+                this.funds.btsFeesOwed += 100;
+                this.logger?.log?.(`Using fallback: 100 BTS added for partial moves (total: ${this.funds.btsFeesOwed.toFixed(8)} BTS)`, 'warn');
+            }
         }
 
         this.recalculateFunds();
