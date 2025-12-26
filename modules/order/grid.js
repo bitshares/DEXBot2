@@ -729,6 +729,7 @@ class Grid {
 
         // Apply 4x fee buffer deduction (same as grid initialization)
         // This reserves BTS fees for both creation and rotation cycles when resizing orders
+        // Reserve fees for ALL orders in the grid (both buy and sell sides)
         let fundsForSizing = allocatedFunds;
         let btsFeesReserved = 0;
         const assetA = manager.config.assetA;
@@ -738,13 +739,19 @@ class Grid {
         if (hasBtsPair && allocatedFunds > 0 && orders.length > 0) {
             try {
                 const { getAssetFees } = require('./utils');
+                // Use target number of orders from config (same as grid initialization)
+                // This ensures fee buffer is based on configured grid, not current state
+                const targetBuy = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.buy)) ? Number(manager.config.activeOrders.buy) : 1);
+                const targetSell = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.sell)) ? Number(manager.config.activeOrders.sell) : 1);
+                const totalOrders = targetBuy + targetSell;
+
                 const btsFeeData = getAssetFees('BTS', 1);
                 const FEE_MULTIPLIER = 4; // Creation (1x) + Rotation buffer (3x)
-                btsFeesReserved = btsFeeData.createFee * orders.length * FEE_MULTIPLIER;
+                btsFeesReserved = btsFeeData.createFee * totalOrders * FEE_MULTIPLIER;
                 fundsForSizing = Math.max(0, allocatedFunds - btsFeesReserved);
 
                 manager.logger?.log?.(
-                    `BTS fee reservation during resize (${sideName}): ${orders.length} orders × ${FEE_MULTIPLIER}x = ${btsFeesReserved.toFixed(8)} BTS, sizing with: ${fundsForSizing.toFixed(8)} BTS`,
+                    `BTS fee reservation during resize (${sideName}): buy=${targetBuy} + sell=${targetSell} (total ${totalOrders}) × ${FEE_MULTIPLIER}x = ${btsFeesReserved.toFixed(8)} BTS, sizing with: ${fundsForSizing.toFixed(8)} BTS`,
                     'info'
                 );
             } catch (err) {
