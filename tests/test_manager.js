@@ -28,11 +28,10 @@ mgr.setAccountTotals({ buy: 1000, sell: 10, buyFree: 1000, sellFree: 10 });
 assert.strictEqual(mgr.funds.available.buy, 1000);
 assert.strictEqual(mgr.funds.available.sell, 10);
 
-// activateSpreadOrders should return 0 when asked to create 0 orders
-// activateSpreadOrders should return 0 when asked to create 0 orders
+// activateSpreadOrders should return empty array when asked to create 0 orders
 (async () => {
     const createdZero = await mgr.activateSpreadOrders('buy', 0);
-    assert.strictEqual(createdZero, 0);
+    assert.deepStrictEqual(createdZero, []);
 })();
 
 (async () => {

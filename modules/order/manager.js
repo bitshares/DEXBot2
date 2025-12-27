@@ -900,8 +900,8 @@ class OrderManager {
                     this.logger.log(`Order ${gridOrder.id} (${gridOrder.orderId}) no longer on chain - marking as VIRTUAL (fully filled)`, 'info');
                     const filledOrder = { ...gridOrder };
 
-                    // Create copy for update - convert to SPREAD placeholder
-                    const updatedOrder = { ...gridOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+                    // Convert to SPREAD placeholder
+                    const updatedOrder = this._convertToSpreadPlaceholder(gridOrder);
 
                     this._updateOrder(updatedOrder);
                     filledOrders.push(filledOrder);
@@ -1090,17 +1090,17 @@ class OrderManager {
 
         if (newSizeInt <= 0) {
             // Fully filled
-            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED (filled ${filledAmount.toFixed(8)}), cacheFunds: Buy ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | Sell ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
+            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED (filled ${this._fmt(filledAmount)}), cacheFunds: Buy ${this._fmt(this.funds.cacheFunds.buy || 0)} | Sell ${this._fmt(this.funds.cacheFunds.sell || 0)}`, 'info');
             const filledOrder = { ...matchedGridOrder };
 
-            // Create copy for update - convert to SPREAD placeholder
-            const updatedOrder = { ...matchedGridOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+            // Convert to SPREAD placeholder
+            const updatedOrder = this._convertToSpreadPlaceholder(matchedGridOrder);
 
             this._updateOrder(updatedOrder);
             filledOrders.push(filledOrder);
         } else {
             // Partially filled - transition to PARTIAL state
-            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED: ${filledAmount.toFixed(8)} filled, remaining ${newSize.toFixed(8)}, cacheFunds: Buy ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | Sell ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
+            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED: ${this._fmt(filledAmount)} filled, remaining ${this._fmt(newSize)}, cacheFunds: Buy ${this._fmt(this.funds.cacheFunds.buy || 0)} | Sell ${this._fmt(this.funds.cacheFunds.sell || 0)}`, 'info');
 
             // Create a "virtual" filled order with just the filled amount for proceeds calculation
             // Mark as partial so processFilledOrders knows NOT to trigger rebalancing
@@ -1378,6 +1378,26 @@ class OrderManager {
         return this.getOrdersByTypeAndState(type, ORDER_STATES.PARTIAL);
     }
 
+    /**
+     * Format a number to 8 decimal places for logging.
+     * Handles null, undefined, and NaN values gracefully.
+     * @param {number} value - Value to format
+     * @returns {string} Formatted string with 8 decimals
+     */
+    _fmt(value) {
+        return (Number(value) || 0).toFixed(8);
+    }
+
+    /**
+     * Convert a filled order to a SPREAD placeholder.
+     * Sets type to SPREAD, state to VIRTUAL, size to 0, and clears orderId.
+     * @param {Object} order - Order object to convert
+     * @returns {Object} Updated order object
+     */
+    _convertToSpreadPlaceholder(order) {
+        return { ...order, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+    }
+
     // Periodically poll for fills and recalculate orders on demand.
     async fetchOrderUpdates(options = { calculate: false }) {
         try { const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE); if (activeOrders.length === 0 || (options && options.calculate)) { const { remaining, filled } = await this.calculateOrderUpdates(); remaining.forEach(order => this.orders.set(order.id, order)); if (filled.length > 0) await this.processFilledOrders(filled); this.checkSpreadCondition(); return { remaining, filled }; } return { remaining: activeOrders, filled: [] }; } catch (error) { this.logger.log(`Error fetching order updates: ${error.message}`, 'error'); return { remaining: [], filled: [] }; }
@@ -1520,9 +1540,8 @@ class OrderManager {
 
             // Only convert to SPREAD if this is a FULLY filled order, not a partial
             if (!isPartial) {
-                // Convert directly to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
-                // Create copy for update
-                const updatedOrder = { ...filledOrder, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+                // Convert to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
+                const updatedOrder = this._convertToSpreadPlaceholder(filledOrder);
                 this._updateOrder(updatedOrder);
 
                 this.currentSpreadCount++;
@@ -1530,7 +1549,7 @@ class OrderManager {
             } else {
                 // Partial fill: order already updated to PARTIAL state by syncFromFillHistory
                 // Just log for clarity
-                this.logger.log(`Partial fill processed: order ${filledOrder.id} remains PARTIAL with ${filledOrder.size.toFixed(8)} filled`, 'debug');
+                this.logger.log(`Partial fill processed: order ${filledOrder.id} remains PARTIAL with ${this._fmt(filledOrder.size)} filled`, 'debug');
             }
         }
 
@@ -2532,7 +2551,7 @@ class OrderManager {
      * @returns {Array} Array of newly activated order objects for on-chain placement
      */
     async activateSpreadOrders(targetType, count) {
-        if (count <= 0) return 0;
+        if (count <= 0) return [];
         const allSpreadOrders = this.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL);
         const spreadOrders = allSpreadOrders
             .filter(o => (targetType === ORDER_TYPES.BUY && o.price < this.config.marketPrice) || (targetType === ORDER_TYPES.SELL && o.price > this.config.marketPrice))
