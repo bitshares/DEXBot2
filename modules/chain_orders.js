@@ -13,6 +13,7 @@
  */
 const { BitShares, createAccountClient, waitForConnected } = require('./bitshares_client');
 const { floatToBlockchainInt, blockchainToFloat, validateOrderAmountsWithinLimits } = require('./order/utils');
+const AsyncLock = require('./order/async_lock');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +29,17 @@ const chainKeys = require('./chain_keys');
  * - 'open': Fetch open orders from blockchain and sync (backup method, more API calls)
  */
 const FILL_PROCESSING_MODE = 'history';
+
+// AsyncLock instances for preventing race conditions
+// _subscriptionLock: Serializes access to accountSubscriptions map
+// _preferredAccountLock: Serializes access to preferredAccount global state
+// _resolutionLock: Serializes account resolution calls and caching
+const _subscriptionLock = new AsyncLock();
+const _preferredAccountLock = new AsyncLock();
+const _resolutionLock = new AsyncLock();
+
+// Cache for account resolutions (name -> id and id -> name)
+const _accountResolutionCache = new Map();
 
 // Resolve asset precision from id or symbol via BitShares DB; returns 0 on failure
 async function _getAssetPrecision(assetRef) {
@@ -49,22 +61,37 @@ async function _getAssetPrecision(assetRef) {
 }
 
 // Preferred account ID and name for operations (can be changed)
+// Access MUST be protected by _preferredAccountLock to prevent race conditions
 let preferredAccountId = null;
 let preferredAccountName = null;
 
 /**
  * Set the preferred account for subsequent operations.
  * This allows other functions to operate without requiring account parameters.
+ * Uses AsyncLock to prevent race conditions when multiple functions access this simultaneously.
  * @param {string} accountId - BitShares account ID (e.g., '1.2.12345')
  * @param {string} accountName - Human-readable account name
  */
-function setPreferredAccount(accountId, accountName) {
-    preferredAccountId = accountId;
-    if (accountName) preferredAccountName = accountName;
+async function setPreferredAccount(accountId, accountName) {
+    await _preferredAccountLock.acquire(async () => {
+        preferredAccountId = accountId;
+        if (accountName) preferredAccountName = accountName;
+    });
+}
+
+/**
+ * Get the current preferred account (thread-safe).
+ * @returns {Promise<{id: string|null, name: string|null}>}
+ */
+async function getPreferredAccount() {
+    return await _preferredAccountLock.acquire(async () => {
+        return { id: preferredAccountId, name: preferredAccountName };
+    });
 }
 
 /**
  * Resolve an account ID to its human-readable name via chain lookup.
+ * Results are cached to prevent repeated lookups (fixes Issue #4).
  * @param {string} accountRef - Account ID (e.g., '1.2.12345') or name
  * @returns {Promise<string|null>} Account name or null if not found
  */
@@ -72,20 +99,35 @@ async function resolveAccountName(accountRef) {
     if (!accountRef) return null;
     if (typeof accountRef !== 'string') return null;
     if (!/^1\.2\./.test(accountRef)) return accountRef;
-    try {
-        await waitForConnected();
-        const full = await BitShares.db.get_full_accounts([accountRef], false);
-        if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.name) {
-            return full[0][1].account.name;
+
+    return await _resolutionLock.acquire(async () => {
+        // Check cache first
+        const cacheKey = `id->${accountRef}`;
+        if (_accountResolutionCache.has(cacheKey)) {
+            return _accountResolutionCache.get(cacheKey);
         }
-    } catch (err) {
-        // ignore resolution failures
-    }
-    return null;
+
+        try {
+            await waitForConnected();
+            const full = await BitShares.db.get_full_accounts([accountRef], false);
+            if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.name) {
+                const name = full[0][1].account.name;
+                _accountResolutionCache.set(cacheKey, name);
+                // Also cache reverse mapping
+                _accountResolutionCache.set(`name->${name}`, accountRef);
+                return name;
+            }
+        } catch (err) {
+            // ignore resolution failures
+        }
+        _accountResolutionCache.set(cacheKey, null);
+        return null;
+    });
 }
 
 /**
  * Resolve an account name to its ID via chain lookup.
+ * Results are cached to prevent repeated lookups (fixes Issue #4).
  * @param {string} accountName - Human-readable account name
  * @returns {Promise<string|null>} Account ID or null if not found
  */
@@ -94,57 +136,79 @@ async function resolveAccountId(accountName) {
     if (typeof accountName !== 'string') return null;
     // If already in ID format, return as-is
     if (/^1\.2\.\d+$/.test(accountName)) return accountName;
-    try {
-        await waitForConnected();
-        const full = await BitShares.db.get_full_accounts([accountName], false);
-        // full[0][0] is the account name (key), full[0][1] contains account data
-        if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.id) {
-            return full[0][1].account.id;
+
+    return await _resolutionLock.acquire(async () => {
+        // Check cache first
+        const cacheKey = `name->${accountName}`;
+        if (_accountResolutionCache.has(cacheKey)) {
+            return _accountResolutionCache.get(cacheKey);
         }
-    } catch (err) {
-        // ignore resolution failures
-    }
-    return null;
+
+        try {
+            await waitForConnected();
+            const full = await BitShares.db.get_full_accounts([accountName], false);
+            // full[0][0] is the account name (key), full[0][1] contains account data
+            if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.id) {
+                const id = full[0][1].account.id;
+                _accountResolutionCache.set(cacheKey, id);
+                // Also cache reverse mapping
+                _accountResolutionCache.set(`id->${id}`, accountName);
+                return id;
+            }
+        } catch (err) {
+            // ignore resolution failures
+        }
+        _accountResolutionCache.set(cacheKey, null);
+        return null;
+    });
 }
 
 // Track active account subscriptions so we avoid duplicate listeners per account
 // Map accountName -> { userCallbacks: Set<Function>, bsCallback: Function }
+// Access MUST be protected by _subscriptionLock to prevent TOCTOU races (fixes Issue #1)
 const accountSubscriptions = new Map();
 
 // Ensure a per-account BitShares subscription exists so we only subscribe once.
-function _ensureAccountSubscriber(accountName) {
-    if (accountSubscriptions.has(accountName)) return accountSubscriptions.get(accountName);
-
-    const userCallbacks = new Set();
-
-    // BitShares callback that receives raw updates and dispatches to user callbacks
-    const bsCallback = (updates) => {
-        // Filter for fill-related operations
-        const fills = updates.filter(update => {
-            const op = update.op;
-            return op && op[0] === 4; // operation type 4 is fill_order
-        });
-
-        if (fills.length > 0) {
-            // Call each registered user callback with the fills array
-            for (const c of Array.from(userCallbacks)) {
-                try { c(fills); } catch (e) { console.error('chain_orders listener error', e.message); }
-            }
+// Uses AsyncLock to make check-and-set atomic (fixes Issue #1, #3)
+async function _ensureAccountSubscriber(accountName) {
+    return await _subscriptionLock.acquire(async () => {
+        // Check again inside lock to prevent duplicate subscriptions
+        if (accountSubscriptions.has(accountName)) {
+            return accountSubscriptions.get(accountName);
         }
-    };
 
-    try {
-        BitShares.subscribe('account', bsCallback, accountName);
-    } catch (e) { }
+        const userCallbacks = new Set();
 
-    const entry = { userCallbacks, bsCallback };
-    accountSubscriptions.set(accountName, entry);
-    return entry;
+        // BitShares callback that receives raw updates and dispatches to user callbacks
+        const bsCallback = (updates) => {
+            // Filter for fill-related operations
+            const fills = updates.filter(update => {
+                const op = update.op;
+                return op && op[0] === 4; // operation type 4 is fill_order
+            });
+
+            if (fills.length > 0) {
+                // Call each registered user callback with the fills array
+                for (const c of Array.from(userCallbacks)) {
+                    try { c(fills); } catch (e) { console.error('chain_orders listener error', e.message); }
+                }
+            }
+        };
+
+        try {
+            BitShares.subscribe('account', bsCallback, accountName);
+        } catch (e) { }
+
+        const entry = { userCallbacks, bsCallback };
+        accountSubscriptions.set(accountName, entry);
+        return entry;
+    });
 }
 
 /**
  * Interactive account selection from stored encrypted keys.
  * Prompts user to authenticate and select an account.
+ * Uses AsyncLock to prevent race conditions with concurrent listenForFills calls (fixes Issue #2, #5).
  * @returns {Promise<Object>} { accountName, privateKey, id }
  */
 async function selectAccount() {
@@ -169,21 +233,28 @@ async function selectAccount() {
     const selectedAccount = accountNames[choice];
     const privateKey = chainKeys.getPrivateKey(selectedAccount, masterPassword);
 
+    let selectedId = null;
     try {
         const full = await BitShares.db.get_full_accounts([selectedAccount], false);
         if (full && full[0]) {
             const candidateId = full[0][0];
-            if (candidateId && String(candidateId).startsWith('1.2.')) setPreferredAccount(candidateId, selectedAccount);
-            else if (full[0][1] && full[0][1].account && full[0][1].account.id) setPreferredAccount(full[0][1].account.id, selectedAccount);
+            if (candidateId && String(candidateId).startsWith('1.2.')) selectedId = candidateId;
+            else if (full[0][1] && full[0][1].account && full[0][1].account.id) selectedId = full[0][1].account.id;
         }
     } catch (e) { }
 
-    console.log(`Selected account: ${selectedAccount} (ID: ${preferredAccountId})`);
-    return { accountName: selectedAccount, privateKey: privateKey, id: preferredAccountId };
+    if (selectedId) {
+        await setPreferredAccount(selectedId, selectedAccount);
+    }
+
+    const pref = await getPreferredAccount();
+    console.log(`Selected account: ${selectedAccount} (ID: ${pref.id})`);
+    return { accountName: selectedAccount, privateKey: privateKey, id: pref.id };
 }
 
 /**
  * Fetch all open limit orders for an account from the blockchain.
+ * Uses AsyncLock to safely access preferredAccountId (fixes Issue #2).
  * @param {string|null} accountId - Account ID to query (uses preferred if null)
  * @param {number} timeoutMs - Connection timeout in milliseconds
  * @returns {Promise<Array>} Array of raw order objects from chain
@@ -191,7 +262,11 @@ async function selectAccount() {
 async function readOpenOrders(accountId = null, timeoutMs = 30000, suppress_log = true) {
     await waitForConnected(timeoutMs);
     try {
-        const accId = accountId || preferredAccountId;
+        let accId = accountId;
+        if (!accId) {
+            const pref = await getPreferredAccount();
+            accId = pref.id;
+        }
         if (!accId) {
             throw new Error('No account selected. Please call selectAccount() first or pass an account id');
         }
@@ -211,7 +286,8 @@ async function readOpenOrders(accountId = null, timeoutMs = 30000, suppress_log 
 /**
  * Subscribe to fill events for an account.
  * Calls the callback when any of the account's orders are filled.
- * 
+ * Uses AsyncLock to safely access preferredAccount and subscription state (fixes Issue #2, #5).
+ *
  * @param {string|Function} accountRef - Account name/id, or callback if using preferred
  * @param {Function} callback - Function called with array of fill operations
  * @returns {Function} Unsubscribe function to stop listening
@@ -231,9 +307,11 @@ async function listenForFills(accountRef, callback) {
         return () => { };
     }
 
-    let accountName = accountToken || preferredAccountName;
-    if (!accountName && preferredAccountId) {
-        accountName = await resolveAccountName(preferredAccountId);
+    // Safely access preferredAccount using getPreferredAccount (fixes Issue #2, #5)
+    const pref = await getPreferredAccount();
+    let accountName = accountToken || pref.name;
+    if (!accountName && pref.id) {
+        accountName = await resolveAccountName(pref.id);
     }
     if (!accountName && accountToken) {
         accountName = await resolveAccountName(accountToken);
@@ -244,7 +322,7 @@ async function listenForFills(accountRef, callback) {
         return () => { };
     }
 
-    let accountId = /^1\.2\./.test(accountToken || '') ? accountToken : preferredAccountId;
+    let accountId = /^1\.2\./.test(accountToken || '') ? accountToken : pref.id;
     if (!accountId) {
         accountId = await resolveAccountId(accountName);
     }
@@ -255,22 +333,30 @@ async function listenForFills(accountRef, callback) {
         console.warn('Unable to derive account id before listening for fills; skipping open-order prefetch.');
     }
 
-    const entry = _ensureAccountSubscriber(accountName);
-    entry.userCallbacks.add(userCallback);
+    const entry = await _ensureAccountSubscriber(accountName);
 
-    console.log(`Listening for fills on account: ${accountName} (total listeners: ${entry.userCallbacks.size})`);
+    // Add callback inside lock to prevent race with concurrent listenForFills calls
+    const listenerCount = await _subscriptionLock.acquire(async () => {
+        entry.userCallbacks.add(userCallback);
+        return entry.userCallbacks.size;
+    });
 
-    return function unsubscribe() {
+    console.log(`Listening for fills on account: ${accountName} (total listeners: ${listenerCount})`);
+
+    // Return an unsubscribe function that atomically removes the listener
+    return async function unsubscribe() {
         try {
-            entry.userCallbacks.delete(userCallback);
-            if (entry.userCallbacks.size === 0) {
-                try {
-                    if (typeof BitShares.unsubscribe === 'function') {
-                        BitShares.unsubscribe('account', entry.bsCallback, accountName);
-                    }
-                } catch (e) { }
-                accountSubscriptions.delete(accountName);
-            }
+            await _subscriptionLock.acquire(async () => {
+                entry.userCallbacks.delete(userCallback);
+                if (entry.userCallbacks.size === 0) {
+                    try {
+                        if (typeof BitShares.unsubscribe === 'function') {
+                            BitShares.unsubscribe('account', entry.bsCallback, accountName);
+                        }
+                    } catch (e) { }
+                    accountSubscriptions.delete(accountName);
+                }
+            });
         } catch (e) {
             console.error('Error unsubscribing listenForFills', e.message);
         }
