@@ -22,13 +22,13 @@ async function testPendingProceedsPersistence() {
         const testBotConfig = { name: 'test-bot', assetA: 'BTS', assetB: 'USD', active: true, botKey };
         
         // Ensure bot entry exists
-        accountDb.ensureBotEntries([testBotConfig]);
+        await accountDb.ensureBotEntries([testBotConfig]);
 
         const testProceeds = { buy: 123.45678901, sell: 234.56789012 };
 
         console.log('Test 1: Save and load as cacheFunds (migration target)');
         // Persist proceeds into cacheFunds (new behavior)
-        accountDb.updateCacheFunds(botKey, testProceeds);
+        await accountDb.updateCacheFunds(botKey, testProceeds);
         
         // Create new instance to simulate restart
         const accountDb2 = new AccountOrders({ profilesPath: path.join(tmpDir, 'orders.json') });
@@ -40,7 +40,7 @@ async function testPendingProceedsPersistence() {
 
         console.log('\nTest 2: Clear cacheFunds on rotation completion');
         const clearedCache = { buy: 0, sell: 0 };
-        accountDb2.updateCacheFunds(botKey, clearedCache);
+        await accountDb2.updateCacheFunds(botKey, clearedCache);
         
         const accountDb3 = new AccountOrders({ profilesPath: path.join(tmpDir, 'orders.json') });
         const loadedCleared = accountDb3.loadCacheFunds(botKey);
@@ -51,7 +51,7 @@ async function testPendingProceedsPersistence() {
 
         console.log('\nTest 3: Partial cache update (only one side set)');
         const partialCache = { buy: 100.5, sell: 0 };
-        accountDb3.updateCacheFunds(botKey, partialCache);
+        await accountDb3.updateCacheFunds(botKey, partialCache);
         
         const accountDb4 = new AccountOrders({ profilesPath: path.join(tmpDir, 'orders.json') });
         const loadedPartial = accountDb4.loadCacheFunds(botKey);
@@ -68,15 +68,15 @@ async function testPendingProceedsPersistence() {
         console.log('✓ Default cacheFunds returned for nonexistent bot');
 
         console.log('\nTest 5: Accumulation of proceeds (multiple partial fills)');
-        accountDb5.updateCacheFunds(botKey, { buy: 50, sell: 0 });
-        
+        await accountDb5.updateCacheFunds(botKey, { buy: 50, sell: 0 });
+
         // Simulate another partial fill accumulation into cache
-        const current = accountDb5.loadCacheFunds(botKey);
-        const accumulated = { 
-            buy: current.buy + 25.5, 
-            sell: current.sell 
+        const current = accountDb5.loadCacheFunds(botKey, true);  // forceReload to get latest
+        const accumulated = {
+            buy: current.buy + 25.5,
+            sell: current.sell
         };
-        accountDb5.updateCacheFunds(botKey, accumulated);
+        await accountDb5.updateCacheFunds(botKey, accumulated);
         
         const accountDb6 = new AccountOrders({ profilesPath: path.join(tmpDir, 'orders.json') });
         const loadedAccumulated = accountDb6.loadCacheFunds(botKey);

@@ -1148,6 +1148,7 @@ async function _fetchAssetMarketFees(assetSymbol, BitShares) {
  * Centralized grid persistence helper.
  * Handles all persistence operations (grid snapshot + fund data) in one call.
  * Automatically manages error handling without throwing exceptions.
+ * Now async to support AsyncLock in storeMasterGrid (fixes Issue #1, #5).
  *
  * Usage: Instead of:
  *   accountOrders.storeMasterGrid(botKey, Array.from(manager.orders.values()),
@@ -1156,21 +1157,22 @@ async function _fetchAssetMarketFees(assetSymbol, BitShares) {
  *   const feesOk = manager._persistBtsFeesOwed();
  *
  * Just use:
- *   persistGridSnapshot(manager, accountOrders, botKey);
+ *   await persistGridSnapshot(manager, accountOrders, botKey);
  *
  * @param {Object} manager - OrderManager instance
  * @param {Object} accountOrders - AccountOrders instance for storage
  * @param {string} botKey - Bot identifier key
- * @returns {boolean} true if all persistence succeeded, false if any failed
+ * @returns {Promise<boolean>} true if all persistence succeeded, false if any failed
  */
-function persistGridSnapshot(manager, accountOrders, botKey) {
+async function persistGridSnapshot(manager, accountOrders, botKey) {
     if (!manager || !accountOrders || !botKey) {
         return false;
     }
 
     try {
         // Persist the complete grid with all fund data
-        accountOrders.storeMasterGrid(
+        // Now async to support AsyncLock serialization
+        await accountOrders.storeMasterGrid(
             botKey,
             Array.from(manager.orders.values()),
             manager.funds.cacheFunds,

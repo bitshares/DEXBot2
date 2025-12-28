@@ -643,7 +643,7 @@ class DEXBot {
           this._log(`  - name=${bot.name}, assetA=${bot.assetA}, assetB=${bot.assetB}, active=${bot.active}, index=${bot.botIndex}, botKey=${bot.botKey}`);
         });
 
-        this.accountOrders.ensureBotEntries(allActiveBots);
+        await this.accountOrders.ensureBotEntries(allActiveBots);
 
         if (!this.manager) {
             this.manager = new OrderManager(this.config || {});

@@ -29,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ORDER_STATES } = require('./constants');
+const AsyncLock = require('./order/async_lock');
 
 const PROFILES_ORDERS_FILE = path.join(__dirname, '..', 'profiles', 'orders.json');
 
@@ -89,7 +90,7 @@ class AccountOrders {
    */
   constructor(options = {}) {
     this.botKey = options.botKey;
-    
+
     // Determine file path: per-bot file if botKey provided, otherwise legacy shared file
     if (this.botKey) {
       const ordersDir = path.join(__dirname, '..', 'profiles', 'orders');
@@ -97,7 +98,11 @@ class AccountOrders {
     } else {
       this.profilesPath = options.profilesPath || PROFILES_ORDERS_FILE;
     }
-    
+
+    // AsyncLock prevents concurrent read-modify-write races on file I/O
+    // Serializes storeMasterGrid, updateCacheFunds, updateBtsFeesOwed operations
+    this._persistenceLock = new AsyncLock();
+
     this._needsBootstrapSave = !fs.existsSync(this.profilesPath);
     this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
     if (this._needsBootstrapSave) {
@@ -137,87 +142,93 @@ class AccountOrders {
    *
    * @param {Array} botEntries - Array of bot configurations from bots.json
    */
-  ensureBotEntries(botEntries = []) {
+  async ensureBotEntries(botEntries = []) {
     if (!Array.isArray(botEntries)) return;
-    const validKeys = new Set();
-    let changed = false;
 
-    // In per-bot mode: only process the matching bot
-    const entriesToProcess = this.botKey
-      ? botEntries.filter(bot => {
-          const key = bot.botKey || createBotKey(bot, botEntries.indexOf(bot));
-          const matches = key === this.botKey;
-          console.log(`[AccountOrders] per-bot filter: checking bot name=${bot.name}, key=${key}, this.botKey=${this.botKey}, matches=${matches}`);
-          return matches;
-        })
-      : botEntries;
+    // Use AsyncLock to serialize with other write operations (storeMasterGrid, updateCacheFunds, etc.)
+    // Prevents race conditions during hot-reload or concurrent initialization scenarios
+    await this._persistenceLock.acquire(async () => {
+      // Reload from disk to ensure we have the latest state
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
 
-    // 1. Update/Create active bots
-    for (const [index, bot] of entriesToProcess.entries()) {
-      const key = bot.botKey || createBotKey(bot, index);
-      validKeys.add(key);
+      const validKeys = new Set();
+      let changed = false;
 
-      let entry = this.data.bots[key];
-      const meta = this._buildMeta(bot, key, index, entry && entry.meta);
+      // In per-bot mode: only process the matching bot
+      const entriesToProcess = this.botKey
+        ? botEntries.filter(bot => {
+            const key = bot.botKey || createBotKey(bot, botEntries.indexOf(bot));
+            const matches = key === this.botKey;
+            console.log(`[AccountOrders] per-bot filter: checking bot name=${bot.name}, key=${key}, this.botKey=${this.botKey}, matches=${matches}`);
+            return matches;
+          })
+        : botEntries;
 
-      if (!entry) {
-        entry = {
-          meta,
-          grid: [],
-          cacheFunds: { buy: 0, sell: 0 },
-          btsFeesOwed: 0,
-          createdAt: meta.createdAt,
-          lastUpdated: meta.updatedAt
-        };
-        this.data.bots[key] = entry;
-        changed = true;
-      } else {
-        // Ensure cacheFunds exists even for existing bots
-        if (!entry.cacheFunds || typeof entry.cacheFunds.buy !== 'number') {
-          entry.cacheFunds = { buy: 0, sell: 0 };
-          changed = true;
-        }
+      // 1. Update/Create active bots
+      for (const [index, bot] of entriesToProcess.entries()) {
+        const key = bot.botKey || createBotKey(bot, index);
+        validKeys.add(key);
 
-        
+        let entry = this.data.bots[key];
+        const meta = this._buildMeta(bot, key, index, entry && entry.meta);
 
-        // Ensure btsFeesOwed exists even for existing bots
-        if (typeof entry.btsFeesOwed !== 'number') {
-          entry.btsFeesOwed = 0;
-          changed = true;
-        }
-
-        entry.grid = entry.grid || [];
-        if (this._metaChanged(entry.meta, meta)) {
-          console.log(`[AccountOrders] Metadata changed for bot ${key}: updating from old metadata to new`);
-          console.log(`  OLD: name=${entry.meta?.name}, assetA=${entry.meta?.assetA}, assetB=${entry.meta?.assetB}, active=${entry.meta?.active}`);
-          console.log(`  NEW: name=${meta.name}, assetA=${meta.assetA}, assetB=${meta.assetB}, active=${meta.active}`);
-          entry.meta = { ...entry.meta, ...meta, createdAt: entry.meta?.createdAt || meta.createdAt };
-          entry.lastUpdated = nowIso();
+        if (!entry) {
+          entry = {
+            meta,
+            grid: [],
+            cacheFunds: { buy: 0, sell: 0 },
+            btsFeesOwed: 0,
+            createdAt: meta.createdAt,
+            lastUpdated: meta.updatedAt
+          };
+          this.data.bots[key] = entry;
           changed = true;
         } else {
-          console.log(`[AccountOrders] No metadata change for bot ${key} - skipping update`);
-          console.log(`  CURRENT: name=${entry.meta?.name}, assetA=${entry.meta?.assetA}, assetB=${entry.meta?.assetB}, active=${entry.meta?.active}`);
-          console.log(`  PASSED:  name=${meta.name}, assetA=${meta.assetA}, assetB=${meta.assetB}, active=${meta.active}`);
+          // Ensure cacheFunds exists even for existing bots
+          if (!entry.cacheFunds || typeof entry.cacheFunds.buy !== 'number') {
+            entry.cacheFunds = { buy: 0, sell: 0 };
+            changed = true;
+          }
+
+          // Ensure btsFeesOwed exists even for existing bots
+          if (typeof entry.btsFeesOwed !== 'number') {
+            entry.btsFeesOwed = 0;
+            changed = true;
+          }
+
+          entry.grid = entry.grid || [];
+          if (this._metaChanged(entry.meta, meta)) {
+            console.log(`[AccountOrders] Metadata changed for bot ${key}: updating from old metadata to new`);
+            console.log(`  OLD: name=${entry.meta?.name}, assetA=${entry.meta?.assetA}, assetB=${entry.meta?.assetB}, active=${entry.meta?.active}`);
+            console.log(`  NEW: name=${meta.name}, assetA=${meta.assetA}, assetB=${meta.assetB}, active=${meta.active}`);
+            entry.meta = { ...entry.meta, ...meta, createdAt: entry.meta?.createdAt || meta.createdAt };
+            entry.lastUpdated = nowIso();
+            changed = true;
+          } else {
+            console.log(`[AccountOrders] No metadata change for bot ${key} - skipping update`);
+            console.log(`  CURRENT: name=${entry.meta?.name}, assetA=${entry.meta?.assetA}, assetB=${entry.meta?.assetB}, active=${entry.meta?.active}`);
+            console.log(`  PASSED:  name=${meta.name}, assetA=${meta.assetA}, assetB=${meta.assetB}, active=${meta.active}`);
+          }
+        }
+        bot.botKey = key;
+      }
+
+      // 2. Prune zombie bots (remove entries not in botEntries) - only in shared mode
+      if (!this.botKey) {
+        for (const key of Object.keys(this.data.bots)) {
+          if (!validKeys.has(key)) {
+            console.log(`[AccountOrders] Pruning stale bot entry: ${key}`);
+            delete this.data.bots[key];
+            changed = true;
+          }
         }
       }
-      bot.botKey = key;
-    }
 
-    // 2. Prune zombie bots (remove entries not in botEntries) - only in shared mode
-    if (!this.botKey) {
-      for (const key of Object.keys(this.data.bots)) {
-        if (!validKeys.has(key)) {
-          console.log(`[AccountOrders] Pruning stale bot entry: ${key}`);
-          delete this.data.bots[key];
-          changed = true;
-        }
+      if (changed) {
+        this.data.lastUpdated = nowIso();
+        this._persist();
       }
-    }
-
-    if (changed) {
-      this.data.lastUpdated = nowIso();
-      this._persist();
-    }
+    });
   }
 
   _metaChanged(existing, next) {
@@ -255,48 +266,58 @@ class AccountOrders {
   * @param {Object} cacheFunds - Optional cached funds { buy: number, sell: number }
   * @param {number} btsFeesOwed - Optional BTS blockchain fees owed
   */
-  storeMasterGrid(botKey, orders = [], cacheFunds = null, btsFeesOwed = null) {
+  async storeMasterGrid(botKey, orders = [], cacheFunds = null, btsFeesOwed = null) {
     if (!botKey) return;
 
-    // CRITICAL: Reload from disk before writing to prevent race conditions between bot processes
-    // In per-bot mode: loads only this bot's data from its dedicated file
-    // In shared mode: loads all bots from the shared file
-    this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    // Use AsyncLock to serialize read-modify-write operations (fixes Issue #1, #5)
+    // Prevents concurrent calls from overwriting each other's changes
+    await this._persistenceLock.acquire(async () => {
+      // CRITICAL: Reload from disk before writing to prevent race conditions between bot processes
+      // In per-bot mode: loads only this bot's data from its dedicated file
+      // In shared mode: loads all bots from the shared file
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
 
-    const snapshot = Array.isArray(orders) ? orders.map(order => this._serializeOrder(order)) : [];
-    if (!this.data.bots[botKey]) {
-      const meta = this._buildMeta({ name: null, assetA: null, assetB: null, active: false }, botKey, null);
-      this.data.bots[botKey] = {
-        meta,
-        grid: snapshot,
-        cacheFunds: cacheFunds || { buy: 0, sell: 0 },
-        btsFeesOwed: Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0,
-        createdAt: meta.createdAt,
-        lastUpdated: meta.updatedAt
-      };
-    } else {
-      this.data.bots[botKey].grid = snapshot;
-      if (cacheFunds) {
-        this.data.bots[botKey].cacheFunds = cacheFunds;
+      const snapshot = Array.isArray(orders) ? orders.map(order => this._serializeOrder(order)) : [];
+      if (!this.data.bots[botKey]) {
+        const meta = this._buildMeta({ name: null, assetA: null, assetB: null, active: false }, botKey, null);
+        this.data.bots[botKey] = {
+          meta,
+          grid: snapshot,
+          cacheFunds: cacheFunds || { buy: 0, sell: 0 },
+          btsFeesOwed: Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0,
+          createdAt: meta.createdAt,
+          lastUpdated: meta.updatedAt
+        };
+      } else {
+        this.data.bots[botKey].grid = snapshot;
+        if (cacheFunds) {
+          this.data.bots[botKey].cacheFunds = cacheFunds;
+        }
+
+        if (Number.isFinite(btsFeesOwed)) {
+          this.data.bots[botKey].btsFeesOwed = btsFeesOwed;
+        }
+        const timestamp = nowIso();
+        this.data.bots[botKey].lastUpdated = timestamp;
+        if (this.data.bots[botKey].meta) this.data.bots[botKey].meta.updatedAt = timestamp;
       }
-      
-      if (Number.isFinite(btsFeesOwed)) {
-        this.data.bots[botKey].btsFeesOwed = btsFeesOwed;
-      }
-      const timestamp = nowIso();
-      this.data.bots[botKey].lastUpdated = timestamp;
-      if (this.data.bots[botKey].meta) this.data.bots[botKey].meta.updatedAt = timestamp;
-    }
-    this.data.lastUpdated = nowIso();
-    this._persist();
+      this.data.lastUpdated = nowIso();
+      this._persist();
+    });
   }
 
   /**
    * Load the persisted order grid for a bot.
    * @param {string} botKey - Bot identifier key
+   * @param {boolean} forceReload - If true, reload from disk to ensure fresh data (fixes Issue #2)
    * @returns {Array|null} Order grid array or null if not found
    */
-  loadBotGrid(botKey) {
+  loadBotGrid(botKey, forceReload = false) {
+    // Optionally reload from disk to prevent using stale in-memory data
+    if (forceReload) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
     if (this.data && this.data.bots && this.data.bots[botKey]) {
       const botData = this.data.bots[botKey];
       return botData.grid || null;
@@ -307,9 +328,15 @@ class AccountOrders {
   /**
    * Load cached funds for a bot (difference between available and calculated rotation sizes).
    * @param {string} botKey - Bot identifier key
+   * @param {boolean} forceReload - If true, reload from disk to ensure fresh data (fixes Issue #2)
    * @returns {Object|null} Cached funds { buy, sell } or null if not found
    */
-  loadCacheFunds(botKey) {
+  loadCacheFunds(botKey, forceReload = false) {
+    // Optionally reload from disk to prevent using stale in-memory data
+    if (forceReload) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
     if (this.data && this.data.bots && this.data.bots[botKey]) {
       const botData = this.data.bots[botKey];
       const cf = botData.cacheFunds;
@@ -325,20 +352,21 @@ class AccountOrders {
    * @param {string} botKey - Bot identifier key
    * @param {Object} cacheFunds - Cached funds { buy, sell }
    */
-  updateCacheFunds(botKey, cacheFunds) {
+  async updateCacheFunds(botKey, cacheFunds) {
     if (!botKey) return;
 
-    // Reload from disk in per-bot mode to ensure consistency
-    if (this.botKey) {
+    // Use AsyncLock to serialize writes and prevent stale data issues (fixes Issue #3)
+    // Always reload from disk regardless of mode to ensure latest state
+    await this._persistenceLock.acquire(async () => {
       this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
-    }
 
-    if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
-      return;
-    }
-    this.data.bots[botKey].cacheFunds = cacheFunds || { buy: 0, sell: 0 };
-    this.data.lastUpdated = nowIso();
-    this._persist();
+      if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
+        return;
+      }
+      this.data.bots[botKey].cacheFunds = cacheFunds || { buy: 0, sell: 0 };
+      this.data.lastUpdated = nowIso();
+      this._persist();
+    });
   }
 
   /* `pendingProceeds` storage removed. */
@@ -348,9 +376,15 @@ class AccountOrders {
    * BTS fees accumulate during fill processing and must persist across restarts
    * to ensure they are properly deducted from proceeds during rotation.
    * @param {string} botKey - Bot identifier key
+   * @param {boolean} forceReload - If true, reload from disk to ensure fresh data (fixes Issue #2)
    * @returns {number} BTS fees owed or 0 if not found
    */
-  loadBtsFeesOwed(botKey) {
+  loadBtsFeesOwed(botKey, forceReload = false) {
+    // Optionally reload from disk to prevent using stale in-memory data
+    if (forceReload) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
     if (this.data && this.data.bots && this.data.bots[botKey]) {
       const botData = this.data.bots[botKey];
       const fees = botData.btsFeesOwed;
@@ -368,30 +402,38 @@ class AccountOrders {
    * @param {string} botKey - Bot identifier key
    * @param {number} btsFeesOwed - BTS blockchain fees owed
    */
-  updateBtsFeesOwed(botKey, btsFeesOwed) {
+  async updateBtsFeesOwed(botKey, btsFeesOwed) {
     if (!botKey) return;
 
-    // Reload from disk in per-bot mode to ensure consistency
-    if (this.botKey) {
+    // Use AsyncLock to serialize writes and prevent stale data issues (fixes Issue #4)
+    // Always reload from disk regardless of mode to ensure latest state
+    await this._persistenceLock.acquire(async () => {
       this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
-    }
 
-    if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
-      return;
-    }
-    this.data.bots[botKey].btsFeesOwed = Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0;
-    this.data.lastUpdated = nowIso();
-    this._persist();
+      if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
+        return;
+      }
+      this.data.bots[botKey].btsFeesOwed = Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0;
+      this.data.lastUpdated = nowIso();
+      this._persist();
+    });
   }
 
   /**
    * Calculate asset balances from a stored grid.
    * Sums order sizes by asset and state (active vs virtual).
    * @param {string} botKeyOrName - Bot key or name to look up
+   * @param {boolean} forceReload - If true, reload from disk to ensure fresh data (fixes Issue #6)
    * @returns {Object|null} Balance summary or null if not found
    */
-  getDBAssetBalances(botKeyOrName) {
+  getDBAssetBalances(botKeyOrName, forceReload = false) {
     if (!botKeyOrName) return null;
+
+    // Optionally reload from disk to prevent using stale in-memory data
+    if (forceReload) {
+      this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
+    }
+
     // Find entry by key or by matching meta.name (case-insensitive)
     let key = null;
     if (this.data && this.data.bots) {

@@ -13,7 +13,7 @@ async function main() {
   const db = new AccountOrders({ profilesPath: tmpFile });
 
   const bots = [{ name: 'My Bot', assetA: 'ASSET.A', assetB: 'ASSET.B', active: true }];
-  db.ensureBotEntries(bots);
+  await db.ensureBotEntries(bots);
   const botKey = bots[0].botKey;
 
   const orders = [
@@ -24,7 +24,7 @@ async function main() {
     { id: '5', type: 'spread', state: 'virtual', size: 10 }
   ];
 
-  db.storeMasterGrid(botKey, orders);
+  await db.storeMasterGrid(botKey, orders);
 
   const resByKey = db.getDBAssetBalances(botKey);
   assert(resByKey, 'Expected non-null result for botKey');
