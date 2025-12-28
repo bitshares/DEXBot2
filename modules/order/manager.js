@@ -567,6 +567,14 @@ class OrderManager {
             this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
         }
 
+        // CRITICAL FIX: Calculate available BEFORE updating chainFree
+        // This prevents double-counting proceeds in cacheFunds when processFilledOrders adds both proceeds and available
+        // Store the pre-update values so processFilledOrders can use them instead of recalculating
+        const availBeforeUpdate = {
+            buy: this.calculateAvailableFunds('buy'),
+            sell: this.calculateAvailableFunds('sell')
+        };
+
         const bumpTotal = (key, delta) => {
             const next = (Number(this.accountTotals[key]) || 0) + delta;
             this.accountTotals[key] = next < 0 ? 0 : next;
@@ -582,6 +590,11 @@ class OrderManager {
             this.logger.log(`[chainFree update] Partial SELL fill: buyFree ${oldBuyFree.toFixed(8)} + ${proceeds.toFixed(8)} proceeds = ${this.accountTotals.buyFree.toFixed(8)} BTS`, 'debug');
             bumpTotal('buy', proceeds);
             bumpTotal('sell', -fillSize);
+
+            // Store pre-update available for later use in processFilledOrders
+            // This prevents the proceeds from being included twice in cacheFunds calculation
+            this._preFillAvailable = availBeforeUpdate;
+
             this.recalculateFunds();
             // Note: Don't log available here - proceeds not yet added to pendingProceeds
             // They will be added later by processFilledOrders()
@@ -593,6 +606,11 @@ class OrderManager {
             this.logger.log(`[chainFree update] Partial BUY fill: sellFree ${oldSellFree.toFixed(8)} + ${proceeds.toFixed(8)} proceeds = ${this.accountTotals.sellFree.toFixed(8)} ${this.config?.assetA}`, 'debug');
             bumpTotal('sell', proceeds);
             bumpTotal('buy', -fillSize);
+
+            // Store pre-update available for later use in processFilledOrders
+            // This prevents the proceeds from being included twice in cacheFunds calculation
+            this._preFillAvailable = availBeforeUpdate;
+
             this.recalculateFunds();
             // Note: Don't log available here - proceeds not yet added to pendingProceeds
             // They will be added later by processFilledOrders()
@@ -1597,11 +1615,14 @@ class OrderManager {
         bumpTotal('buy', deltaBuyTotal);
         bumpTotal('sell', deltaSellTotal);
 
-        // SYNC FUND CYCLING: Move any existing 'available' funds into cacheFunds 
-        // before adding proceeds. This ensures depositors' funds are cycled 
-        // into the grid during the rotation that follows a fill.
-        const currentAvailBuy = this.calculateAvailableFunds('buy');
-        const currentAvailSell = this.calculateAvailableFunds('sell');
+        // SYNC FUND CYCLING: Use available calculated BEFORE chainFree was updated
+        // _adjustFunds() stores the pre-update available in this._preFillAvailable
+        // This prevents double-counting proceeds that are included in the available calculation
+        let currentAvailBuy = this._preFillAvailable?.buy || this.calculateAvailableFunds('buy');
+        let currentAvailSell = this._preFillAvailable?.sell || this.calculateAvailableFunds('sell');
+
+        // Clear the stored values after use (in case this is called multiple times)
+        this._preFillAvailable = null;
 
         // Hold proceeds + available in cacheFunds so availability reflects them through rotation
         const proceedsBefore = { buy: this.funds.cacheFunds.buy || 0, sell: this.funds.cacheFunds.sell || 0 };
