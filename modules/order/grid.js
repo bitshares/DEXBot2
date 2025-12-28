@@ -456,8 +456,8 @@ class Grid {
         // Clear persisted cacheFunds for both sides after a full grid regeneration
         // so persisted leftovers do not remain after the grid was rebuilt.
         try {
-            Grid._clearAndPersistCacheFunds(manager, 'buy');
-            Grid._clearAndPersistCacheFunds(manager, 'sell');
+            await Grid._clearAndPersistCacheFunds(manager, 'buy');
+            await Grid._clearAndPersistCacheFunds(manager, 'sell');
         } catch (e) {
             manager.logger?.log?.(`Warning: failed to clear persisted cacheFunds during recalc: ${e.message}`, 'warn');
         }
@@ -1064,14 +1064,14 @@ class Grid {
      * Clear and persist cacheFunds for a given side ('buy' or 'sell').
      * Centralizes duplicated logic used after grid regeneration.
      */
-    static _clearAndPersistCacheFunds(manager, side) {
+    static async _clearAndPersistCacheFunds(manager, side) {
         try {
             manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
             manager.funds.cacheFunds[side] = 0;
             const { AccountOrders } = require('../account_orders');
             if (manager.config && manager.config.botKey) {
                 const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
-                accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
+                await accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
                 manager.logger?.log?.(`Cleared persisted cacheFunds.${side} after regeneration`, 'info');
             } else {
                 manager.logger?.log?.(`Cleared in-memory cacheFunds.${side} after regeneration (no botKey)`, 'info');
@@ -1084,7 +1084,7 @@ class Grid {
     /**
      * Persist current cacheFunds for a given side without clearing it.
      */
-    static _persistCacheFunds(manager, side) {
+    static async _persistCacheFunds(manager, side) {
         try {
             manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
             // Ensure side exists
@@ -1093,7 +1093,7 @@ class Grid {
             const { AccountOrders } = require('../account_orders');
             if (manager.config && manager.config.botKey) {
                 const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
-                accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
+                await accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
                 manager.logger?.log?.(`Persisted cacheFunds.${side} (${Number(manager.funds.cacheFunds[side]).toFixed(8)}) after regeneration`, 'debug');
             }
         } catch (e) {

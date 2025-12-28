@@ -330,7 +330,7 @@ class OrderManager {
      * @param {string|null} requestedSide - Optional side to deduct from ('buy' or 'sell').
      *                                       If not provided, deducts from the side that has BTS.
      */
-    deductBtsFees(requestedSide = null) {
+    async deductBtsFees(requestedSide = null) {
         if (!this.funds.btsFeesOwed || this.funds.btsFeesOwed <= 0) return;
 
         const assetA = this.config.assetA;
@@ -350,8 +350,8 @@ class OrderManager {
             this.funds.cacheFunds[side] -= feesOwedThisSide;
             this.funds.btsFeesOwed -= feesOwedThisSide;
 
-            this._persistCacheFunds(); // Merged persistence call
-            this._persistBtsFeesOwed();
+            await this._persistCacheFunds(); // Merged persistence call
+            await this._persistBtsFeesOwed();
         }
     }
 
@@ -365,16 +365,16 @@ class OrderManager {
      * @param {string} dataType - Human-readable name of data type (e.g., 'cacheFunds', 'btsFeesOwed')
      * @param {*} dataValue - The value being persisted (for logging and warning flag)
      * @param {number} maxAttempts - Maximum retry attempts (default: 3)
-     * @returns {boolean} true if persistence succeeded, false if failed
+     * @returns {Promise<boolean>} true if persistence succeeded, false if failed
      */
-    _persistWithRetry(persistFn, dataType, dataValue, maxAttempts = 3) {
+    async _persistWithRetry(persistFn, dataType, dataValue, maxAttempts = 3) {
         if (!this.config || !this.config.botKey || !this.accountOrders) {
             return true;  // Can't persist, but that's ok (e.g., dry run)
         }
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                persistFn();  // Execute the persistence function
+                await persistFn();  // Execute the async persistence function
                 this.logger.log(`✓ Persisted ${dataType}`, 'debug');
 
                 // Clear any previous persistence warning flag
@@ -399,8 +399,7 @@ class OrderManager {
                     this.logger.log(`Failed to persist ${dataType} (attempt ${attempt}/${maxAttempts}): ${e.message}. Retrying...`, 'warn');
                     // Exponential backoff: 100ms, 200ms, 300ms for 3 attempts
                     const waitMs = attempt * 100;
-                    const start = Date.now();
-                    while (Date.now() - start < waitMs) { }  // Busy wait
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
                 }
             }
         }
@@ -409,9 +408,10 @@ class OrderManager {
     /**
      * Persist cache funds to disk with retry logic.
      * Retries up to 3 times with exponential backoff on transient failures.
+     * @returns {Promise<boolean>} true if persistence succeeded, false if failed
      */
-    _persistCacheFunds() {
-        return this._persistWithRetry(
+    async _persistCacheFunds() {
+        return await this._persistWithRetry(
             () => this.accountOrders.updateCacheFunds(this.config.botKey, this.funds.cacheFunds),
             `cacheFunds: Buy ${(this.funds.cacheFunds.buy || 0).toFixed(8)}, Sell ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`,
             { ...this.funds.cacheFunds }
@@ -425,10 +425,10 @@ class OrderManager {
      * Uses same retry pattern as _persistPendingProceeds with exponential backoff.
      * On final failure, logs critical error but does NOT throw - allows processing to continue.
      *
-     * @returns {boolean} true if persistence succeeded, false if failed
+     * @returns {Promise<boolean>} true if persistence succeeded, false if failed
      */
-    _persistBtsFeesOwed() {
-        return this._persistWithRetry(
+    async _persistBtsFeesOwed() {
+        return await this._persistWithRetry(
             () => this.accountOrders.updateBtsFeesOwed(this.config.botKey, this.funds.btsFeesOwed),
             `BTS fees owed: ${(this.funds.btsFeesOwed || 0).toFixed(8)} BTS`,
             this.funds.btsFeesOwed
@@ -1614,19 +1614,19 @@ class OrderManager {
 
         // Note: deductBtsFees() automatically determines which side has BTS and deducts from there
         if (hasBtsPair && this.funds.btsFeesOwed > 0) {
-            this.deductBtsFees();
+            await this.deductBtsFees();
         }
 
         this.recalculateFunds();
 
         // CRITICAL: Persist pending proceeds and BTS fees so they survive bot restart
         // These funds from partial fills must not be lost when the bot restarts
-        const proceedsPersistedOk = this._persistCacheFunds();
+        const proceedsPersistedOk = await this._persistCacheFunds();
         if (!proceedsPersistedOk) {
             this.logger.log(`⚠ Pending proceeds not persisted - will be held in memory and retried`, 'warn');
         }
         if (this.funds.btsFeesOwed > 0) {
-            const feesPersistedOk = this._persistBtsFeesOwed();
+            const feesPersistedOk = await this._persistBtsFeesOwed();
             if (!feesPersistedOk) {
                 this.logger.log(`⚠ BTS fees not persisted - will be held in memory and retried`, 'warn');
             }
@@ -1675,7 +1675,7 @@ class OrderManager {
         this.recalculateFunds();
 
         // PERSISTENCE: Since cacheFunds now includes proceeds, ensure it is persisted
-        this._persistCacheFunds();
+        await this._persistCacheFunds();
         // No longer clearing cacheFunds, so no proceedsCleared check needed here.
 
         this._logAvailable('after rotation clear');
@@ -2234,7 +2234,7 @@ class OrderManager {
         // Persist cacheFunds when value changes
         try {
             if (this.config && this.config.botKey) {
-                this._persistCacheFunds();
+                await this._persistCacheFunds();
                 this.logger.log(`Persisted cacheFunds.${side} = ${surplus.toFixed(8)}`, 'debug');
             }
         } catch (err) {

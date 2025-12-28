@@ -30,7 +30,7 @@ const logger = {
 
 // Mock account orders (pendingProceeds persistence removed; use cacheFunds)
 const accountOrders = {
-    updateCacheFunds: () => {},
+    updateCacheFunds: async () => {},
     loadCacheFunds: () => ({ buy: 0, sell: 0 })
 };
 
@@ -40,7 +40,7 @@ console.log('Running BTS Fee Deduction Fix tests...\n');
 const tests = [
     {
         name: 'should NOT deduct fees repeatedly in calculateAvailableFunds()',
-        run: () => {
+        run: async () => {
             let manager = new OrderManager(config, logger, accountOrders);
             manager.resetFunds();
             manager.setAccountTotals({ buyFree: 10000, sellFree: 100, buy: 10000, sell: 100 });
@@ -56,13 +56,13 @@ const tests = [
             assert.strictEqual(available1, available2, 'Multiple calls should return same value');
             assert.strictEqual(manager.funds.cacheFunds.buy, 100, 'Proceeds unchanged after multiple calls');
 
-            manager.deductBtsFees();
+            await manager.deductBtsFees();
             assert.strictEqual(manager.funds.cacheFunds.buy, 90, 'Fees deducted once (100 - 10)');
         }
     },
     {
         name: 'should handle fee deduction on correct side based on asset',
-        run: () => {
+        run: async () => {
             let manager = new OrderManager(config, logger, accountOrders);
             manager.resetFunds();
             manager.setAccountTotals({ buyFree: 10000, sellFree: 100, buy: 10000, sell: 100 });
@@ -70,25 +70,27 @@ const tests = [
             manager.funds.cacheFunds = { buy: 100, sell: 0 };
             manager.funds.btsFeesOwed = 50;
 
-            manager.deductBtsFees();
+            await manager.deductBtsFees();
             assert.strictEqual(manager.funds.cacheFunds.buy, 50);
             assert.strictEqual(manager.funds.btsFeesOwed, 0);
         }
     }
 ];
 
-let passed = 0, failed = 0;
-tests.forEach(test => {
-    try {
-        test.run();
-        console.log(`✓ ${test.name}`);
-        passed++;
-    } catch (e) {
-        console.log(`✗ ${test.name}`);
-        console.log(`  Error: ${e.message}`);
-        failed++;
+(async () => {
+    let passed = 0, failed = 0;
+    for (const test of tests) {
+        try {
+            await test.run();
+            console.log(`✓ ${test.name}`);
+            passed++;
+        } catch (e) {
+            console.log(`✗ ${test.name}`);
+            console.log(`  Error: ${e.message}`);
+            failed++;
+        }
     }
-});
 
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+    console.log(`\nResults: ${passed} passed, ${failed} failed`);
+    process.exit(failed > 0 ? 1 : 0);
+})();

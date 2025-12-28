@@ -1202,7 +1202,7 @@ async function persistGridSnapshot(manager, accountOrders, botKey) {
  * Example:
  *   retryPersistenceIfNeeded(manager);
  */
-function retryPersistenceIfNeeded(manager) {
+async function retryPersistenceIfNeeded(manager) {
     if (!manager) {
         return true;
     }
@@ -1218,13 +1218,13 @@ function retryPersistenceIfNeeded(manager) {
 
     try {
         if (warning.type === 'pendingProceeds' || warning.type === 'cacheFunds') {
-            const success = typeof manager._persistCacheFunds === 'function' ? manager._persistCacheFunds() : true;
+            const success = typeof manager._persistCacheFunds === 'function' ? await manager._persistCacheFunds() : true;
             if (success && manager.logger) {
                 manager.logger.log(`✓ Successfully retried cacheFunds persistence (was: ${warning.type})`, 'info');
             }
             return success;
         } else if (warning.type === 'btsFeesOwed') {
-            const success = manager._persistBtsFeesOwed();
+            const success = await manager._persistBtsFeesOwed();
             if (success && manager.logger) {
                 manager.logger.log(`✓ Successfully retried btsFeesOwed persistence`, 'info');
             }

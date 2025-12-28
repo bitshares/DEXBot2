@@ -217,7 +217,7 @@ class DEXBot {
                         }
 
                         // Attempt to retry any previously failed persistence operations
-                        retryPersistenceIfNeeded(this.manager);
+                        await retryPersistenceIfNeeded(this.manager);
                     });
                 } catch (err) {
                     this.manager?.logger?.log(`Error processing fill: ${err.message}`, 'error');
