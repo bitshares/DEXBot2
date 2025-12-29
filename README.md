@@ -185,7 +185,7 @@ You can run bots directly via `node dexbot.js` or the `dexbot` CLI wrapper (inst
 - `node dexbot.js` or `dexbot` — starts all active bots defined in `profiles/bots.json` (use `examples/bots.json` as a template).
 - `dexbot start [bot_name]` — start a specific bot (or all active bots if omitted). Respects each bot's `dryRun` setting.
 - `dexbot drystart [bot_name]` — same as `start` but forces `dryRun=true` for safe simulation.
-- `dexbot disable {all|[bot_name]}` — mark a bot (or all bots) inactive in config; use `node pm2.js stop` to stop the running process.
+- `dexbot disable {all|[bot_name]}` — mark a bot (or all bots) inactive in config.
 - `dexbot reset {all|[bot_name]}` — trigger a grid reset (auto-reloads if running, or applies on next start).
 
 #### Configuration Management
@@ -220,13 +220,6 @@ node dexbot.js pm2
 
 # Start a specific bot via PM2
 node pm2.js <bot-name>
-```
-
-#### Individual Bot (Direct, without PM2)
-
-```bash
-# Run a single bot directly (prompts for password if not in environment)
-node bot.js <bot-name>
 ```
 
 #### Managing PM2 Processes
@@ -268,10 +261,10 @@ node pm2.js help
 #### Grid Management & Bot Config
 
 ```bash
-# Reset Grid (Regenerate orders) - works with both direct and PM2 bots
+# Reset Grid (Regenerate orders)
 dexbot reset {all|[<bot-name>]}
 
-# Disable a bot in config (marks as inactive; stop running process with pm2.js)
+# Disable a bot in config (marks as inactive)
 dexbot disable {all|[<bot-name>]}
 ```
 

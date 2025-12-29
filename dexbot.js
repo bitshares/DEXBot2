@@ -53,7 +53,7 @@ const CLI_EXAMPLES_FLAG = '--cli-examples';
 const CLI_EXAMPLES = [
     { title: 'Start a bot from the tracked config', command: 'dexbot start bot-name', notes: 'Targets the named entry in profiles/bots.json.' },
     { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart bot-name', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
-    { title: 'Disable a bot in config', command: 'dexbot disable bot-name', notes: 'Marks the bot inactive; stop running process with node pm2.js stop.' },
+    { title: 'Disable a bot in config', command: 'dexbot disable bot-name', notes: 'Marks the bot inactive in config.' },
     { title: 'Reset a bot grid', command: 'dexbot reset bot-name', notes: 'Triggers a full grid regeneration for the named bot.' },
     { title: 'Manage keys', command: 'dexbot keys', notes: 'Runs modules/chain_keys.js to add or update master passwords.' },
     { title: 'Edit bot definitions', command: 'dexbot bots', notes: 'Launches the interactive modules/account_bots.js helper for the JSON config.' },
@@ -68,7 +68,7 @@ function printCLIUsage() {
     console.log('  start <bot>       Start the named bot using the tracked config.');
     console.log('  drystart <bot>    Same as start but forces dry-run execution.');
     console.log('  reset <bot>       Trigger a grid reset (auto-reloads if running, or applies on next start).');
-    console.log('  disable <bot>     Mark the bot inactive in config (disable running instance separately via pm2.js).');
+    console.log('  disable <bot>     Mark the bot inactive in config.');
     console.log('  keys              Launch the chain key helper (modules/chain_keys.js).');
     console.log('  bots              Launch the interactive bot configurator (modules/account_bots.js).');
     console.log('  pm2               Start all active bots with PM2 (authenticate + generate config + start).');
