@@ -180,11 +180,16 @@ Below is a concise description of each configuration option you may set per-bot 
 
 You can run bots directly via `node dexbot.js` or the `dexbot` CLI wrapper (installed via `npm link` or run with `npx dexbot`):
 
+#### Bot Management (Start/Reset/Disable)
+
 - `node dexbot.js` or `dexbot` — starts all active bots defined in `profiles/bots.json` (use `examples/bots.json` as a template).
 - `dexbot start [bot_name]` — start a specific bot (or all active bots if omitted). Respects each bot's `dryRun` setting.
 - `dexbot drystart [bot_name]` — same as `start` but forces `dryRun=true` for safe simulation.
-- `dexbot stop [bot_name]` — mark a bot (or all bots) inactive; the config file is used the next time the process launches.
-- `dexbot reset [bot_name]` — trigger a grid reset (auto-reloads if running, or applies on next start).
+- `dexbot disable {all|[bot_name]}` — mark a bot (or all bots) inactive in config; use `node pm2.js stop` to stop the running process.
+- `dexbot reset {all|[bot_name]}` — trigger a grid reset (auto-reloads if running, or applies on next start).
+
+#### Configuration Management
+
 - `dexbot keys` — manage master password and keyring via `modules/chain_keys.js`.
 - `dexbot bots` — open the interactive editor in `modules/account_bots.js` to create or edit bot entries.
 - `dexbot --cli-examples` — print curated CLI snippets for common tasks.
@@ -197,7 +202,14 @@ If any active bot requires `preferredAccount`, dexbot will prompt once for the m
 
 For production use with automatic restart and process monitoring, use PM2:
 
-#### Quick Start (All Bots)
+#### Starting Bots via PM2
+
+Use `node pm2.js` to start bots with PM2 process management. This unified launcher handles everything automatically:
+1. **BitShares Connection**: Waits for network connection
+2. **PM2 Check**: Detects local and global PM2; prompts to install if missing
+3. **Config Generation**: Creates `profiles/ecosystem.config.js` from `profiles/bots.json`
+4. **Authentication**: Prompts for master password (kept in RAM only, never saved to disk)
+5. **Startup**: Starts all active bots as PM2-managed processes with auto-restart
 
 ```bash
 # Start all active bots with PM2
@@ -205,23 +217,10 @@ node pm2.js
 
 # Or via CLI
 node dexbot.js pm2
-```
 
-This unified launcher handles everything automatically:
-1. **BitShares Connection**: Waits for network connection
-2. **PM2 Check**: Detects local and global PM2; prompts to install if missing
-3. **Config Generation**: Creates `profiles/ecosystem.config.js` from `profiles/bots.json`
-4. **Authentication**: Prompts for master password (kept in RAM only, never saved to disk)
-5. **Startup**: Starts all active bots as PM2-managed processes with auto-restart
-
-#### Single Bot via PM2
-
-```bash
 # Start a specific bot via PM2
 node pm2.js <bot-name>
 ```
-
-Same as `node pm2.js` but only starts the specified bot.
 
 #### Individual Bot (Direct, without PM2)
 
@@ -230,9 +229,9 @@ Same as `node pm2.js` but only starts the specified bot.
 node bot.js <bot-name>
 ```
 
-#### PM2 Management Commands
+#### Managing PM2 Processes
 
-After startup via `node pm2.js`:
+After startup via `node pm2.js`, use these commands to manage and monitor running processes:
 
 ```bash
 # View bot status and resource usage
@@ -241,17 +240,39 @@ pm2 status
 # View real-time logs from all bots (or specific bot)
 pm2 logs [<bot-name>]
 
-# Reset Grid (Regenerate orders)
-dexbot reset [<bot-name>]
+# Restart process (without reset)
+pm2 restart {all|<bot-name>}
 
 # Stop all bots (or specific bot)
 pm2 stop {all|<bot-name>}
 
-# Restart process (without reset)
-pm2 restart {all|<bot-name>}
-
 # Delete all bots from PM2 (or specific bot)
 pm2 delete {all|<bot-name>}
+```
+
+#### Managing Bot Processes via pm2.js
+
+Use `node pm2.js` wrapper commands for safe bot process management (only affects dexbot processes):
+
+```bash
+# Stop dexbot processes (safely filters to only dexbot)
+node pm2.js stop {all|<bot-name>}
+
+# Delete dexbot processes from PM2 (configs remain in profiles/bots.json)
+node pm2.js delete {all|<bot-name>}
+
+# Show pm2.js usage information
+node pm2.js help
+```
+
+#### Grid Management & Bot Config
+
+```bash
+# Reset Grid (Regenerate orders) - works with both direct and PM2 bots
+dexbot reset {all|[<bot-name>]}
+
+# Disable a bot in config (marks as inactive; stop running process with pm2.js)
+dexbot disable {all|[<bot-name>]}
 ```
 
 #### Configuration & Logs

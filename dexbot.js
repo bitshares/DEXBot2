@@ -11,7 +11,7 @@
  * - Automatic order replacement when fills occur
  * - Master password encryption for private keys
  * - Dry-run mode for testing without broadcasting transactions
- * - CLI commands: start, drystart, reset, stop, keys, bots
+ * - CLI commands: start, drystart, reset, disable, keys, bots
  */
 const { BitShares, waitForConnected, setSuppressConnectionLog } = require('./modules/bitshares_client');
 const fs = require('fs');
@@ -47,16 +47,17 @@ function ensureProfilesDirectory() {
 }
 
 
-const CLI_COMMANDS = ['start', 'reset', 'stop', 'drystart', 'keys', 'bots', 'pm2'];
+const CLI_COMMANDS = ['start', 'reset', 'disable', 'drystart', 'keys', 'bots', 'pm2'];
 const CLI_HELP_FLAGS = ['-h', '--help'];
 const CLI_EXAMPLES_FLAG = '--cli-examples';
 const CLI_EXAMPLES = [
     { title: 'Start a bot from the tracked config', command: 'dexbot start bot-name', notes: 'Targets the named entry in profiles/bots.json.' },
     { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart bot-name', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
+    { title: 'Disable a bot in config', command: 'dexbot disable bot-name', notes: 'Marks the bot inactive; stop running process with node pm2.js stop.' },
+    { title: 'Reset a bot grid', command: 'dexbot reset bot-name', notes: 'Triggers a full grid regeneration for the named bot.' },
     { title: 'Manage keys', command: 'dexbot keys', notes: 'Runs modules/chain_keys.js to add or update master passwords.' },
     { title: 'Edit bot definitions', command: 'dexbot bots', notes: 'Launches the interactive modules/account_bots.js helper for the JSON config.' },
-    { title: 'Start bots with PM2', command: 'dexbot pm2', notes: 'Generates ecosystem config, authenticates, and starts PM2.' },
-    { title: 'Reset a bot grid', command: 'dexbot reset bot-name', notes: 'Triggers a full grid regeneration for the named bot.' }
+    { title: 'Start bots with PM2', command: 'dexbot pm2', notes: 'Generates ecosystem config, authenticates, and starts PM2.' }
 ];
 const cliArgs = process.argv.slice(2);
 
@@ -67,7 +68,7 @@ function printCLIUsage() {
     console.log('  start <bot>       Start the named bot using the tracked config.');
     console.log('  drystart <bot>    Same as start but forces dry-run execution.');
     console.log('  reset <bot>       Trigger a grid reset (auto-reloads if running, or applies on next start).');
-    console.log('  stop <bot>        Mark the bot inactive in config (stop running instance separately).');
+    console.log('  disable <bot>     Mark the bot inactive in config (disable running instance separately via pm2.js).');
     console.log('  keys              Launch the chain key helper (modules/chain_keys.js).');
     console.log('  bots              Launch the interactive bot configurator (modules/account_bots.js).');
     console.log('  pm2               Start all active bots with PM2 (authenticate + generate config + start).');
@@ -398,10 +399,10 @@ async function startBotByName(botName, { dryRun = false } = {}) {
 /**
  * Mark a bot (or all bots) as inactive in profiles/bots.json.
  * Note: This only updates the config file; running processes must be
- * stopped manually (Ctrl+C).
- * @param {string|null} botName - Name of the bot to stop, or null for all
+ * stopped separately using pm2.js or Ctrl+C.
+ * @param {string|null} botName - Name of the bot to disable, or null for all
  */
-async function stopBotByName(botName) {
+async function disableBotByName(botName) {
     const { config, filePath } = loadSettingsFile();
     const entries = resolveRawBotEntries(config);
     if (!botName) {
@@ -413,7 +414,7 @@ async function stopBotByName(botName) {
             }
         });
         if (!updated) {
-            console.log('No active bots were found to stop.');
+            console.log('No active bots were found to disable.');
             return;
         }
         saveSettingsFile(config, filePath);
@@ -422,7 +423,7 @@ async function stopBotByName(botName) {
     }
     const match = entries.find(b => b.name === botName);
     if (!match) {
-        console.error(`Could not find any bot named '${botName}' to stop.`);
+        console.error(`Could not find any bot named '${botName}' to disable.`);
         process.exit(1);
     }
     if (!match.active) {
@@ -431,7 +432,7 @@ async function stopBotByName(botName) {
     }
     match.active = false;
     saveSettingsFile(config, filePath);
-    console.log(`Marked '${botName}' inactive in ${path.basename(filePath)}. Stop the running process manually (Ctrl+C).`);
+    console.log(`Marked '${botName}' inactive in ${path.basename(filePath)}. Stop the PM2 process using 'node pm2.js stop ${botName}'.`);
 }
 
 /**
@@ -497,8 +498,8 @@ async function handleCLICommands() {
         case 'reset':
             await resetBotByName(target);
             process.exit(0);
-        case 'stop':
-            await stopBotByName(target);
+        case 'disable':
+            await disableBotByName(target);
             process.exit(0);
         case 'keys':
             await runAccountManager({ waitForConnection: true, exitAfter: true, disconnectAfter: true });
