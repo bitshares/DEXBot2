@@ -35,7 +35,7 @@
  * 4. After rotation: cacheFunds updated to reflect leftovers (surplus)
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL } = require('../constants');
-const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees, computeChainFundTotals, calculateAvailableFundsValue, calculateSpreadFromOrders, resolveConfigValue, compareBlockchainSizes, filterOrdersByType, countOrdersByType, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, calculateOrderSizes } = require('./utils');
+const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees, computeChainFundTotals, calculateAvailableFundsValue, calculateSpreadFromOrders, resolveConfigValue, compareBlockchainSizes, filterOrdersByType, countOrdersByType, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, calculateOrderSizes, formatOrderSize, convertToSpreadPlaceholder, getCacheFundsValue, getGridTotalValue, hasValidAccountTotals, getChainFreeKey } = require('./utils');
 const Logger = require('./logger');
 const AsyncLock = require('./async_lock');
 // Grid functions (initialize/recalculate) are intended to be
@@ -164,12 +164,8 @@ class OrderManager {
         return resolved;
     }
 
-    _computeChainFundTotals() {
-        return computeChainFundTotals(this.accountTotals, this.funds?.committed?.chain);
-    }
-
     getChainFundsSnapshot() {
-        const totals = this._computeChainFundTotals();
+        const totals = computeChainFundTotals(this.accountTotals, this.funds?.committed?.chain);
         const allocatedBuy = Number.isFinite(Number(this.funds?.allocated?.buy)) ? Number(this.funds.allocated.buy) : totals.chainTotalBuy;
         const allocatedSell = Number.isFinite(Number(this.funds?.allocated?.sell)) ? Number(this.funds.allocated.sell) : totals.chainTotalSell;
         return {
@@ -182,24 +178,6 @@ class OrderManager {
     // -------------------------------------------------------------------------
     // Helper Methods - Precision, Funds, ChainFree
     // -------------------------------------------------------------------------
-
-    /**
-     * Get cacheFunds value for a side with safe fallback.
-     * @param {string} side - 'buy' or 'sell'
-     * @returns {number} CacheFunds value or 0
-     */
-    _getCacheFunds(side) {
-        return Number(this.funds?.cacheFunds?.[side] || 0);
-    }
-
-    /**
-     * Get grid total value for a side with safe fallback.
-     * @param {string} side - 'buy' or 'sell'
-     * @returns {number} Grid total or 0
-     */
-    _getGridTotal(side) {
-        return Number(this.funds?.total?.grid?.[side] || 0);
-    }
 
     /**
      * Deduct from chainFree (accountTotals) for an order type.
@@ -259,7 +237,7 @@ class OrderManager {
     applyBotFundsAllocation() {
         if (!this.config.botFunds || !this.accountTotals) return;
 
-        const { chainTotalBuy, chainTotalSell } = this._computeChainFundTotals();
+        const { chainTotalBuy, chainTotalSell } = computeChainFundTotals(this.accountTotals, this.funds?.committed?.chain);
 
         const allocatedBuy = this._resolveConfigValue(this.config.botFunds.buy, chainTotalBuy);
         const allocatedSell = this._resolveConfigValue(this.config.botFunds.sell, chainTotalSell);
@@ -319,10 +297,6 @@ class OrderManager {
      *
      * NOTE: This is a PURE calculation function - it does NOT modify any state.
      */
-    calculateAvailableFunds(side) {
-        return calculateAvailableFundsValue(side, this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
-    }
-
     /**
      * Actually deduct BTS fees from cacheFunds (has side effects).
      * Called by processFilledOrders() after all proceeds have been added to cacheFunds.
@@ -516,8 +490,8 @@ class OrderManager {
 
         // Set available using centralized calculation function
         // Formula: available = max(0, chainFree - virtuel - cacheFunds - applicableBtsFeesOwed - btsFeesReservation)
-        this.funds.available.buy = this.calculateAvailableFunds('buy');
-        this.funds.available.sell = this.calculateAvailableFunds('sell');
+        this.funds.available.buy = calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
+        this.funds.available.sell = calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
     }
 
     _updateOrder(order) {
@@ -571,8 +545,8 @@ class OrderManager {
         // This prevents double-counting proceeds in cacheFunds when processFilledOrders adds both proceeds and available
         // Store the pre-update values so processFilledOrders can use them instead of recalculating
         const availBeforeUpdate = {
-            buy: this.calculateAvailableFunds('buy'),
-            sell: this.calculateAvailableFunds('sell')
+            buy: calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders),
+            sell: calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders)
         };
 
         const bumpTotal = (key, delta) => {
@@ -665,18 +639,14 @@ class OrderManager {
         this.recalculateFunds();
 
         // If someone is waiting for account totals, resolve the waiter once both values are available.
-        const haveBuy = this.accountTotals && this.accountTotals.buyFree !== null && this.accountTotals.buyFree !== undefined && Number.isFinite(Number(this.accountTotals.buyFree));
-        const haveSell = this.accountTotals && this.accountTotals.sellFree !== null && this.accountTotals.sellFree !== undefined && Number.isFinite(Number(this.accountTotals.sellFree));
-        if (haveBuy && haveSell && typeof this._accountTotalsResolve === 'function') {
+        if (hasValidAccountTotals(this.accountTotals, true) && typeof this._accountTotalsResolve === 'function') {
             try { this._accountTotalsResolve(); } catch (e) { /* ignore */ }
             this._accountTotalsPromise = null; this._accountTotalsResolve = null;
         }
     }
 
     async waitForAccountTotals(timeoutMs = TIMING.ACCOUNT_TOTALS_TIMEOUT_MS) {
-        const haveBuy = this.accountTotals && this.accountTotals.buy !== null && this.accountTotals.buy !== undefined && Number.isFinite(Number(this.accountTotals.buy));
-        const haveSell = this.accountTotals && this.accountTotals.sell !== null && this.accountTotals.sell !== undefined && Number.isFinite(Number(this.accountTotals.sell));
-        if (haveBuy && haveSell) return; // already satisfied
+        if (hasValidAccountTotals(this.accountTotals, false)) return; // already satisfied
 
         if (!this._accountTotalsPromise) {
             this._accountTotalsPromise = new Promise((resolve) => { this._accountTotalsResolve = resolve; });
@@ -931,7 +901,7 @@ class OrderManager {
                     const filledOrder = { ...gridOrder };
 
                     // Convert to SPREAD placeholder
-                    const updatedOrder = this._convertToSpreadPlaceholder(gridOrder);
+                    const updatedOrder = convertToSpreadPlaceholder(gridOrder);
 
                     this._updateOrder(updatedOrder);
                     filledOrders.push(filledOrder);
@@ -1120,17 +1090,17 @@ class OrderManager {
 
         if (newSizeInt <= 0) {
             // Fully filled
-            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED (filled ${this._fmt(filledAmount)}), cacheFunds: Buy ${this._fmt(this.funds.cacheFunds.buy || 0)} | Sell ${this._fmt(this.funds.cacheFunds.sell || 0)}`, 'info');
+            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) FULLY FILLED (filled ${formatOrderSize(filledAmount)}), cacheFunds: Buy ${formatOrderSize(this.funds.cacheFunds.buy || 0)} | Sell ${formatOrderSize(this.funds.cacheFunds.sell || 0)}`, 'info');
             const filledOrder = { ...matchedGridOrder };
 
             // Convert to SPREAD placeholder
-            const updatedOrder = this._convertToSpreadPlaceholder(matchedGridOrder);
+            const updatedOrder = convertToSpreadPlaceholder(matchedGridOrder);
 
             this._updateOrder(updatedOrder);
             filledOrders.push(filledOrder);
         } else {
             // Partially filled - transition to PARTIAL state
-            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED: ${this._fmt(filledAmount)} filled, remaining ${this._fmt(newSize)}, cacheFunds: Buy ${this._fmt(this.funds.cacheFunds.buy || 0)} | Sell ${this._fmt(this.funds.cacheFunds.sell || 0)}`, 'info');
+            this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED: ${formatOrderSize(filledAmount)} filled, remaining ${formatOrderSize(newSize)}, cacheFunds: Buy ${formatOrderSize(this.funds.cacheFunds.buy || 0)} | Sell ${formatOrderSize(this.funds.cacheFunds.sell || 0)}`, 'info');
 
             // Create a "virtual" filled order with just the filled amount for proceeds calculation
             // Mark as partial so processFilledOrders knows NOT to trigger rebalancing
@@ -1400,26 +1370,6 @@ class OrderManager {
         return this.getOrdersByTypeAndState(type, ORDER_STATES.PARTIAL);
     }
 
-    /**
-     * Format a number to 8 decimal places for logging.
-     * Handles null, undefined, and NaN values gracefully.
-     * @param {number} value - Value to format
-     * @returns {string} Formatted string with 8 decimals
-     */
-    _fmt(value) {
-        return (Number(value) || 0).toFixed(8);
-    }
-
-    /**
-     * Convert a filled order to a SPREAD placeholder.
-     * Sets type to SPREAD, state to VIRTUAL, size to 0, and clears orderId.
-     * @param {Object} order - Order object to convert
-     * @returns {Object} Updated order object
-     */
-    _convertToSpreadPlaceholder(order) {
-        return { ...order, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
-    }
-
     // Periodically poll for fills and recalculate orders on demand.
     async fetchOrderUpdates(options = { calculate: false }) {
         try { const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE); if (activeOrders.length === 0 || (options && options.calculate)) { const { remaining, filled } = await this.calculateOrderUpdates(); remaining.forEach(order => this.orders.set(order.id, order)); if (filled.length > 0) await this.processFilledOrders(filled); this.checkSpreadCondition(); return { remaining, filled }; } return { remaining: activeOrders, filled: [] }; } catch (error) { this.logger.log(`Error fetching order updates: ${error.message}`, 'error'); return { remaining: [], filled: [] }; }
@@ -1431,20 +1381,8 @@ class OrderManager {
     // Flag whether the spread has widened beyond configured limits so we can rebalance.
     // Flag whether the spread has widened beyond configured limits so we can rebalance.
     checkSpreadCondition() {
-        const currentSpread = this.calculateCurrentSpread();
-        const targetSpread = this.config.targetSpreadPercent + this.config.incrementPercent;
-
-        // Only trigger spread warning if we have at least one order (ACTIVE or PARTIAL) on BOTH sides.
-        const buyCount = countOrdersByType(ORDER_TYPES.BUY, this.orders);
-        const sellCount = countOrdersByType(ORDER_TYPES.SELL, this.orders);
-        const hasBothSides = buyCount > 0 && sellCount > 0;
-
-        if (hasBothSides && currentSpread > targetSpread) {
-            this.outOfSpread = true;
-            this.logger.log(`Spread too wide (${currentSpread.toFixed(2)}% > ${targetSpread}%), will add extra orders on next fill`, 'warn');
-        } else {
-            this.outOfSpread = false;
-        }
+        const Grid = require('./grid');
+        Grid.checkSpreadCondition(this);
     }
 
     /**
@@ -1571,7 +1509,7 @@ class OrderManager {
             // Only convert to SPREAD if this is a FULLY filled order, not a partial
             if (!isPartial) {
                 // Convert to SPREAD placeholder (one step: ACTIVE -> VIRTUAL/SPREAD)
-                const updatedOrder = this._convertToSpreadPlaceholder(filledOrder);
+                const updatedOrder = convertToSpreadPlaceholder(filledOrder);
                 this._updateOrder(updatedOrder);
 
                 this.currentSpreadCount++;
@@ -1579,7 +1517,7 @@ class OrderManager {
             } else {
                 // Partial fill: order already updated to PARTIAL state by syncFromFillHistory
                 // Just log for clarity
-                this.logger.log(`Partial fill processed: order ${filledOrder.id} remains PARTIAL with ${this._fmt(filledOrder.size)} filled`, 'debug');
+                this.logger.log(`Partial fill processed: order ${filledOrder.id} remains PARTIAL with ${formatOrderSize(filledOrder.size)} filled`, 'debug');
             }
         }
 
@@ -1618,8 +1556,8 @@ class OrderManager {
         // SYNC FUND CYCLING: Use available calculated BEFORE chainFree was updated
         // _adjustFunds() stores the pre-update available in this._preFillAvailable
         // This prevents double-counting proceeds that are included in the available calculation
-        let currentAvailBuy = this._preFillAvailable?.buy || this.calculateAvailableFunds('buy');
-        let currentAvailSell = this._preFillAvailable?.sell || this.calculateAvailableFunds('sell');
+        let currentAvailBuy = this._preFillAvailable?.buy || calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
+        let currentAvailSell = this._preFillAvailable?.sell || calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
 
         // Clear the stored values after use (in case this is called multiple times)
         this._preFillAvailable = null;
@@ -1863,7 +1801,7 @@ class OrderManager {
                 if (!gridOrder) continue;
 
                 // Size using cacheFunds
-                const cache = this._getCacheFunds(side);
+                const cache = getCacheFundsValue(this.funds, side);
                 const remainingOrders = ordersToCreate - ordersCreated;
                 const sizePerOrder = cache / remainingOrders;
                 if (sizePerOrder <= 0) {
@@ -2154,7 +2092,7 @@ class OrderManager {
 
             // Calculate total funds for rotation sizing
             // Total = total.grid (committed + virtuel) + cacheFunds
-            const totalFunds = this._getGridTotal(side) + this._getCacheFunds(side);
+            const totalFunds = getGridTotalValue(this.funds, side) + getCacheFundsValue(this.funds, side);
 
             // Create dummy orders matching the actual grid structure (all active + virtual)
             const dummyOrders = Array(totalSlots).fill(null).map((_, i) => ({
@@ -2532,7 +2470,7 @@ class OrderManager {
             // - For SELL activation: choose the SPREAD entries with the highest prices first (furthest from market above price)
             // This ensures newly created buy orders use the lowest available spread price and sells use the highest.
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
-        const availableFunds = this.calculateAvailableFunds(targetType === ORDER_TYPES.BUY ? 'buy' : 'sell');
+        const availableFunds = calculateAvailableFundsValue(targetType === ORDER_TYPES.BUY ? 'buy' : 'sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
         if (availableFunds <= 0) { this.logger.log(`No available funds to create ${targetType} orders`, 'warn'); return []; }
         let desiredCount = Math.min(count, spreadOrders.length);
         if (desiredCount <= 0) {
@@ -2564,18 +2502,8 @@ class OrderManager {
      * @returns {number} Spread percentage (e.g., 5.0 for 5%)
      */
     calculateCurrentSpread() {
-        const activeBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.ACTIVE);
-        const activeSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.ACTIVE);
-        const partialBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.PARTIAL);
-        const partialSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.PARTIAL);
-
-        // Combine ACTIVE + PARTIAL (both are on-chain and affect the actual spread)
-        const onChainBuys = [...activeBuys, ...partialBuys];
-        const onChainSells = [...activeSells, ...partialSells];
-
-        const virtualBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL);
-        const virtualSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL);
-        return calculateSpreadFromOrders(onChainBuys, onChainSells, virtualBuys, virtualSells);
+        const Grid = require('./grid');
+        return Grid.calculateCurrentSpread(this);
     }
 
     /**

@@ -23,7 +23,7 @@
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS } = require('../constants');
 const { GRID_COMPARISON } = GRID_LIMITS;
-const { floatToBlockchainInt, blockchainToFloat, resolveRelativePrice, filterOrdersByType, filterOrdersByTypeAndState, sumOrderSizes, mapOrderSizes, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, checkSizesBeforeMinimum, checkSizesNearMinimum, calculateOrderCreationFees, deductOrderFeesFromFunds, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, derivePoolPrice, deriveMarketPrice, derivePrice, getMinOrderSize } = require('./utils');
+const { floatToBlockchainInt, blockchainToFloat, resolveRelativePrice, filterOrdersByType, filterOrdersByTypeAndState, sumOrderSizes, mapOrderSizes, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, checkSizesBeforeMinimum, checkSizesNearMinimum, calculateOrderCreationFees, deductOrderFeesFromFunds, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, derivePoolPrice, deriveMarketPrice, derivePrice, getMinOrderSize, calculateAvailableFundsValue, calculateSpreadFromOrders, countOrdersByType, shouldFlagOutOfSpread } = require('./utils');
 
 // Grid sizing limits are centralized in modules/constants.js -> GRID_LIMITS
 
@@ -307,7 +307,7 @@ class Grid {
             manager.applyBotFundsAllocation();
         }
 
-        const diagMsg = `Allocating sizes: sellFunds=${String(manager.calculateAvailableFunds('sell'))}, buyFunds=${String(manager.calculateAvailableFunds('buy'))}, ` +
+        const diagMsg = `Allocating sizes: sellFunds=${String(calculateAvailableFundsValue('sell', manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders))}, buyFunds=${String(calculateAvailableFundsValue('buy', manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders))}, ` +
             `minSellSize=${String(minSellSize)}, minBuySize=${String(minBuySize)}`;
         manager.logger?.log?.(diagMsg, 'debug');
 
@@ -1212,6 +1212,49 @@ class Grid {
             `sellFunds=${Number(snap.allocatedSell).toFixed(8)} (allocated=${Number(snap.allocatedSell).toFixed(8)}, total=${Number(snap.chainTotalSell).toFixed(8)}, free=${Number(snap.chainFreeSell).toFixed(8)})`,
             'info'
         );
+    }
+
+    /**
+     * Calculate the current spread percentage based on grid order prices.
+     * Combines on-chain ACTIVE + PARTIAL orders (which affect real spread).
+     * Falls back to VIRTUAL orders if no on-chain orders exist.
+     *
+     * @param {Object} manager - OrderManager instance with grid orders
+     * @returns {number} Current spread as percentage (e.g., 5.0 for 5%)
+     */
+    static calculateCurrentSpread(manager) {
+        const activeBuys = manager.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.ACTIVE);
+        const activeSells = manager.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.ACTIVE);
+        const partialBuys = manager.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.PARTIAL);
+        const partialSells = manager.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.PARTIAL);
+
+        // Combine ACTIVE + PARTIAL (both are on-chain and affect the actual spread)
+        const onChainBuys = [...activeBuys, ...partialBuys];
+        const onChainSells = [...activeSells, ...partialSells];
+
+        const virtualBuys = manager.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL);
+        const virtualSells = manager.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL);
+        return calculateSpreadFromOrders(onChainBuys, onChainSells, virtualBuys, virtualSells);
+    }
+
+    /**
+     * Check if the spread condition is met (spread too wide) and update manager.outOfSpread flag.
+     * Only flags as out-of-spread if both BUY and SELL sides have orders.
+     *
+     * @param {Object} manager - OrderManager instance with config, orders, and logger
+     */
+    static checkSpreadCondition(manager) {
+        const currentSpread = Grid.calculateCurrentSpread(manager);
+        const targetSpread = manager.config.targetSpreadPercent + manager.config.incrementPercent;
+
+        // Only trigger spread warning if we have at least one order on BOTH sides
+        const buyCount = countOrdersByType(ORDER_TYPES.BUY, manager.orders);
+        const sellCount = countOrdersByType(ORDER_TYPES.SELL, manager.orders);
+
+        manager.outOfSpread = shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount);
+        if (manager.outOfSpread) {
+            manager.logger.log(`Spread too wide (${currentSpread.toFixed(2)}% > ${targetSpread}%), will add extra orders on next fill`, 'warn');
+        }
     }
 
 }

@@ -2008,6 +2008,96 @@ function resolveConfiguredPriceBound(value, fallback, marketPrice, mode) {
     return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+/**
+ * Format a numeric value to 8 decimal places (standard BTS precision).
+ * Used for logging and display purposes.
+ *
+ * @param {number} value - Value to format
+ * @returns {string} Value formatted to 8 decimals
+ */
+function formatOrderSize(value) {
+    return (Number(value) || 0).toFixed(8);
+}
+
+/**
+ * Convert a filled order to a SPREAD placeholder.
+ * Sets type to SPREAD, state to VIRTUAL, size to 0, and clears orderId.
+ *
+ * @param {Object} order - Order object to convert
+ * @returns {Object} Updated order object with SPREAD placeholder values
+ */
+function convertToSpreadPlaceholder(order) {
+    return { ...order, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0, orderId: null };
+}
+
+/**
+ * Safely get cacheFunds value for a side with fallback to 0.
+ * @param {Object} funds - Funds object
+ * @param {string} side - 'buy' or 'sell'
+ * @returns {number} Cache funds amount or 0 if undefined
+ */
+function getCacheFundsValue(funds, side) {
+    return Number(funds?.cacheFunds?.[side] || 0);
+}
+
+/**
+ * Safely get grid total value for a side with fallback to 0.
+ * @param {Object} funds - Funds object
+ * @param {string} side - 'buy' or 'sell'
+ * @returns {number} Grid total or 0 if undefined
+ */
+function getGridTotalValue(funds, side) {
+    return Number(funds?.total?.grid?.[side] || 0);
+}
+
+/**
+ * Check if account totals have valid buy and sell free amounts.
+ * Used for validation before using accountTotals in calculations.
+ *
+ * @param {Object} accountTotals - Account totals object with buyFree/sellFree
+ * @param {boolean} checkFree - If true, check buyFree/sellFree; if false, check buy/sell
+ * @returns {boolean} True if both values are valid numbers, false otherwise
+ */
+function hasValidAccountTotals(accountTotals, checkFree = true) {
+    if (!accountTotals) return false;
+
+    const buyKey = checkFree ? 'buyFree' : 'buy';
+    const sellKey = checkFree ? 'sellFree' : 'sell';
+
+    return (accountTotals[buyKey] !== null &&
+            accountTotals[buyKey] !== undefined &&
+            Number.isFinite(Number(accountTotals[buyKey]))) &&
+           (accountTotals[sellKey] !== null &&
+            accountTotals[sellKey] !== undefined &&
+            Number.isFinite(Number(accountTotals[sellKey])));
+}
+
+/**
+ * Get the chainFree key name for a given order type.
+ * Maps BUY orders to 'buyFree' and SELL orders to 'sellFree'.
+ *
+ * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
+ * @returns {string} 'buyFree' or 'sellFree'
+ */
+function getChainFreeKey(orderType) {
+    return orderType === ORDER_TYPES.BUY ? 'buyFree' : 'sellFree';
+}
+
+/**
+ * Determine if the spread is too wide and should be flagged for rebalancing.
+ * Pure calculation: checks if spread exceeds threshold AND both sides have orders.
+ *
+ * @param {number} currentSpread - Current spread percentage
+ * @param {number} targetSpread - Target spread threshold
+ * @param {number} buyCount - Number of BUY orders
+ * @param {number} sellCount - Number of SELL orders
+ * @returns {boolean} True if spread is too wide and should be flagged
+ */
+function shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount) {
+    const hasBothSides = buyCount > 0 && sellCount > 0;
+    return hasBothSides && currentSpread > targetSpread;
+}
+
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
@@ -2104,5 +2194,18 @@ module.exports = {
     calculateRotationOrderSizes,
     calculateGridSideDivergenceMetric,
     getOrderTypeFromUpdatedFlags,
-    resolveConfiguredPriceBound
+    resolveConfiguredPriceBound,
+
+    // Formatting
+    formatOrderSize,
+    convertToSpreadPlaceholder,
+
+    // Safe getters
+    getCacheFundsValue,
+    getGridTotalValue,
+
+    // Validation helpers
+    hasValidAccountTotals,
+    getChainFreeKey,
+    shouldFlagOutOfSpread
 };
