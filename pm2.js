@@ -50,8 +50,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
 const { parseJsonWithComments } = require('./modules/account_bots');
+
+const execAsync = promisify(exec);
 
 const ROOT = __dirname;
 const PROFILES_DIR = path.join(ROOT, 'profiles');
@@ -217,6 +220,88 @@ async function installPM2() {
     });
 }
 
+// Execute PM2 command via shell
+async function execPM2Command(action, target) {
+    const command = `pm2 ${action} ${target}`;
+    console.log(`Executing: ${command}`);
+
+    try {
+        const { stdout, stderr } = await execAsync(command);
+        if (stdout) console.log(stdout);
+        if (stderr) console.error(stderr);
+        return { success: true, stdout, stderr };
+    } catch (error) {
+        console.error(`PM2 command failed: ${error.message}`);
+        return { success: false, error };
+    }
+}
+
+// Stop PM2 processes (only dexbot ones)
+async function stopPM2Processes(target) {
+    console.log(`Stopping PM2 processes: ${target}`);
+
+    if (target === 'all') {
+        // Stop all dexbot processes via ecosystem config
+        const result = await execPM2Command('stop', ECOSYSTEM_FILE);
+        if (result.success) {
+            console.log('All dexbot PM2 processes stopped.');
+        }
+    } else {
+        // Stop specific bot by name
+        const result = await execPM2Command('stop', target);
+        if (result.success) {
+            console.log(`PM2 process '${target}' stopped.`);
+        } else if (result.error && result.error.message && result.error.message.includes('not found')) {
+            console.log(`Bot '${target}' not found in PM2.`);
+        }
+    }
+}
+
+// Delete PM2 processes (only dexbot ones)
+async function deletePM2Processes(target) {
+    console.log(`Deleting PM2 processes: ${target}`);
+
+    if (target === 'all') {
+        // Delete all dexbot processes via ecosystem config
+        const result = await execPM2Command('delete', ECOSYSTEM_FILE);
+        if (result.success) {
+            console.log('All dexbot PM2 processes deleted.');
+        }
+    } else {
+        // Delete specific bot by name
+        const result = await execPM2Command('delete', target);
+        if (result.success) {
+            console.log(`PM2 process '${target}' deleted.`);
+        } else if (result.error && result.error.message && result.error.message.includes('not found')) {
+            console.log(`Bot '${target}' not found in PM2.`);
+        }
+    }
+
+    console.log('Bot configs remain in profiles/bots.json.');
+    console.log('Run "node dexbot.js bots" to manage bot configurations.');
+}
+
+// Show help text
+function showPM2Help() {
+    console.log(`
+Usage: node pm2.js <command> [target]
+
+Commands:
+  unlock-start              Unlock keystore and start all bots with PM2 (default)
+  stop <bot-name|all>       Stop PM2 process(es) - only dexbot processes
+  delete <bot-name|all>     Delete PM2 process(es) - only dexbot processes
+  help                      Show this help message
+
+Examples:
+  node pm2.js                    # Start all bots (unlock + start)
+  node pm2.js stop all           # Stop all dexbot processes
+  node pm2.js stop XRP-BTS       # Stop specific bot
+  node pm2.js delete all         # Delete all dexbot processes from PM2
+  node pm2.js delete XRP-BTS     # Delete specific bot from PM2
+  node pm2.js help               # Show help
+    `);
+}
+
 // Main
 async function main(botNameFilter = null) {
     console.log('='.repeat(50));
@@ -278,18 +363,49 @@ async function main(botNameFilter = null) {
 
 // Run if called directly
 if (require.main === module) {
-    // Extract optional bot-name parameter from command line
-    const botNameFilter = process.argv[2] || null;
+    // Parse command line arguments
+    const args = process.argv.slice(2);
+    const command = args[0] || 'unlock-start';
+    const target = args[1];
 
-    main(botNameFilter).then(() => {
-        // Close stdin to prevent hanging
-        if (process.stdin) process.stdin.destroy();
-        // Exit immediately
-        process.exit(0);
-    }).catch(err => {
-        console.error('Error:', err.message);
-        process.exit(1);
-    });
+    (async () => {
+        try {
+            if (command === 'unlock-start') {
+                // Full setup: unlock, generate config, authenticate, start PM2
+                // Optional: filter to specific bot if provided
+                await main(target || null);
+                // Close stdin to prevent hanging
+                if (process.stdin) process.stdin.destroy();
+                process.exit(0);
+            } else if (command === 'stop') {
+                if (!target) {
+                    console.error('Error: Target required. Specify bot name or "all".');
+                    showPM2Help();
+                    process.exit(1);
+                }
+                await stopPM2Processes(target);
+                process.exit(0);
+            } else if (command === 'delete') {
+                if (!target) {
+                    console.error('Error: Target required. Specify bot name or "all".');
+                    showPM2Help();
+                    process.exit(1);
+                }
+                await deletePM2Processes(target);
+                process.exit(0);
+            } else if (command === 'help') {
+                showPM2Help();
+                process.exit(0);
+            } else {
+                console.error(`Unknown command: ${command}`);
+                showPM2Help();
+                process.exit(1);
+            }
+        } catch (err) {
+            console.error('Error:', err.message);
+            process.exit(1);
+        }
+    })();
 }
 
 module.exports = { main, generateEcosystemConfig, authenticateWithoutWait };
