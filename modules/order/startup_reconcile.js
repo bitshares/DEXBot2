@@ -88,6 +88,12 @@ async function _updateChainOrderToGrid({ chainOrders, account, privateKey, manag
         orderType: gridOrder.type,
     });
 
+    // CRITICAL: Deduct from chainFree when VIRTUAL grid slot becomes ACTIVE on-chain
+    // This keeps accountTotals.buyFree/sellFree accurate without re-fetching
+    if (gridOrder.state === ORDER_STATES.VIRTUAL && gridOrder.size > 0) {
+        manager._deductFromChainFree(gridOrder.type, Number(gridOrder.size) || 0, 'VIRTUAL->ACTIVE (update)');
+    }
+
     const updatedGrid = { ...gridOrder, orderId: chainOrderId, state: ORDER_STATES.ACTIVE };
     manager._updateOrder(updatedGrid);
 }
@@ -195,6 +201,13 @@ async function _createOrderFromGrid({ chainOrders, account, privateKey, manager,
         result[0].trx.operation_results[0][1];
 
     if (chainOrderId) {
+        // CRITICAL: Deduct from chainFree when VIRTUAL order becomes ACTIVE on-chain
+        // This keeps accountTotals.buyFree/sellFree accurate without re-fetching
+        // Same logic as in manager.synchronizeWithChain for 'createOrder' case
+        if (gridOrder.state === ORDER_STATES.VIRTUAL && gridOrder.size > 0) {
+            manager._deductFromChainFree(gridOrder.type, Number(gridOrder.size) || 0, 'VIRTUAL->ACTIVE (startup)');
+        }
+
         const updatedGrid = { ...gridOrder, orderId: chainOrderId, state: ORDER_STATES.ACTIVE };
         manager._updateOrder(updatedGrid);
     }

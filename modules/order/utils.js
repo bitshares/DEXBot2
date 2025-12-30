@@ -198,20 +198,14 @@ function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB
  * @returns {number} Spread percentage (e.g., 2.5 for 2.5%), or 0 if no valid spread
  */
 function calculateSpreadFromOrders(activeBuys, activeSells, virtualBuys, virtualSells) {
-    const pickBestBuy = () => {
-        if (activeBuys.length) return Math.max(...activeBuys.map(o => o.price));
-        if (virtualBuys.length) return Math.max(...virtualBuys.map(o => o.price));
-        return null;
-    };
-    const pickBestSell = () => {
-        if (activeSells.length) return Math.min(...activeSells.map(o => o.price));
-        if (virtualSells.length) return Math.min(...virtualSells.map(o => o.price));
-        return null;
-    };
+    // Only calculate spread from on-chain orders (ACTIVE + PARTIAL)
+    // Virtual orders haven't been placed yet and don't affect the actual market spread
+    const bestBuy = activeBuys.length > 0 ? Math.max(...activeBuys.map(o => o.price)) : null;
+    const bestSell = activeSells.length > 0 ? Math.min(...activeSells.map(o => o.price)) : null;
 
-    const bestBuy = pickBestBuy();
-    const bestSell = pickBestSell();
+    // If no on-chain orders on either side, spread is undefined (return 0)
     if (bestBuy === null || bestSell === null || bestBuy === 0) return 0;
+
     return ((bestSell / bestBuy) - 1) * 100;
 }
 
@@ -2051,6 +2045,52 @@ function getGridTotalValue(funds, side) {
 }
 
 /**
+ * Get total funds available to the grid for rebalancing/rotation operations.
+ *
+ * Formula: available (unallocated) + committed.grid (on-chain) + virtuel (reserved) + cacheFunds (proceeds)
+ *
+ * This represents ALL funds the bot has in the grid:
+ * - available: Unallocated blockchain free balance (after accounting for reserved/cache/fees)
+ * - committed.grid: Funds currently locked in ACTIVE and PARTIAL orders on-chain
+ * - virtuel: Funds reserved for VIRTUAL orders not yet placed on-chain
+ * - cacheFunds: Proceeds from filled orders waiting for next rotation
+ *
+ * Used for geometric sizing during rotations and spread corrections to ensure
+ * all grid orders are sized proportionally to the actual total grid funds.
+ *
+ * @param {Object} funds - Funds object with available, committed.grid, virtuel, cacheFunds
+ * @param {string} side - 'buy' or 'sell'
+ * @returns {number} Total grid funds for sizing calculations
+ */
+function getTotalGridFundsAvailable(funds, side) {
+    return (funds?.available?.[side] || 0) +
+           (funds?.committed?.grid?.[side] || 0) +
+           (funds?.virtuel?.[side] || 0) +
+           (funds?.cacheFunds?.[side] || 0);
+}
+
+/**
+ * Get funds available for immediate order placement.
+ *
+ * Formula: available (unallocated) + cacheFunds (proceeds)
+ *
+ * This represents funds truly available for placing new orders NOW:
+ * - available: Unallocated blockchain free balance
+ * - cacheFunds: Proceeds from filled orders (can be used immediately)
+ *
+ * Does NOT include virtuel because those funds are already reserved for VIRTUAL orders.
+ * Used for comparing against required sizes and deciding which side can support a new order.
+ *
+ * @param {Object} funds - Funds object with available, cacheFunds
+ * @param {string} side - 'buy' or 'sell'
+ * @returns {number} Available funds for immediate placement
+ */
+function getAvailableFundsForPlacement(funds, side) {
+    return (funds?.available?.[side] || 0) +
+           (funds?.cacheFunds?.[side] || 0);
+}
+
+/**
  * Check if account totals have valid buy and sell free amounts.
  * Used for validation before using accountTotals in calculations.
  *
@@ -2203,6 +2243,8 @@ module.exports = {
     // Safe getters
     getCacheFundsValue,
     getGridTotalValue,
+    getTotalGridFundsAvailable,
+    getAvailableFundsForPlacement,
 
     // Validation helpers
     hasValidAccountTotals,

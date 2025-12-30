@@ -185,6 +185,23 @@ class DEXBot {
                             // Always persist snapshot after placing orders on-chain
                             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
 
+                            // Check spread condition after rotations (rotation changes order positions)
+                            // PROACTIVE: immediately corrects spread if rotation widened it
+                            if (batchResult.hadRotation) {
+                                // CRITICAL: Recalculate funds after rotation to ensure consistent state
+                                this.manager.recalculateFunds();
+
+                                const spreadResult = await this.manager.checkSpreadCondition(
+                                    this.BitShares,
+                                    this.updateOrdersOnChainBatch.bind(this)
+                                );
+                                if (spreadResult.ordersPlaced > 0) {
+                                    this._log(`✓ Spread correction after rotation: ${spreadResult.ordersPlaced} order(s) placed, ` +
+                                        `${spreadResult.partialsMoved} partial(s) moved`);
+                                    persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+                                }
+                            }
+
                             // Only run divergence checks if rotation was completed
                             if (batchResult.hadRotation) {
                                 // Use AsyncLock for divergence corrections to prevent concurrent grid updates
@@ -882,6 +899,29 @@ class DEXBot {
             this._warn(`Error checking grid at startup: ${err.message}`);
         }
 
+        // Check spread condition at startup (after grid operations complete)
+        // Protected by _fillProcessingLock to respect AsyncLock pattern and prevent races with early fills
+        // PROACTIVE: immediately corrects spread if needed, no waiting for next fill
+        try {
+            await this._fillProcessingLock.acquire(async () => {
+                // CRITICAL: Recalculate funds before spread correction to ensure accurate available values
+                // During startup, funds may be in inconsistent state until recalculated
+                this.manager.recalculateFunds();
+
+                const spreadResult = await this.manager.checkSpreadCondition(
+                    this.BitShares,
+                    this.updateOrdersOnChainBatch.bind(this)
+                );
+                if (spreadResult.ordersPlaced > 0) {
+                    this._log(`✓ Spread correction at startup: ${spreadResult.ordersPlaced} order(s) placed, ` +
+                        `${spreadResult.partialsMoved} partial(s) moved`);
+                    persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+                }
+            });
+        } catch (err) {
+            this._warn(`Error checking spread condition at startup: ${err.message}`);
+        }
+
         /**
          * Perform a full grid resync: cancel orphan orders and regenerate grid.
          * Triggered by the presence of a `recalculate.<botKey>.trigger` file.
@@ -1030,6 +1070,22 @@ class DEXBot {
                                 );
                                 this._log(`Grid corrections applied on-chain from periodic blockchain fetch`);
                             });
+                        }
+
+                        // Check spread condition after periodic blockchain fetch
+                        // Protected by outer _fillProcessingLock - respects AsyncLock pattern
+                        // PROACTIVE: immediately corrects spread if needed, no waiting for fills
+                        // CRITICAL: Recalculate funds before spread correction to ensure accurate state
+                        this.manager.recalculateFunds();
+
+                        const spreadResult = await this.manager.checkSpreadCondition(
+                            this.BitShares,
+                            this.updateOrdersOnChainBatch.bind(this)
+                        );
+                        if (spreadResult.ordersPlaced > 0) {
+                            this._log(`✓ Spread correction at 4h fetch: ${spreadResult.ordersPlaced} order(s) placed, ` +
+                                `${spreadResult.partialsMoved} partial(s) moved`);
+                            persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
                         }
                     }
                 });

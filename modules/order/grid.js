@@ -541,7 +541,7 @@ class Grid {
 
             // Include available funds in the regeneration check so newly added funds
             // trigger a grid resize during the next fill/comparison cycle.
-            const avail = manager.calculateAvailableFunds(s.name);
+            const avail = calculateAvailableFundsValue(s.name, manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders);
             const totalPending = s.cache + avail;
             const ratio = (totalPending / s.grid) * 100;
 
@@ -1241,20 +1241,543 @@ class Grid {
      * Check if the spread condition is met (spread too wide) and update manager.outOfSpread flag.
      * Only flags as out-of-spread if both BUY and SELL sides have orders.
      *
+     * When spread is too wide, fetches current market price to make fund comparison fair.
+     *
      * @param {Object} manager - OrderManager instance with config, orders, and logger
+     * @param {Object} BitShares - BitShares API instance (optional, for fetching current price)
      */
-    static checkSpreadCondition(manager) {
+    static async checkSpreadCondition(manager, BitShares, updateOrdersOnChainBatch = null) {
         const currentSpread = Grid.calculateCurrentSpread(manager);
-        const targetSpread = manager.config.targetSpreadPercent + manager.config.incrementPercent;
+        // Threshold accounts for grid geometry: with N SPREAD orders, ACTIVE orders are N+1 steps apart
+        // Using 1.5x multiplier provides buffer for natural grid spacing while catching true widening
+        const targetSpread = manager.config.targetSpreadPercent + (manager.config.incrementPercent * 1.5);
 
         // Only trigger spread warning if we have at least one order on BOTH sides
         const buyCount = countOrdersByType(ORDER_TYPES.BUY, manager.orders);
         const sellCount = countOrdersByType(ORDER_TYPES.SELL, manager.orders);
 
-        manager.outOfSpread = shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount);
-        if (manager.outOfSpread) {
-            manager.logger.log(`Spread too wide (${currentSpread.toFixed(2)}% > ${targetSpread}%), will add extra orders on next fill`, 'warn');
+        const isOutOfSpread = shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount);
+
+        if (!isOutOfSpread) {
+            // Spread is good - nothing to do
+            return { ordersPlaced: 0, partialsMoved: 0 };
         }
+
+        // Spread is too wide - IMMEDIATELY correct it (proactive approach)
+        manager.logger.log(
+            `Spread too wide (${currentSpread.toFixed(2)}% > ${targetSpread}%), correcting immediately...`,
+            'warn'
+        );
+
+        // Fetch current market price for fair fund comparison (market may have moved since startup)
+        let currentMarketPrice = manager.config.marketPrice;  // Fallback to startup price
+        if (BitShares) {
+            try {
+                const { derivePrice } = require('./utils');
+                // Try pool price first (most real-time), fallback to market (order book) price
+                let derivedPrice = await derivePrice(
+                    BitShares,
+                    manager.assets.assetA.symbol,
+                    manager.assets.assetB.symbol,
+                    'pool'  // Prefer pool price for real-time accuracy
+                );
+
+                // If pool price not available, try market (order book) price
+                if (!derivedPrice || derivedPrice <= 0) {
+                    derivedPrice = await derivePrice(
+                        BitShares,
+                        manager.assets.assetA.symbol,
+                        manager.assets.assetB.symbol,
+                        'market'  // Fallback to order book price
+                    );
+                }
+
+                if (derivedPrice && derivedPrice > 0) {
+                    currentMarketPrice = derivedPrice;
+                    manager.logger.log(
+                        `Fetched current market price: ${currentMarketPrice.toFixed(8)} (was ${manager.config.marketPrice.toFixed(8)} at startup)`,
+                        'debug'
+                    );
+                }
+            } catch (err) {
+                manager.logger.log(
+                    `Could not fetch current market price for spread analysis, using startup price: ${err.message}`,
+                    'warn'
+                );
+            }
+        }
+
+        // Determine which side should get the extra order based on funds
+        const fundDecision = Grid.determineOrderSideByFunds(manager, currentMarketPrice);
+        manager.logger.log(
+            `Fund analysis: ${fundDecision.reason}`,
+            'info'
+        );
+
+        // Prepare spread correction orders and partial moves
+        const spreadCorrectionOrders = await Grid.prepareSpreadCorrectionOrders(manager, fundDecision.side);
+
+        // If no orders could be prepared, return without broadcasting
+        if (!spreadCorrectionOrders.ordersToPlace || spreadCorrectionOrders.ordersToPlace.length === 0) {
+            manager.logger.log(
+                `Spread correction skipped: no orders to place`,
+                'debug'
+            );
+            return { ordersPlaced: 0, partialsMoved: 0 };
+        }
+
+        // IMMEDIATELY broadcast orders on-chain if callback provided
+        if (updateOrdersOnChainBatch) {
+            try {
+                manager.logger.log(
+                    `Broadcasting spread correction: ${spreadCorrectionOrders.ordersToPlace.length} order(s), ` +
+                    `${spreadCorrectionOrders.partialMoves.length} partial move(s)`,
+                    'info'
+                );
+
+                const result = await updateOrdersOnChainBatch(spreadCorrectionOrders);
+
+                // Recalculate funds to update grid accounting after orders are placed on-chain
+                manager.recalculateFunds();
+
+                manager.logger.log(
+                    `✓ Spread correction complete: ${spreadCorrectionOrders.ordersToPlace.length} order(s) placed, ` +
+                    `${spreadCorrectionOrders.partialMoves.length} partial(s) moved`,
+                    'info'
+                );
+
+                return {
+                    ordersPlaced: spreadCorrectionOrders.ordersToPlace.length,
+                    partialsMoved: spreadCorrectionOrders.partialMoves.length
+                };
+            } catch (err) {
+                manager.logger.log(
+                    `✗ Error broadcasting spread correction orders: ${err.message}`,
+                    'error'
+                );
+                return { ordersPlaced: 0, partialsMoved: 0 };
+            }
+        } else {
+            // No callback provided - just prepare orders (don't broadcast)
+            manager.logger.log(
+                `Spread correction prepared but not broadcast (no updateOrdersOnChainBatch callback)`,
+                'debug'
+            );
+            return {
+                ordersPlaced: spreadCorrectionOrders.ordersToPlace.length,
+                partialsMoved: spreadCorrectionOrders.partialMoves.length
+            };
+        }
+    }
+
+    /**
+     * Compare available funds between BUY and SELL sides to determine which can support a new full order.
+     * Uses market price and geometric sizing to calculate required funds.
+     *
+     * @param {Object} manager - OrderManager instance
+     * @param {Number} currentMarketPrice - Current market price (optional, defaults to config price)
+     * @returns {Object} { side: 'buy'|'sell'|null, buyFunds, sellFunds, requiredBuy, requiredSell, buyRatio, sellRatio, reason }
+     */
+    static determineOrderSideByFunds(manager, currentMarketPrice) {
+        const { getAvailableFundsForPlacement } = require('./utils');
+
+        // Use available + cacheFunds (same as what's truly available for new order placement)
+        // cacheFunds are proceeds waiting for rotation and can be used immediately
+        const totalBuyAvailable = getAvailableFundsForPlacement(manager.funds, 'buy');
+        const totalSellAvailable = getAvailableFundsForPlacement(manager.funds, 'sell');
+
+        // DEBUG: Log the fund values being used
+        manager.logger.log(
+            `DEBUG Fund Analysis - BUY: available=${(manager.funds.available?.buy || 0).toFixed(8)} + cache=${(manager.funds.cacheFunds?.buy || 0).toFixed(8)} = ${totalBuyAvailable.toFixed(8)}, ` +
+            `SELL: available=${(manager.funds.available?.sell || 0).toFixed(8)} + cache=${(manager.funds.cacheFunds?.sell || 0).toFixed(8)} = ${totalSellAvailable.toFixed(8)}`,
+            'debug'
+        );
+
+        // DEBUG: Check if available is being confused with committed
+        if ((manager.funds.available?.sell || 0) === (manager.funds.committed?.chain?.sell || 0) &&
+            (manager.funds.available?.sell || 0) !== 0) {
+            manager.logger.log(
+                `WARNING: available.sell (${(manager.funds.available?.sell || 0).toFixed(8)}) matches committed.chain.sell! ` +
+                `This suggests available funds are being confused with committed on-chain funds. ` +
+                `Expected: chainFree (${(manager.funds.chainFree?.sell || 0).toFixed(8)}) - virtuel (${(manager.funds.virtuel?.sell || 0).toFixed(8)}) = something else`,
+                'warn'
+            );
+
+            // Log full fund structure for debugging
+            manager.logger.log(
+                `COMPLETE FUNDS STRUCTURE: ` +
+                `available.sell=${(manager.funds.available?.sell || 0).toFixed(8)}, ` +
+                `committed.grid.sell=${(manager.funds.committed?.grid?.sell || 0).toFixed(8)}, ` +
+                `committed.chain.sell=${(manager.funds.committed?.chain?.sell || 0).toFixed(8)}, ` +
+                `virtuel.sell=${(manager.funds.virtuel?.sell || 0).toFixed(8)}, ` +
+                `cacheFunds.sell=${(manager.funds.cacheFunds?.sell || 0).toFixed(8)}, ` +
+                `chainFree.sell=${(manager.funds.chainFree?.sell || 0).toFixed(8)}`,
+                'debug'
+            );
+        }
+
+        // Calculate the actual geometric sizes that would be needed
+        const requiredBuyFunds = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.BUY);
+        const requiredSellFunds = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.SELL);
+
+        // Both calculations require existing orders; if neither has orders, we can't determine a side
+        if (requiredBuyFunds === null && requiredSellFunds === null) {
+            return {
+                side: null,
+                reason: 'No ACTIVE orders exist to calculate geometric sizing',
+                buyFunds: totalBuyAvailable,
+                sellFunds: totalSellAvailable,
+                requiredBuy: 0,
+                requiredSell: 0,
+                buyRatio: 0,
+                sellRatio: 0
+            };
+        }
+
+        // Compare which side has sufficient funds relative to requirement
+        const buyRatio = (requiredBuyFunds && requiredBuyFunds > 0) ? totalBuyAvailable / requiredBuyFunds : 0;
+        const sellRatio = (requiredSellFunds && requiredSellFunds > 0) ? totalSellAvailable / requiredSellFunds : 0;
+
+        let side = null;
+        let reason = '';
+
+        if (buyRatio >= 1 && sellRatio >= 1) {
+            // Both sides have sufficient funds - choose the side with MORE relative capacity
+            side = buyRatio > sellRatio ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+            reason = `Both sides funded. BUY ratio: ${buyRatio.toFixed(2)}, SELL ratio: ${sellRatio.toFixed(2)}. Choosing ${side.toUpperCase()}.`;
+        } else if (buyRatio >= 1) {
+            side = ORDER_TYPES.BUY;
+            reason = `Only BUY side has sufficient funds (${totalBuyAvailable.toFixed(8)} >= ${requiredBuyFunds.toFixed(8)})`;
+        } else if (sellRatio >= 1) {
+            side = ORDER_TYPES.SELL;
+            reason = `Only SELL side has sufficient funds (${totalSellAvailable.toFixed(8)} >= ${(requiredSellFunds || 0).toFixed(8)})`;
+        } else {
+            side = null;
+            reason = `Neither side has sufficient funds. BUY: ${totalBuyAvailable.toFixed(8)}/${(requiredBuyFunds || 0).toFixed(8)}, SELL: ${totalSellAvailable.toFixed(8)}/${(requiredSellFunds || 0).toFixed(8)}`;
+        }
+
+        return {
+            side,
+            buyFunds: totalBuyAvailable,
+            sellFunds: totalSellAvailable,
+            requiredBuy: requiredBuyFunds,
+            requiredSell: requiredSellFunds,
+            buyRatio,
+            sellRatio,
+            reason
+        };
+    }
+
+    /**
+     * Calculate geometric order size for spread correction by redistributing available funds.
+     * Simulates what size a new order would have if funds were redistributed across n+1 orders.
+     * (existing n orders + 1 new spread correction order)
+     *
+     * @param {Object} manager - OrderManager instance
+     * @param {string} targetType - ORDER_TYPES.BUY or SELL
+     * @returns {number|null} Calculated geometric size, or null if unable to calculate
+     */
+    static calculateGeometricSizeForSpreadCorrection(manager, targetType) {
+        const { getTotalGridFundsAvailable, getAvailableFundsForPlacement, getPrecisionForSide, calculateOrderSizes } = require('./utils');
+
+        // Use same logic as normal geometric sizing during rotations (manager.js line 2099)
+        const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+
+        // Get ALL grid orders (ACTIVE, PARTIAL, and VIRTUAL) on this side
+        // CRITICAL: Include PARTIAL orders as they occupy grid positions and lock up funds
+        const allOrdersOnSide = [
+            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.ACTIVE),
+            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.PARTIAL),
+            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.VIRTUAL)
+        ];
+
+        // Total slots = existing grid + 1 new spread correction order
+        const totalSlots = allOrdersOnSide.length + 1;
+
+        if (totalSlots <= 1) {
+            return null; // Can't calculate without grid reference
+        }
+
+        // Calculate total funds = available (unallocated) + virtuel (reserved) + cacheFunds (proceeds)
+        // This represents ALL funds available to the grid: unallocated blockchain balance + reserved + proceeds
+        const totalFunds = getTotalGridFundsAvailable(manager.funds, side);
+
+        if (totalFunds <= 0) {
+            return null;
+        }
+
+        // Create dummy orders matching the actual grid structure
+        const dummyOrders = Array(totalSlots).fill(null).map((_, i) => ({
+            id: `dummy-${i}`,
+            type: targetType,
+            price: 0
+        }));
+
+        // Calculate sizes using the same logic as grid.initializeGrid
+        const precision = getPrecisionForSide(manager.assets, targetType);
+        const sellFunds = side === 'sell' ? totalFunds : 0;
+        const buyFunds = side === 'buy' ? totalFunds : 0;
+
+        try {
+            const sizedOrders = calculateOrderSizes(
+                dummyOrders,
+                manager.config,
+                sellFunds,
+                buyFunds,
+                0,  // minSellSize
+                0,  // minBuySize
+                precision,
+                precision
+            );
+
+            // Extract size for the new order (closest to market position)
+            // For SELL: new order goes at HIGHEST position (take from END)
+            // For BUY: new order goes at LOWEST position (take from BEGINNING)
+            if (side === 'sell') {
+                // Take from end (largest sizes) - new SELL at highest price
+                return sizedOrders[sizedOrders.length - 1]?.size || null;
+            } else {
+                // Take from beginning (largest sizes) - new BUY at lowest price
+                return sizedOrders[0]?.size || null;
+            }
+        } catch (err) {
+            manager.logger.log(
+                `Error calculating geometric size for spread correction: ${err.message}`,
+                'warn'
+            );
+            return null;
+        }
+    }
+
+    /**
+     * Prepare immediate spread correction orders: one extra active order + necessary partial moves
+     * This is called PROACTIVELY when spread is detected as too wide, not reactively on next fill.
+     *
+     * @param {Object} manager - OrderManager instance
+     * @param {String} preferredSide - 'buy', 'sell', or null (from fund analysis)
+     * @returns {Object} { ordersToPlace: [], partialMoves: [] }
+     */
+    static async prepareSpreadCorrectionOrders(manager, preferredSide) {
+        const { getAvailableFundsForPlacement } = require('./utils');
+        const ordersToPlace = [];
+        const partialMoves = [];
+
+        if (!preferredSide) {
+            manager.logger.log(`No funds available to correct spread`, 'warn');
+            return { ordersToPlace, partialMoves };
+        }
+
+        const oppositeType = preferredSide;
+        const side = oppositeType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+
+        manager.logger.log(
+            `Preparing immediate spread correction: creating extra ${oppositeType} order`,
+            'info'
+        );
+
+        // Step 1: Move ALL partial orders of opposite type (not just first one)
+        const partialOrders = manager.getPartialOrdersOnSide(oppositeType);
+
+        if (partialOrders.length > 0) {
+            manager.logger.log(
+                `Found ${partialOrders.length} partial ${oppositeType} order(s) - moving to make space`,
+                'debug'
+            );
+
+            for (let i = 0; i < partialOrders.length; i++) {
+                const partial = partialOrders[i];
+                const moveInfo = manager.preparePartialOrderMove(partial, 1, new Set());
+
+                if (moveInfo) {
+                    partialMoves.push(moveInfo);
+                    manager.logger.log(
+                        `Prepared move for partial ${i + 1}/${partialOrders.length}: ${partial.id} -> ${moveInfo.newGridId}`,
+                        'debug'
+                    );
+                } else {
+                    manager.logger.log(
+                        `WARNING: Could not move partial ${partial.id} (stuck at grid boundary)`,
+                        'warn'
+                    );
+                }
+            }
+        }
+
+        // Step 2: Use vacated slots from partial moves for the new active order
+        const vacatedSlots = partialMoves
+            .filter(m => m.partialOrder.type === oppositeType)
+            .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }));
+
+        if (vacatedSlots.length > 0) {
+            // Use first vacated slot for the new extra order
+            const slot = vacatedSlots[0];
+            const gridOrder = manager.orders.get(slot.id);
+
+            if (gridOrder) {
+                // Calculate geometric size based on redistributing available funds across the grid
+                const geometricSize = Grid.calculateGeometricSizeForSpreadCorrection(manager, oppositeType);
+
+                if (!geometricSize || geometricSize <= 0) {
+                    manager.logger.log(
+                        `Cannot calculate geometric size for spread correction (no ACTIVE ${oppositeType} orders or insufficient funds)`,
+                        'warn'
+                    );
+                    return { ordersToPlace, partialMoves };
+                }
+
+                // Check if available funds can support the calculated geometric size
+                // Use available + cacheFunds (same as fund analysis comparison)
+                const availableFunds = getAvailableFundsForPlacement(manager.funds, side);
+                const baseAvailable = manager.funds.available?.[side] || 0;
+
+                if (geometricSize > availableFunds) {
+                    manager.logger.log(
+                        `Insufficient available funds for spread correction order: need ${geometricSize.toFixed(8)}, have ${availableFunds.toFixed(8)} (available: ${baseAvailable.toFixed(8)}, cache: ${(manager.funds.cacheFunds?.[side] || 0).toFixed(8)})`,
+                        'warn'
+                    );
+                    return { ordersToPlace, partialMoves };
+                }
+
+                // Create order at vacated slot with calculated geometric size
+                // Set state to ACTIVE as this order will be placed on-chain immediately
+                const newOrder = {
+                    ...gridOrder,
+                    type: oppositeType,
+                    size: geometricSize,
+                    price: slot.price,
+                    state: ORDER_STATES.ACTIVE  // Will be confirmed ACTIVE after broadcast
+                };
+                ordersToPlace.push(newOrder);
+
+                // Update fund variables immediately
+                const fundsBefore = availableFunds;
+                manager.funds.available[side] = Math.max(0, baseAvailable - geometricSize);
+                manager.funds.committed.grid[side] = (manager.funds.committed.grid[side] || 0) + geometricSize;
+
+                manager.logger.log(
+                    `Prepared spread correction order at vacated slot ${slot.id}: ` +
+                    `${oppositeType} at ${slot.price.toFixed(4)}, geometric size ${geometricSize.toFixed(8)} ` +
+                    `(available: ${fundsBefore.toFixed(8)} -> ${(baseAvailable - geometricSize).toFixed(8)}, committed: +${geometricSize.toFixed(8)})`,
+                    'info'
+                );
+            }
+        } else if (partialMoves.length === 0) {
+            // No partials to move - activate a SPREAD virtual slot (interior position) instead
+            manager.logger.log(
+                `No partials to move - activating SPREAD virtual slot for spread correction`,
+                'debug'
+            );
+
+            // Priority 1: Activate SPREAD virtual orders (these are filled order placeholders at spread positions)
+            // CRITICAL: SPREAD orders have type="spread" in the grid, not a buy/sell designation
+            // We need to search by type only, regardless of state value
+            let spreadVirtuals = Array.from(manager.orders.values()).filter(o => o.type === ORDER_TYPES.SPREAD);
+
+            // Filter SPREAD orders to only those matching the side we need to correct
+            // Since SPREAD orders don't have buy/sell designation, we filter by their position in the grid
+            // (interior SPREAD orders can be converted to either BUY or SELL as needed)
+            // For now, take all SPREAD orders and let price selection determine which to use
+            spreadVirtuals = spreadVirtuals.filter(o => {
+                // Only consider SPREAD orders that have not been used for other purposes
+                // (in a proper implementation, SPREAD orders would be tagged with available slots)
+                return o.size === 0;  // SPREAD orders have size 0
+            });
+
+            if (spreadVirtuals.length > 0) {
+                // Select the SPREAD order closest to market:
+                // For SELL: highest price (closest to market from above)
+                // For BUY: lowest price (closest to market from below)
+                let spreadOrder;
+                if (oppositeType === ORDER_TYPES.SELL) {
+                    // For SELL correction: pick highest SPREAD price (closest to market)
+                    spreadOrder = spreadVirtuals.reduce((max, o) => o.price > max.price ? o : max);
+                    manager.logger.log(
+                        `DEBUG SELL SPREAD selection (filtered by type=sell): comparing prices: ${spreadVirtuals.map(o => `${o.id}=${o.price.toFixed(4)}`).join(', ')} -> selected ${spreadOrder.id}=${spreadOrder.price.toFixed(4)}`,
+                        'debug'
+                    );
+                } else {
+                    // For BUY correction: pick lowest SPREAD price (closest to market)
+                    spreadOrder = spreadVirtuals.reduce((min, o) => o.price < min.price ? o : min);
+                    manager.logger.log(
+                        `DEBUG BUY SPREAD selection (filtered by type=buy): comparing prices: ${spreadVirtuals.map(o => `${o.id}=${o.price.toFixed(4)}`).join(', ')} -> selected ${spreadOrder.id}=${spreadOrder.price.toFixed(4)}`,
+                        'debug'
+                    );
+                }
+
+                // Calculate geometric size based on redistributing available funds across the grid
+                const geometricSize = Grid.calculateGeometricSizeForSpreadCorrection(manager, oppositeType);
+
+                if (!geometricSize || geometricSize <= 0) {
+                    manager.logger.log(
+                        `Cannot calculate geometric size for spread correction (no ACTIVE ${oppositeType} orders or insufficient funds)`,
+                        'warn'
+                    );
+                    return { ordersToPlace, partialMoves };
+                }
+
+                // Check if available funds can support the calculated geometric size
+                // Use available + cacheFunds (same as fund analysis comparison)
+                const availableFunds = getAvailableFundsForPlacement(manager.funds, side);
+                const baseAvailable = manager.funds.available?.[side] || 0;
+
+                if (geometricSize > availableFunds) {
+                    manager.logger.log(
+                        `Insufficient available funds for spread correction order: need ${geometricSize.toFixed(8)}, have ${availableFunds.toFixed(8)} (available: ${baseAvailable.toFixed(8)}, cache: ${(manager.funds.cacheFunds?.[side] || 0).toFixed(8)})`,
+                        'warn'
+                    );
+                    return { ordersToPlace, partialMoves };
+                }
+
+                // Create the order with calculated geometric size
+                // Set state to ACTIVE as this order will be placed on-chain immediately
+                const convertedOrder = {
+                    ...spreadOrder,
+                    type: oppositeType,
+                    size: geometricSize,
+                    state: ORDER_STATES.ACTIVE  // Will be confirmed ACTIVE after broadcast
+                };
+                ordersToPlace.push(convertedOrder);
+
+                // CRITICAL: Update the order in manager.orders to reflect the type change
+                // This ensures the order is tracked correctly as the new type, not as SPREAD
+                manager.orders.set(spreadOrder.id, convertedOrder);
+
+                // Update fund variables immediately
+                const fundsBefore = availableFunds;
+                manager.funds.available[side] = Math.max(0, baseAvailable - geometricSize);
+                manager.funds.committed.grid[side] = (manager.funds.committed.grid[side] || 0) + geometricSize;
+
+                // Log SPREAD order selection details
+                manager.logger.log(
+                    `SPREAD order selection for ${oppositeType}: selected ${spreadOrder.id} from ${spreadVirtuals.length} SPREAD order(s) ` +
+                    `(price: ${spreadOrder.price.toFixed(4)})`,
+                    'debug'
+                );
+
+                manager.logger.log(
+                    `Activated SPREAD virtual slot for spread correction: ${spreadOrder.id} -> ${oppositeType} at ${spreadOrder.price.toFixed(4)}, geometric size ${geometricSize.toFixed(8)} ` +
+                    `(available: ${fundsBefore.toFixed(8)} -> ${(baseAvailable - geometricSize).toFixed(8)}, committed: +${geometricSize.toFixed(8)})`,
+                    'info'
+                );
+            } else {
+                // Fallback: Activate closest virtual order of opposite type if no SPREAD virtuals available
+                manager.logger.log(
+                    `No SPREAD virtual orders available - falling back to closest VIRTUAL`,
+                    'debug'
+                );
+
+                const virtualOrders = await manager.activateClosestVirtualOrdersForPlacement(oppositeType, 1);
+                if (virtualOrders && virtualOrders.length > 0) {
+                    ordersToPlace.push(...virtualOrders);
+                    manager.logger.log(
+                        `Activated closest virtual order for spread correction: ${virtualOrders[0].id}`,
+                        'debug'
+                    );
+                }
+            }
+        }
+
+        return { ordersToPlace, partialMoves };
     }
 
 }

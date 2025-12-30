@@ -35,7 +35,7 @@
  * 4. After rotation: cacheFunds updated to reflect leftovers (surplus)
  */
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL } = require('../constants');
-const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees, computeChainFundTotals, calculateAvailableFundsValue, calculateSpreadFromOrders, resolveConfigValue, compareBlockchainSizes, filterOrdersByType, countOrdersByType, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, calculateOrderSizes, formatOrderSize, convertToSpreadPlaceholder, getCacheFundsValue, getGridTotalValue, hasValidAccountTotals, getChainFreeKey } = require('./utils');
+const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees, computeChainFundTotals, calculateAvailableFundsValue, calculateSpreadFromOrders, resolveConfigValue, compareBlockchainSizes, filterOrdersByType, countOrdersByType, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, calculateOrderSizes, formatOrderSize, convertToSpreadPlaceholder, getCacheFundsValue, getGridTotalValue, getTotalGridFundsAvailable, hasValidAccountTotals, getChainFreeKey } = require('./utils');
 const Logger = require('./logger');
 const AsyncLock = require('./async_lock');
 // Grid functions (initialize/recalculate) are intended to be
@@ -1376,17 +1376,34 @@ class OrderManager {
 
     // Periodically poll for fills and recalculate orders on demand.
     async fetchOrderUpdates(options = { calculate: false }) {
-        try { const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE); if (activeOrders.length === 0 || (options && options.calculate)) { const { remaining, filled } = await this.calculateOrderUpdates(); remaining.forEach(order => this.orders.set(order.id, order)); if (filled.length > 0) await this.processFilledOrders(filled); this.checkSpreadCondition(); return { remaining, filled }; } return { remaining: activeOrders, filled: [] }; } catch (error) { this.logger.log(`Error fetching order updates: ${error.message}`, 'error'); return { remaining: [], filled: [] }; }
+        try {
+            const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE);
+            let remaining = activeOrders;
+            let filled = [];
+
+            if (activeOrders.length === 0 || (options && options.calculate)) {
+                const result = await this.calculateOrderUpdates();
+                remaining = result.remaining;
+                filled = result.filled;
+                remaining.forEach(order => this.orders.set(order.id, order));
+                if (filled.length > 0) await this.processFilledOrders(filled);
+            }
+
+            return { remaining, filled };
+        } catch (error) {
+            this.logger.log(`Error fetching order updates: ${error.message}`, 'error');
+            return { remaining: [], filled: [] };
+        }
     }
 
     // Simulate fills by identifying the closest active order (will be converted to VIRTUAL/SPREAD by processFilledOrders).
     async calculateOrderUpdates() { const marketPrice = this.config.marketPrice; const spreadRange = marketPrice * (this.config.targetSpreadPercent / 100); const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE); const activeSells = activeOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => Math.abs(a.price - this.config.marketPrice) - Math.abs(b.price - this.config.marketPrice)); const activeBuys = activeOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => Math.abs(a.price - this.config.marketPrice) - Math.abs(b.price - this.config.marketPrice)); const filledOrders = []; if (activeSells.length > 0) filledOrders.push({ ...activeSells[0] }); else if (activeBuys.length > 0) filledOrders.push({ ...activeBuys[0] }); const remaining = activeOrders.filter(o => !filledOrders.some(f => f.id === o.id)); return { remaining, filled: filledOrders }; }
 
     // Flag whether the spread has widened beyond configured limits so we can rebalance.
-    // Flag whether the spread has widened beyond configured limits so we can rebalance.
-    checkSpreadCondition() {
+    // Fetches current market price for fair fund comparison if BitShares API provided.
+    async checkSpreadCondition(BitShares, updateOrdersOnChainBatch = null) {
         const Grid = require('./grid');
-        Grid.checkSpreadCondition(this);
+        return await Grid.checkSpreadCondition(this, BitShares, updateOrdersOnChainBatch);
     }
 
     /**
@@ -1596,11 +1613,7 @@ class OrderManager {
         }
 
         if (this.logger.level === 'debug') this._logAvailable('after proceeds apply');
-        const extraOrderCount = this.outOfSpread ? 1 : 0;
-        if (this.outOfSpread) {
-            this.logger.log(`Adding extra order due to previous wide spread condition`, 'info');
-            this.outOfSpread = false;
-        }
+
         // Log available funds before rotation
         this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
         this._logAvailable('before rotation');
@@ -1615,7 +1628,10 @@ class OrderManager {
             return { ordersToPlace: [], ordersToRotate: [], partialMoves: [] };
         }
 
-        const newOrders = await this.rebalanceOrders(filledCounts, extraOrderCount, excludeOrderIds);
+        // NOTE: Spread correction is now PROACTIVE - handled immediately by checkSpreadCondition()
+        // when spread is detected as too wide (at startup, after rotations, at 4h fetch)
+        // No reactive extraOrderCount logic needed here
+        const newOrders = await this.rebalanceOrders(filledCounts, 0, excludeOrderIds);
 
         // Add updateFee to BTS fees if partial orders were moved during rotation
         // Partial fills require an update operation on the blockchain, incurring an additional updateFee
@@ -1792,6 +1808,9 @@ class OrderManager {
             const ordersToCreate = Math.min(shortage, count);
 
             this.logger.log(`Active ${oppositeType} orders (${currentActiveCount}) below target (${targetCount}). Creating ${ordersToCreate} new orders instead of rotating.`, 'info');
+
+            // NOTE: Spread correction is now PROACTIVE - handled immediately by checkSpreadCondition()
+            // No reactive preferredOrderSide logic needed here
 
             // First, use vacated partial slots (they have proper positions)
             const vacatedSlots = partialMoves
@@ -2085,18 +2104,21 @@ class OrderManager {
         if (orderCount > 0) {
             const Grid = require('./grid');
 
-            // Get all orders on this side (both ACTIVE and VIRTUAL)
+            // Get all orders on this side (ACTIVE, PARTIAL, and VIRTUAL)
+            // CRITICAL: Include PARTIAL orders as they occupy grid positions and lock up funds
             // CRITICAL: Add filledCount to account for filled orders that were just converted to SPREAD placeholders
             // When opposite-side orders fill, they're converted to SPREAD orders, expanding the total grid
             const allOrdersOnSide = [
                 ...this.getOrdersByTypeAndState(targetType, ORDER_STATES.ACTIVE),
+                ...this.getOrdersByTypeAndState(targetType, ORDER_STATES.PARTIAL),
                 ...this.getOrdersByTypeAndState(targetType, ORDER_STATES.VIRTUAL)
             ];
             const totalSlots = allOrdersOnSide.length + filledCount;
 
             // Calculate total funds for rotation sizing
-            // Total = total.grid (committed + virtuel) + cacheFunds
-            const totalFunds = getGridTotalValue(this.funds, side) + getCacheFundsValue(this.funds, side);
+            // Total = available (unallocated) + virtuel (reserved) + cacheFunds (proceeds)
+            // This represents ALL funds available to the grid: unallocated blockchain balance + reserved + proceeds
+            const totalFunds = getTotalGridFundsAvailable(this.funds, side);
 
             // Create dummy orders matching the actual grid structure (all active + virtual)
             const dummyOrders = Array(totalSlots).fill(null).map((_, i) => ({
