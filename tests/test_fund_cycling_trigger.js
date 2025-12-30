@@ -61,6 +61,12 @@ class MockManager {
         // After migration, check if grid update is needed
         Grid.checkAndUpdateGridIfNeeded(this, this.funds.cacheFunds);
 
+        // Emulate the reactor: if flagged, perform the update
+        if (this._gridSidesUpdated && this._gridSidesUpdated.length > 0) {
+            Grid.updateGridOrderSizes(this, this.funds.cacheFunds);
+            this._gridSidesUpdated = []; // Clear flags
+        }
+
         return { ordersToPlace: [], ordersToRotate: [], partialMoves: [] };
     }
 }

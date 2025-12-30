@@ -17,7 +17,7 @@ const chainKeys = require('./chain_keys');
 const chainOrders = require('./chain_orders');
 const { OrderManager, grid: Grid, utils: OrderUtils } = require('./order');
 const { persistGridSnapshot, retryPersistenceIfNeeded, buildCreateOrderArgs, getOrderTypeFromUpdatedFlags } = OrderUtils;
-const { ORDER_STATES } = require('./constants');
+const { ORDER_STATES, ORDER_TYPES } = require('./constants');
 const { attemptResumePersistedGridByPriceMatch, decideStartupGridAction, reconcileStartupOrders } = require('./order/startup_reconcile');
 const { AccountOrders } = require('./account_orders');
 const AsyncLock = require('./order/async_lock');
@@ -575,7 +575,10 @@ class DEXBot {
                         operations.push(op);
                         opContexts.push({ kind: 'rotation', rotation });
                     } else {
-                        this.manager.logger.log(`No change needed for rotation of ${oldOrder.orderId}`, 'debug');
+                        // CRITICAL: If buildUpdateOrderOp returns null (no change detected due to precision),
+                        // we must NOT add this to operations. The rotation will NOT be marked complete,
+                        // preventing a loop where available funds trigger threshold but never get consumed.
+                        this.manager.logger.log(`Skipping rotation of ${oldOrder.orderId}: no blockchain change needed (precision tolerance)`, 'debug');
                     }
                 } catch (err) {
                     this.manager.logger.log(`Failed to prepare update op for rotation: ${err.message}`, 'error');
@@ -931,6 +934,12 @@ class DEXBot {
                 const gridCheckResult = Grid.checkAndUpdateGridIfNeeded(this.manager, this.manager.funds.cacheFunds);
                 if (gridCheckResult.buyUpdated || gridCheckResult.sellUpdated) {
                     this._log(`Grid updated at startup due to available funds (buy: ${gridCheckResult.buyUpdated}, sell: ${gridCheckResult.sellUpdated})`);
+
+                    // CRITICAL: First recalculate grid sizes with chain totals
+                    // This updates order sizes in memory to include newly deposited funds
+                    const orderType = getOrderTypeFromUpdatedFlags(gridCheckResult.buyUpdated, gridCheckResult.sellUpdated);
+                    await Grid.updateGridFromBlockchainSnapshot(this.manager, orderType, true);
+
                     persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
 
                     // Apply grid corrections on-chain immediately to use new funds

@@ -1356,9 +1356,6 @@ async function applyGridDivergenceCorrections(manager, accountOrders, botKey, up
                 );
             });
 
-            // Clear the tracking flag (atomic with gridSidesUpdated access)
-            manager._gridSidesUpdated = [];
-
             // Build rotation objects for size corrections
             const ordersToRotate = manager.ordersNeedingPriceCorrection.map(correction => ({
                 oldOrder: { orderId: correction.chainOrderId },
@@ -1369,7 +1366,7 @@ async function applyGridDivergenceCorrections(manager, accountOrders, botKey, up
 
             // Execute a batch correction for these marked orders
             try {
-                await updateOrdersOnChainBatchFn({
+                const result = await updateOrdersOnChainBatchFn({
                     ordersToPlace: [],
                     ordersToRotate: ordersToRotate,
                     partialMoves: []
@@ -1378,12 +1375,27 @@ async function applyGridDivergenceCorrections(manager, accountOrders, botKey, up
                 // Clear corrections after applying
                 manager.ordersNeedingPriceCorrection = [];
 
-                // Re-persist grid after corrections are applied to keep persisted state in sync
-                persistGridSnapshot(manager, accountOrders, botKey);
+                // CRITICAL: Only clear flags if operations were actually executed
+                // If all operations were rejected (result.executed === false), keep flags
+                // so the grid can be re-persisted without the phantom update
+                if (result && result.executed) {
+                    manager._gridSidesUpdated = [];
+                    // Re-persist grid after corrections are applied to keep persisted state in sync
+                    persistGridSnapshot(manager, accountOrders, botKey);
+                } else {
+                    manager.logger?.log?.(
+                        `All divergence corrections were rejected (precision tolerance). Clearing flags to prevent loop.`,
+                        'info'
+                    );
+                    // Clear flags anyway to prevent infinite loop, but don't persist
+                    // The grid state in memory is correct, blockchain just doesn't need updating
+                    manager._gridSidesUpdated = [];
+                }
             } catch (err) {
-                // CRITICAL: Clear corrections on error too to prevent list explosion
+                // CRITICAL: Clear corrections AND flags on error to prevent list explosion
                 // Without this, failed corrections accumulate and never get retried
                 manager.ordersNeedingPriceCorrection = [];
+                manager._gridSidesUpdated = [];
                 manager?.logger?.log?.(`Warning: Could not execute grid divergence corrections: ${err.message}`, 'warn');
             }
         }

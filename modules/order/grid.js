@@ -543,7 +543,13 @@ class Grid {
             // trigger a grid resize during the next fill/comparison cycle.
             const avail = calculateAvailableFundsValue(s.name, manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders);
             const totalPending = s.cache + avail;
-            const ratio = (totalPending / s.grid) * 100;
+
+            // Use allocated funds (TotalFunds) as denominator as requested
+            // Falls back to (grid + pending) if allocated is not set/zero
+            const allocated = s.name === 'buy' ? snap.allocatedBuy : snap.allocatedSell;
+            const denominator = (allocated > 0) ? allocated : (s.grid + totalPending);
+
+            const ratio = (denominator > 0) ? (totalPending / denominator) * 100 : 0;
 
             if (ratio >= threshold) {
                 manager.logger?.log(
@@ -591,14 +597,22 @@ class Grid {
             manager.applyBotFundsAllocation();
         }
 
-        // Get allocated funds for this side (respects botFunds percentage if configured)
-        // Falls back to blockchain total if no botFunds allocation is set
-        const allocatedFunds = isBuy
-            ? manager.funds?.allocated?.buy || manager.accountTotals?.buy || 0
-            : manager.funds?.allocated?.sell || manager.accountTotals?.sell || 0;
+        // Get chain totals (total balance = free + locked in orders on chain)
+        // This ensures newly deposited funds are included when resizing
+        // Falls back to allocated if chain snapshot not available
+        const snap = manager.getChainFundsSnapshot ? manager.getChainFundsSnapshot() : {};
+        let allocatedFunds;
+        if (isBuy) {
+            // Use chainTotal (full balance on chain) for sizing, not the capped allocation
+            allocatedFunds = snap.chainTotalBuy || manager.funds?.allocated?.buy || manager.accountTotals?.buy || 0;
+        } else {
+            allocatedFunds = snap.chainTotalSell || manager.funds?.allocated?.sell || manager.accountTotals?.sell || 0;
+        }
 
         manager.logger?.log(
-            `Recalculating ${sideName} side order sizes from allocated funds: ${allocatedFunds.toFixed(8)}`,
+            `Recalculating ${sideName} side order sizes from chain total: ${allocatedFunds.toFixed(8)} ` +
+            `(chainTotal: ${isBuy ? snap.chainTotalBuy?.toFixed(8) : snap.chainTotalSell?.toFixed(8)}, ` +
+            `allocated: ${isBuy ? manager.funds?.allocated?.buy?.toFixed(8) : manager.funds?.allocated?.sell?.toFixed(8)})`,
             'info'
         );
 
@@ -1232,13 +1246,13 @@ class Grid {
         const onChainBuys = [...activeBuys, ...partialBuys];
         const onChainSells = [...activeSells, ...partialSells];
 
-        const virtualBuys = Array.from(manager.orders.values()).filter(o => 
-            (o.type === ORDER_TYPES.BUY || o.type === ORDER_TYPES.SPREAD) && 
+        const virtualBuys = Array.from(manager.orders.values()).filter(o =>
+            (o.type === ORDER_TYPES.BUY || o.type === ORDER_TYPES.SPREAD) &&
             o.state === ORDER_STATES.VIRTUAL &&
             o.price < (manager.config.marketPrice || Infinity)
         );
-        const virtualSells = Array.from(manager.orders.values()).filter(o => 
-            (o.type === ORDER_TYPES.SELL || o.type === ORDER_TYPES.SPREAD) && 
+        const virtualSells = Array.from(manager.orders.values()).filter(o =>
+            (o.type === ORDER_TYPES.SELL || o.type === ORDER_TYPES.SPREAD) &&
             o.state === ORDER_STATES.VIRTUAL &&
             o.price > (manager.config.marketPrice || 0)
         );
