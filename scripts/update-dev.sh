@@ -99,47 +99,32 @@ else
     log_info "No profiles directory found (will be created on first run)"
 fi
 
-# Step 3: Auto-checkout to dev branch if not already on it
+# Step 3: Prepare working directory and preserve modules/constants.js
 CONSTANTS_STASHED=false
+if ! git diff --quiet -- modules/constants.js 2>/dev/null || ! git diff --cached --quiet -- modules/constants.js 2>/dev/null; then
+    log_info "Stashing local changes to modules/constants.js (preserving LOG_LEVEL and settings)..."
+    if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
+        CONSTANTS_STASHED=true
+        log_success "Local modules/constants.js changes stashed"
+    else
+        log_error "Failed to stash modules/constants.js. Aborting update to prevent loss of settings."
+        exit 1
+    fi
+fi
+
+# Discard any remaining tracked changes and untracked files (the "destructive" part)
+# Note: profiles/ and .env are protected by .gitignore and git clean -fd
+log_info "Cleaning working directory..."
+git checkout -- .
+git clean -fd
+
 if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
-    log_info "Step 3: Switching to $REPO_BRANCH branch..."
-    # Stash local changes to modules/constants.js before switching
-    if ! git diff --quiet -- modules/constants.js 2>/dev/null || ! git diff --cached --quiet -- modules/constants.js 2>/dev/null; then
-        log_info "Stashing local changes to modules/constants.js..."
-        if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
-            CONSTANTS_STASHED=true
-            log_success "Local modules/constants.js changes stashed"
-        else
-            log_warning "Failed to stash modules/constants.js"
-        fi
-    fi
-    # Discard any remaining changes before switching (clean working directory required)
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        git checkout -- .
-        git clean -fd
-    fi
+    log_info "Switching to $REPO_BRANCH branch..."
     if git checkout "$REPO_BRANCH"; then
         log_success "Switched to $REPO_BRANCH branch"
     else
         log_error "Failed to checkout $REPO_BRANCH branch"
         exit 1
-    fi
-else
-    log_info "Step 3: Cleaning working directory..."
-    # Stash local changes to modules/constants.js before cleaning
-    if ! git diff --quiet -- modules/constants.js 2>/dev/null || ! git diff --cached --quiet -- modules/constants.js 2>/dev/null; then
-        log_info "Stashing local changes to modules/constants.js..."
-        if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
-            CONSTANTS_STASHED=true
-            log_success "Local modules/constants.js changes stashed"
-        else
-            log_warning "Failed to stash modules/constants.js"
-        fi
-    fi
-    # Always clean working directory before pull (profiles/ excluded by .gitignore)
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        git checkout -- .
-        git clean -fd
     fi
 fi
 
