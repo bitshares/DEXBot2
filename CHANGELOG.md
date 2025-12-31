@@ -8,21 +8,31 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Persistent General Settings**: Implemented a new architecture using `profiles/general.settings.json` for untracked user overrides.
-- **Global Settings Manager**: Added a new sub-menu to `dexbot bots` to manage global parameters (Log Level, Grid Limits, Timing).
+- **Global Settings Manager**: Added a new sub-menu to `dexbot bots` to manage global parameters (Log lvl, Grid, Timing).
 - **Grid Health Monitoring**: New system to monitor structural grid integrity and log violations (e.g., ACTIVE orders further from market than VIRTUAL slots).
-- **Proactive Dust Recovery**: Automatically refills small partial orders (< 5%) to ideal geometric sizes using `cacheFunds` when detected on both sides.
+- **Dual-Side Dust Recovery**: Automatically refills small partial orders (< 5%) to ideal geometric sizes using `cacheFunds` when detected on both sides.
+- **Enhanced Spread Correction**: Implemented proactive spread correction that pools both `VIRTUAL` and `SPREAD` slots to identify the best candidates for narrowing the market spread.
 - **Sequential Fill Queue**: Implemented thread-safe sequential processing of fill events using AsyncLock to prevent accounting race conditions.
+- **Safe PM2 Lifecycle Management**: Added `pm2.js stop` and `pm2.js delete` commands that safely filter for dexbot-specific processes.
+- **Robust Fill Detection**: Implemented `history` mode for fill processing to reliably match orders from blockchain events.
 
 ### Changed
 - **Global Terminology Migration**: Renamed all occurrences of `marketPrice` to `startPrice` across codebase, CLI, and documentation to better reflect its role as the grid center.
 - **Menu-Driven Bot Editor**: Refactored `modules/account_bots.js` into a sectional, menu-driven interface for faster configuration.
 - **Simplified Update Process**: Removed fragile git stashing from `update.sh` and `update-dev.sh`; user settings are now preserved via untracked JSON.
+- **CLI Command Renaming**: Renamed `dexbot stop` to `dexbot disable` for better alignment with its actual function (marking bots inactive in config).
+- **Price Calculation Accuracy**: Updated `buildUpdateOrderOp` to use current sell amounts when deriving prices, fixing precision issues in small price moves.
 - **Default Log Level**: Changed default `LOG_LEVEL` from `debug` to `info`.
+- **Architectural Cleanup**: Consolidated core logic into pure utility functions to eliminate duplication and improve maintainability.
 
 ### Fixed
 - **Fund Double-Counting**: Fixed a critical bug in `processFilledOrders` where proceeds were incorrectly added to available funds twice.
 - **Startup Double-Initialization**: Resolved a race condition that could cause corrupted virtual order sizes during bot startup.
 - **Reset Reliability**: Fixed `node dexbot reset` command to ensure a true hard reset from blockchain state, including hot-reloading of `bots.json`.
+- **Stuck VIRTUAL Orders**: Added error handling for rotation synchronization to prevent orders from being stuck in a virtual state.
+- **Logging Visibility**: Ensured all cancellation operations provide explicit success/fail messages in logs.
+- **Offline Detection Fixes**: Resolved edge cases in offline partial fill detection to ensure capital efficiency on startup.
+- **Update Script Robustness**: Refactored update scripts to use `git reset --hard` to forcefully clear environment conflicts (e.g., in `constants.js`).
 - **Module Path Corrections**: Fixed incorrect relative paths in `startup_reconcile.js` and streamlined operational logging.
 
 ---
