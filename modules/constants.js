@@ -11,6 +11,8 @@
  *            Also used for filled orders that are converted to SPREAD placeholders
  * - ACTIVE: Placed on-chain, size contributes to funds.committed
  */
+const fs = require('fs');
+const path = require('path');
 
 // Order categories used by the OrderManager when classifying grid entries.
 const ORDER_TYPES = Object.freeze({
@@ -28,7 +30,7 @@ const ORDER_STATES = Object.freeze({
 });
 
 // Defaults applied when instantiating an OrderManager with minimal configuration.
-const DEFAULT_CONFIG = {
+let DEFAULT_CONFIG = {
     startPrice: "pool",
     minPrice: "3x",
     maxPrice: "3x",
@@ -45,16 +47,16 @@ const DEFAULT_CONFIG = {
 };
 
 // Timing constants used by OrderManager and helpers
-const TIMING = Object.freeze({
+let TIMING = {
     SYNC_DELAY_MS: 500,
     ACCOUNT_TOTALS_TIMEOUT_MS: 10000,
     // Blockchain fetch interval: how often to refresh blockchain account values (in minutes)
     // Default: 240 minutes (4 hours). Set to 0 or non-number to disable periodic fetches.
     BLOCKCHAIN_FETCH_INTERVAL_MIN: 240
-});
+};
 
 // Grid limits and scaling constants
-const GRID_LIMITS = Object.freeze({
+let GRID_LIMITS = {
     MIN_SPREAD_FACTOR: 2,
     MIN_ORDER_SIZE_FACTOR: 50,
     // Grid regeneration threshold (percentage)
@@ -71,7 +73,7 @@ const GRID_LIMITS = Object.freeze({
     // Grid comparison metrics
     // Detects significant divergence between calculated (in-memory) and persisted grid state
     // after order fills and rotations
-    GRID_COMPARISON: Object.freeze({
+    GRID_COMPARISON: {
         // Metric calculation: RMS (Root Mean Square) of relative order size differences
         // Formula: RMS = √(mean of ((calculated - persisted) / persisted)²)
         // Represents the quadratic mean of relative size errors
@@ -92,8 +94,8 @@ const GRID_LIMITS = Object.freeze({
         // │ 44.7%       │ ~10%      │ Extremely lenient           │
         // └────────────────────────────────────────────────────────┘
         RMS_PERCENTAGE: 14.3
-    })
-});
+    }
+};
 
 // Logging Level Configuration
 // Options:
@@ -101,7 +103,46 @@ const GRID_LIMITS = Object.freeze({
 // - 'info':  Standard production output. State changes (Active/Filled), keys confirmations, and errors.
 // - 'warn':  Warnings (non-critical issues) and errors only.
 // - 'error': Critical errors only.
-const LOG_LEVEL = 'debug';
+let LOG_LEVEL = 'info';
+
+// --- LOCAL SETTINGS OVERRIDES ---
+// Load user-defined settings from profiles/general.settings.json if it exists.
+// This allows preserving settings during updates without git stashing.
+const SETTINGS_FILE = path.join(__dirname, '..', 'profiles', 'general.settings.json');
+
+if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        const settings = JSON.parse(raw);
+
+        if (settings.LOG_LEVEL) LOG_LEVEL = settings.LOG_LEVEL;
+        
+        if (settings.TIMING) {
+            TIMING = { ...TIMING, ...settings.TIMING };
+        }
+        
+        if (settings.GRID_LIMITS) {
+            const gridSettings = settings.GRID_LIMITS;
+            GRID_LIMITS = { 
+                ...GRID_LIMITS, 
+                ...gridSettings,
+                GRID_COMPARISON: { ...GRID_LIMITS.GRID_COMPARISON, ...(gridSettings.GRID_COMPARISON || {}) }
+            };
+        }
+
+        if (settings.DEFAULT_CONFIG) {
+            DEFAULT_CONFIG = { ...DEFAULT_CONFIG, ...settings.DEFAULT_CONFIG };
+        }
+    } catch (err) {
+        console.warn(`[WARN] Failed to load local settings from ${SETTINGS_FILE}: ${err.message}`);
+    }
+}
+
+// Freeze objects to prevent accidental runtime modifications
+Object.freeze(ORDER_TYPES);
+Object.freeze(ORDER_STATES);
+Object.freeze(TIMING);
+Object.freeze(GRID_LIMITS);
+Object.freeze(GRID_LIMITS.GRID_COMPARISON);
 
 module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL };
-

@@ -4,7 +4,7 @@ const path = require('path');
 const readlineSync = require('readline-sync');
 const readline = require('readline');
 const { execSync } = require('child_process');
-const { DEFAULT_CONFIG } = require('./constants');
+const { DEFAULT_CONFIG, GRID_LIMITS, TIMING, LOG_LEVEL } = require('./constants');
 
 function parseJsonWithComments(raw) {
     const stripped = raw.replace(/\/\*(?:.|[\r\n])*?\*\//g, '').replace(/(^|\s*)\/\/.*$/gm, '');
@@ -12,6 +12,7 @@ function parseJsonWithComments(raw) {
 }
 
 const BOTS_FILE = path.join(__dirname, '..', 'profiles', 'bots.json');
+const SETTINGS_FILE = path.join(__dirname, '..', 'profiles', 'general.settings.json');
 
 
 function ensureProfilesDirectory() {
@@ -44,6 +45,37 @@ function saveBotsConfig(config, filePath) {
     } catch (err) {
         console.error('Failed to save bots configuration:', err.message);
         throw err;
+    }
+}
+
+function loadGeneralSettings() {
+    if (!fs.existsSync(SETTINGS_FILE)) {
+        return {
+            LOG_LEVEL: LOG_LEVEL,
+            GRID_LIMITS: { ...GRID_LIMITS },
+            TIMING: { ...TIMING }
+        };
+    }
+    try {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        return JSON.parse(raw);
+    } catch (err) {
+        console.error('Failed to load general settings:', err.message);
+        return {
+            LOG_LEVEL: LOG_LEVEL,
+            GRID_LIMITS: { ...GRID_LIMITS },
+            TIMING: { ...TIMING }
+        };
+    }
+}
+
+function saveGeneralSettings(settings) {
+    try {
+        ensureProfilesDirectory();
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+        console.log(`\n✓ General settings saved to ${path.basename(SETTINGS_FILE)}`);
+    } catch (err) {
+        console.error('Failed to save general settings:', err.message);
     }
 }
 
@@ -190,7 +222,7 @@ function askWeightDistributionNoLegend(promptText, defaultValue) {
 }
 
 function isMultiplierString(value) {
-    return typeof value === 'string' && /^[\s]*[0-9]+(?:\.[0-9]+)?x[\s]*$/i.test(value);
+    return typeof value === 'string' && /^[ -￿]*[0-9]+(?:\.[0-9]+)?x[ -￿]*$/i.test(value);
 }
 
 function askNumberWithBounds(promptText, defaultValue, minVal, maxVal) {
@@ -408,8 +440,8 @@ async function promptBotData(base = {}) {
 
     while (!finished) {
         console.log('\n\x1b[1m--- Bot Editor: ' + (data.name || 'New Bot') + ' ---\x1b[0m');
-        console.log(`\x1b[36m1) Pair:\x1b[0m       \x1b[32m${data.assetA || '?'}/${data.assetB || '?'}\x1b[0m`);
-        console.log(`\x1b[36m2) Identity:\x1b[0m   \x1b[33mName:\x1b[0m ${data.name || '?'}, \x1b[33mAccount:\x1b[0m ${data.preferredAccount || '?'}, \x1b[33mActive:\x1b[0m ${data.active}, \x1b[33mDryRun:\x1b[0m ${data.dryRun}`);
+        console.log(`\x1b[36m1) Pair:\x1b[0m       \x1b[32m${data.assetA || '?'} / ${data.assetB || '?'} \x1b[0m`);
+        console.log(`\x1b[36m2) Identity:\x1b[0m   \x1b[33mName:\x1b[0m ${data.name || '?'} , \x1b[33mAccount:\x1b[0m ${data.preferredAccount || '?'} , \x1b[33mActive:\x1b[0m ${data.active}, \x1b[33mDryRun:\x1b[0m ${data.dryRun}`);
         console.log(`\x1b[36m3) Price:\x1b[0m      \x1b[33mRange:\x1b[0m [${data.minPrice} - ${data.maxPrice}], \x1b[33mStart:\x1b[0m ${data.startPrice}`);
         console.log(`\x1b[36m4) Grid:\x1b[0m       \x1b[33mWeights:\x1b[0m (S:${data.weightDistribution.sell}, B:${data.weightDistribution.buy}), \x1b[33mIncr:\x1b[0m ${data.incrementPercent}%, \x1b[33mSpread:\x1b[0m ${data.targetSpreadPercent}%`);
         console.log(`\x1b[36m5) Funding:\x1b[0m    \x1b[33mSell:\x1b[0m ${data.botFunds.sell}, \x1b[33mBuy:\x1b[0m ${data.botFunds.buy} | \x1b[33mOrders:\x1b[0m (S:${data.activeOrders.sell}, B:${data.activeOrders.buy})`);
@@ -488,6 +520,56 @@ async function promptBotData(base = {}) {
     };
 }
 
+async function promptGeneralSettings() {
+    const settings = loadGeneralSettings();
+    let finished = false;
+
+    while (!finished) {
+        console.log('\n\x1b[1m--- General Settings (Global) ---\x1b[0m');
+        console.log(`\x1b[36m1) Grid:\x1b[0m          \x1b[33mCache:\x1b[0m ${settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE}%, \x1b[33mRMS:\x1b[0m ${settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE}%, \x1b[33mDust:\x1b[0m ${settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE}%`);
+        console.log(`\x1b[36m2) Timing:\x1b[0m        \x1b[33mFetchInterval:\x1b[0m ${settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN}min, \x1b[33mSyncDelay:\x1b[0m ${settings.TIMING.SYNC_DELAY_MS}ms`);
+        console.log(`\x1b[36m3) Log lvl:\x1b[0m       \x1b[33m${settings.LOG_LEVEL}\x1b[0m (debug, info, warn, error)`);
+        console.log('--------------------------------------------------');
+        console.log('\x1b[32mS) Save & Exit\x1b[0m');
+        console.log('\x1b[31mC) Cancel (Discard changes)\x1b[0m');
+
+        const choice = readlineSync.question('\nSelect section to edit or action: ').trim().toLowerCase();
+
+        switch (choice) {
+            case '1':
+                settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE = askNumberWithBounds('Grid Cache Regeneration %', settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE, 0.1, 50);
+                settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE = askNumberWithBounds('RMS Divergence Threshold %', settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE, 1, 100);
+                settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE = askNumberWithBounds('Partial Dust Threshold %', settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE, 0.1, 50);
+                break;
+            case '2':
+                settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN = askNumberWithBounds('Blockchain Fetch Interval (min)', settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN, 1, 1440);
+                settings.TIMING.SYNC_DELAY_MS = askNumberWithBounds('Sync Delay (ms)', settings.TIMING.SYNC_DELAY_MS, 100, 10000);
+                break;
+            case '3':
+                const levels = ['debug', 'info', 'warn', 'error'];
+                console.log(`Available levels: ${levels.join(', ')}`);
+                const newLevel = askString('Enter log level', settings.LOG_LEVEL).toLowerCase();
+                if (levels.includes(newLevel)) {
+                    settings.LOG_LEVEL = newLevel;
+                } else {
+                    console.log('Invalid log level.');
+                }
+                break;
+            case 's':
+                saveGeneralSettings(settings);
+                finished = true;
+                break;
+            case 'c':
+                if (askBoolean('Discard all changes?', false)) {
+                    finished = true;
+                }
+                break;
+            default:
+                console.log('Invalid choice.');
+        }
+    }
+}
+
 // Entry point exposing a menu-driven interface for creating, modifying, and reviewing bots.
 async function main() {
     console.log('dexbot bots — bots.json configurator (writes profiles/bots.json)');
@@ -500,8 +582,9 @@ async function main() {
         console.log('  3) Delete bot');
         console.log('  4) Copy bot');
         console.log('  5) List bots');
-        console.log('  6) Exit');
-        const selection = readlineSync.question('Choose an action [1-6]: ').trim();
+        console.log('  6) General settings');
+        console.log('  7) Exit');
+        const selection = readlineSync.question('Choose an action [1-7]: ').trim();
         console.log('');
         switch (selection) {
             case '1': {
@@ -565,6 +648,9 @@ async function main() {
                 listBots(config.bots);
                 break;
             case '6':
+                await promptGeneralSettings();
+                break;
+            case '7':
                 exit = true;
                 break;
             default:

@@ -7,19 +7,16 @@
 # Features:
 # - Checks for updates from main branch
 # - Protects profiles/ directory (excluded from git, never modified)
-# - Stashes local changes to modules/constants.js before update
 # - Performs git pull with clean working directory
-# - Reapplies stashed modules/constants.js changes after update
 # - Installs/updates dependencies
 # - Restarts PM2 if running
 # - Logs all operations
 #
 # Protected Files:
-# - profiles/ - Your bot configurations, profiles, and logs (in .gitignore)
-# - modules/constants.js - Local customizations are stashed and reapplied
+# - profiles/ - Your bot configurations, settings, profiles, and logs (in .gitignore)
 #
-# Note: If conflicts occur during stash reapply, the script will warn you and suggest
-# manual resolution using git stash show and git stash drop commands.
+# Note: User settings are preserved in profiles/general.settings.json and
+# are not affected by repository updates.
 
 set -e
 
@@ -99,20 +96,8 @@ else
     log_info "No profiles directory found (will be created on first run)"
 fi
 
-# Step 3: Prepare working directory and preserve modules/constants.js
-CONSTANTS_STASHED=false
-if ! git diff --quiet -- modules/constants.js 2>/dev/null || ! git diff --cached --quiet -- modules/constants.js 2>/dev/null; then
-    log_info "Stashing local changes to modules/constants.js (preserving LOG_LEVEL and settings)..."
-    if git stash push -m "DEXBot2 update backup: modules/constants.js" -- modules/constants.js; then
-        CONSTANTS_STASHED=true
-        log_success "Local modules/constants.js changes stashed"
-    else
-        log_error "Failed to stash modules/constants.js. Aborting update to prevent loss of settings."
-        exit 1
-    fi
-fi
-
-# Discard any remaining tracked changes and untracked files (the "destructive" part)
+# Step 3: Prepare working directory
+# Discard any tracked changes and untracked files (except those in .gitignore)
 # Note: profiles/ and .env are protected by .gitignore and git clean -fd
 log_info "Cleaning working directory..."
 git checkout -- .
@@ -167,17 +152,6 @@ if git pull --rebase origin "$REPO_BRANCH"; then
 else
     log_error "Failed to pull latest code"
     exit 1
-fi
-
-# Step 6.5: Reapply stashed modules/constants.js changes
-if [ "$CONSTANTS_STASHED" = true ]; then
-    log_info "Step 6.5: Reapplying stashed modules/constants.js changes..."
-    if git stash pop; then
-        log_success "Successfully reapplied modules/constants.js changes"
-    else
-        log_warning "Stash reapply had conflicts or failed. Manual merge may be needed."
-        log_info "To resolve: git stash show and git stash drop when ready"
-    fi
 fi
 
 # Step 7: Install/update dependencies
