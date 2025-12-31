@@ -448,35 +448,16 @@ class Grid {
         if (!account || !privateKey) throw new Error('recalculateGrid requires opts.account and opts.privateKey');
 
         manager.logger.log('Starting full grid resynchronization from blockchain...', 'info');
+
+        // 1. Initialize assets and fetch fresh on-chain balances
         if (typeof manager._initializeAssets === 'function') {
             await manager._initializeAssets();
         }
-        await Grid.initializeGrid(manager);
-        manager.logger.log('Virtual grid has been regenerated.', 'debug');
-        // Clear persisted cacheFunds for both sides after a full grid regeneration
-        // so persisted leftovers do not remain after the grid was rebuilt.
-        try {
-            await Grid._clearAndPersistCacheFunds(manager, 'buy');
-            await Grid._clearAndPersistCacheFunds(manager, 'sell');
-        } catch (e) {
-            manager.logger?.log?.(`Warning: failed to clear persisted cacheFunds during recalc: ${e.message}`, 'warn');
+        if (typeof manager.updateAccountTotals === 'function') {
+            await manager.updateAccountTotals();
         }
 
-        // NOTE: `pendingProceeds` storage removed. Any legacy proceeds are handled via migration.
-
-        // Also clear BTS fees when grid is regenerated
-        if (manager.funds && typeof manager.funds.btsFeesOwed === 'number' && manager.funds.btsFeesOwed > 0) {
-            manager.funds.btsFeesOwed = 0;
-            try {
-                if (manager.accountOrders && typeof manager.accountOrders.updateBtsFeesOwed === 'function') {
-                    manager.accountOrders.updateBtsFeesOwed(manager.config.botKey, 0);
-                    manager.logger?.log?.('✓ Cleared BTS fees owed after grid regeneration', 'info');
-                }
-            } catch (e) {
-                manager.logger?.log?.(`Warning: failed to clear persisted BTS fees during regeneration: ${e.message}`, 'warn');
-            }
-        }
-
+        // 2. Fetch current on-chain orders and sync manager state
         const chainOpenOrders = await readOpenOrdersFn();
         if (!Array.isArray(chainOpenOrders)) {
             manager.logger.log('Could not fetch open orders for resync.', 'error');
@@ -484,11 +465,36 @@ class Grid {
         }
         manager.logger.log(`Found ${chainOpenOrders.length} open orders on-chain.`, 'info');
 
-        // Reuse the same reconciliation policy as startup:
-        // 1) match chain orders onto grid (price+size)
-        // 2) update/create/cancel to reach configured target activeOrders
+        // Initial sync to align manager's internal tracking with current reality
+        await manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
+
+        // 3. Clear transient fund tracking but KEEP the fresh accountTotals
+        // This ensures initializeGrid uses the fresh balances we just fetched
+        manager.resetFunds();
+        manager.funds.cacheFunds = { buy: 0, sell: 0 };
+        manager.funds.btsFeesOwed = 0;
+
+        // Clear persisted state to ensure a clean slate
+        try {
+            await Grid._clearAndPersistCacheFunds(manager, 'buy');
+            await Grid._clearAndPersistCacheFunds(manager, 'sell');
+            if (manager.accountOrders && typeof manager.accountOrders.updateBtsFeesOwed === 'function') {
+                await manager.accountOrders.updateBtsFeesOwed(manager.config.botKey, 0);
+            }
+        } catch (e) {
+            manager.logger?.log?.(`Warning during cleanup: ${e.message}`, 'warn');
+        }
+
+        // 4. Initialize the new virtual grid using fresh blockchain totals
+        await Grid.initializeGrid(manager);
+        manager.logger.log('Virtual grid has been regenerated with current blockchain totals.', 'debug');
+
+        // 5. Reconcile the new grid with on-chain orders
+        // Reuse the same reconciliation policy as startup
         const { reconcileStartupOrders } = require('./startup_reconcile');
-        const syncResult = await manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
+        
+        // CRITICAL: On a full reset, we want to repurpose ALL existing on-chain orders
+        // to match the new grid EXACTLY. We pass them all as unmatched to force updates.
         await reconcileStartupOrders({
             manager,
             config,
@@ -496,7 +502,7 @@ class Grid {
             privateKey,
             chainOrders,
             chainOpenOrders,
-            syncResult,
+            syncResult: { unmatchedChainOrders: chainOpenOrders },
         });
 
         manager.logger.log('Full grid resynchronization complete.', 'info');
@@ -1391,6 +1397,198 @@ class Grid {
                 partialsMoved: spreadCorrectionOrders.partialMoves.length
             };
         }
+    }
+
+    /**
+     * Check grid structural health and handle dual-side dust recovery.
+     * 
+     * Structural Check: Logs violations of the [Edge] Virtual -> Active -> Partial -> Spread [Center] flow.
+     * Dust Recovery: If BOTH sides have a 'dust' partial order, attempts to refill them to full ACTIVE orders.
+     *
+     * @param {Object} manager - OrderManager instance
+     * @param {Function} updateOrdersOnChainBatch - Callback for broadcasting updates
+     */
+    static async checkGridHealth(manager, updateOrdersOnChainBatch = null) {
+        if (!manager) return;
+
+        const allOrders = Array.from(manager.orders.values());
+        const { GRID_LIMITS, ORDER_TYPES, ORDER_STATES } = require('../constants');
+        const dustThreshold = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE || 10;
+
+        // 1. Gather all orders and sort them by price distance from market
+        const sells = allOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price); // Lowest sell (near market) first
+        const buys = allOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => b.price - a.price);   // Highest buy (near market) first
+
+        // 2. Structural Logging (Directional Flow & Multi-Partial Check)
+        const logHealthViolations = (orders, type) => {
+            let seenActive = false;
+            let seenVirtual = false;
+            
+            // Multi-Partial Check
+            const partials = orders.filter(o => o.state === ORDER_STATES.PARTIAL);
+            if (partials.length > 1) {
+                manager.logger.log(`Grid health violation (${type}): Multiple (${partials.length}) partial orders detected on one side.`, 'warn');
+            }
+
+            // Iterate from market outwards
+            for (const o of orders) {
+                if (o.state === ORDER_STATES.ACTIVE) seenActive = true;
+                if (o.state === ORDER_STATES.VIRTUAL) {
+                    seenVirtual = true;
+                }
+                if (o.state === ORDER_STATES.ACTIVE && seenVirtual) {
+                    manager.logger.log(`Grid health violation (${type}): ACTIVE order ${o.id} is further from market than a VIRTUAL slot.`, 'warn');
+                }
+            }
+        };
+        logHealthViolations(sells, 'SELL');
+        logHealthViolations(buys, 'BUY');
+
+        // 3. Identify dust partials on each side
+        const findDustPartial = (orders, side) => {
+            const partials = orders.filter(o => o.state === ORDER_STATES.PARTIAL);
+            if (partials.length === 0) return null;
+
+            // Take the first partial
+            const p = partials[0];
+            
+            // Find the nearest ACTIVE order to compare size
+            const pIdx = orders.findIndex(o => o.id === p.id);
+            let nearestActive = null;
+            
+            // Look "inward" (closer to market)
+            for (let i = pIdx - 1; i >= 0; i--) {
+                if (orders[i].state === ORDER_STATES.ACTIVE) {
+                    nearestActive = orders[i];
+                    break;
+                }
+            }
+            // If not found, look "outward" (further from market)
+            if (!nearestActive) {
+                for (let i = pIdx + 1; i < orders.length; i++) {
+                    if (orders[i].state === ORDER_STATES.ACTIVE) {
+                        nearestActive = orders[i];
+                        break;
+                    }
+                }
+            }
+
+            if (nearestActive && nearestActive.size > 0) {
+                const ratio = (p.size / nearestActive.size) * 100;
+                
+                if (ratio < dustThreshold) {
+                    const { allocateFundsByWeights, getPrecisionForSide } = require('./utils');
+                    const sideType = side === 'buy' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+                    const precision = getPrecisionForSide(manager.assets, side);
+                    
+                    // 1. All grid positions (ACTIVE + PARTIAL + VIRTUAL)
+                    const allSlotsOnSide = orders.filter(o => 
+                        o.state === ORDER_STATES.ACTIVE || 
+                        o.state === ORDER_STATES.PARTIAL || 
+                        o.state === ORDER_STATES.VIRTUAL
+                    );
+                    
+                    // 2. Full Side Budget: everything belonging to this side of the strategy
+                    // total.grid (committed + reserved) + cacheFunds (proceeds) + available (leftovers)
+                    const sideAvail = (manager.funds.cacheFunds[side] || 0) + (manager.funds.available[side] || 0);
+                    const totalStrategyBudget = (manager.funds.total.grid[side] || 0) + sideAvail;
+                    
+                    // 3. Calculate ideal geometric sizes using the full strategy scale
+                    const weight = side === 'buy' ? manager.config.weightDistribution.buy : manager.config.weightDistribution.sell;
+                    const incrementFactor = manager.config.incrementPercent / 100;
+
+                    const idealSizes = allocateFundsByWeights(
+                        totalStrategyBudget,
+                        allSlotsOnSide.length,
+                        weight,
+                        incrementFactor,
+                        false, // ALWAYS false because index 0 is always the market side in our sorted lists
+                        0,
+                        precision
+                    );
+                    
+                    const partialIdxInSlots = allSlotsOnSide.findIndex(o => o.id === p.id);
+                    const idealTargetSize = idealSizes[partialIdxInSlots] || nearestActive.size;
+
+                    const currentCache = manager.funds.cacheFunds[side] || 0;
+                    const neededExtra = idealTargetSize - p.size;
+                    
+                    // Always return the dust object if ratio is below threshold
+                    // refillAmount will be 0 if no cache is available
+                    const refillAmount = (neededExtra > 0 && currentCache > 0) ? Math.min(neededExtra, currentCache) : 0;
+                    const targetSize = p.size + refillAmount;
+                    
+                    return { partial: p, ratio, targetSize, refillAmount, side, isDust: true };
+                }
+            }
+            return null;
+        };
+
+        const buyDust = findDustPartial(buys, 'buy');
+        const sellDust = findDustPartial(sells, 'sell');
+
+        // Log side status for visibility
+        if (buyDust) {
+            manager.logger.log(`Grid health: BUY side has dust partial ${buyDust.partial.id} (${buyDust.ratio.toFixed(1)}%, target ${buyDust.targetSize.toFixed(8)}, cache refill ${buyDust.refillAmount.toFixed(8)})`, 'info');
+        }
+
+        if (sellDust) {
+            manager.logger.log(`Grid health: SELL side has dust partial ${sellDust.partial.id} (${sellDust.ratio.toFixed(1)}%, target ${sellDust.targetSize.toFixed(8)}, cache refill ${sellDust.refillAmount.toFixed(8)})`, 'info');
+        }
+
+        // 4. Dual-Side Dust Recovery (Only if BOTH have refillable amounts)
+        if (buyDust && sellDust && buyDust.refillAmount > 0 && sellDust.refillAmount > 0) {
+            manager.logger.log(
+                `Dual-side dust detected: Attempting refill...`,
+                'info'
+            );
+
+            const ordersToRotate = [];
+            // Refill amounts are already capped to available cache in findDustPartial
+            ordersToRotate.push({
+                oldOrder: { id: buyDust.partial.id, orderId: buyDust.partial.orderId, type: ORDER_TYPES.BUY, price: buyDust.partial.price },
+                newPrice: buyDust.partial.price,
+                newSize: buyDust.targetSize,
+                newGridId: buyDust.partial.id,
+                type: ORDER_TYPES.BUY
+            });
+            ordersToRotate.push({
+                oldOrder: { id: sellDust.partial.id, orderId: sellDust.partial.orderId, type: ORDER_TYPES.SELL, price: sellDust.partial.price },
+                newPrice: sellDust.partial.price,
+                newSize: sellDust.targetSize,
+                newGridId: sellDust.partial.id,
+                type: ORDER_TYPES.SELL
+            });
+
+            if (updateOrdersOnChainBatch) {
+                try {
+                    manager.logger.log(`Broadcasting refill: Buy +${buyDust.refillAmount.toFixed(8)}, Sell +${sellDust.refillAmount.toFixed(8)}`, 'info');
+                    const result = await updateOrdersOnChainBatch({
+                        ordersToPlace: [],
+                        ordersToRotate: ordersToRotate,
+                        partialMoves: []
+                    });
+
+                    if (result && result.executed) {
+                        // Success - consume the funds from cacheFunds
+                        manager.funds.cacheFunds.buy = Math.max(0, manager.funds.cacheFunds.buy - buyDust.refillAmount);
+                        manager.funds.cacheFunds.sell = Math.max(0, manager.funds.cacheFunds.sell - sellDust.refillAmount);
+                        
+                        manager.recalculateFunds();
+                        manager.logger.log(`✓ Grid health: refilled dust orders (target: geometric size)`, 'info');
+                    }
+                } catch (err) {
+                    manager.logger.log(`✗ Error refilling dust orders: ${err.message}`, 'error');
+                }
+            }
+        } else if (buyDust || sellDust) {
+            const dustSides = [];
+            if (buyDust) dustSides.push('BUY');
+            if (sellDust) dustSides.push('SELL');
+            manager.logger.log(`Grid health: recovery skipped (dust on ${dustSides.join(' & ')} only, requires both sides)`, 'info');
+        }
+
+        return { buyDust: !!buyDust, sellDust: !!sellDust };
     }
 
     /**

@@ -235,9 +235,10 @@ class DEXBot {
                             }
                         }
 
-                        // Check spread condition after sequential rotations complete
+                        // Check spread and health after sequential rotations complete
                         if (anyRotations || allFilledOrders.length > 0) {
                             this.manager.recalculateFunds();
+                            
                             const spreadResult = await this.manager.checkSpreadCondition(
                                 this.BitShares,
                                 this.updateOrdersOnChainBatch.bind(this)
@@ -245,6 +246,14 @@ class DEXBot {
                             if (spreadResult && spreadResult.ordersPlaced > 0) {
                                 this.manager.logger.log(`✓ Spread correction after sequential fills: ${spreadResult.ordersPlaced} order(s) placed, ` +
                                     `${spreadResult.partialsMoved} partial(s) moved`, 'info');
+                                persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+                            }
+
+                            // ALWAYS check grid health after fill handling
+                            const healthResult = await this.manager.checkGridHealth(
+                                this.updateOrdersOnChainBatch.bind(this)
+                            );
+                            if (healthResult.buyDust && healthResult.sellDust) {
                                 persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
                             }
                         }
@@ -786,11 +795,6 @@ class DEXBot {
             .filter(b => b.active !== false)
             .map((b, idx) => normalizeBotEntry(b, idx));
 
-        this._log(`DEBUG ensureBotEntries: passing ${allActiveBots.length} active bot(s):`);
-        allActiveBots.forEach(bot => {
-            this._log(`  - name=${bot.name}, assetA=${bot.assetA}, assetB=${bot.assetB}, active=${bot.active}, index=${bot.botIndex}, botKey=${bot.botKey}`);
-        });
-
         await this.accountOrders.ensureBotEntries(allActiveBots);
 
         if (!this.manager) {
@@ -832,12 +836,6 @@ class DEXBot {
         // Use this.accountId which was set during initialize()
         const chainOpenOrders = this.config.dryRun ? [] : await chainOrders.readOpenOrders(this.accountId);
 
-        const debugStartup = process.env.DEBUG_STARTUP === '1';
-        if (debugStartup) {
-            this._log(`DEBUG STARTUP: chainOpenOrders.length = ${chainOpenOrders.length}`);
-            this._log(`DEBUG STARTUP: persistedGrid.length = ${persistedGrid ? persistedGrid.length : 0}`);
-        }
-
         let shouldRegenerate = false;
         if (!persistedGrid || persistedGrid.length === 0) {
             shouldRegenerate = true;
@@ -860,10 +858,6 @@ class DEXBot {
             });
             shouldRegenerate = decision.shouldRegenerate;
 
-            if (debugStartup) {
-                this._log(`DEBUG STARTUP: hasActiveMatch = ${decision.hasActiveMatch}`);
-            }
-
             if (shouldRegenerate && chainOpenOrders.length === 0) {
                 this._log('Persisted grid found, but no matching active orders on-chain. Generating new grid.');
             }
@@ -884,12 +878,11 @@ class DEXBot {
 
         if (shouldRegenerate) {
             await this.manager._initializeAssets();
-            this._log('Generating new grid.');
-            await Grid.initializeGrid(this.manager);
-
+            
             // If there are existing on-chain orders, reconcile them with the new grid
             if (Array.isArray(chainOpenOrders) && chainOpenOrders.length > 0) {
-                this._log(`Found ${chainOpenOrders.length} existing chain orders. Syncing them onto the new grid.`);
+                this._log('Generating new grid and syncing with existing on-chain orders...');
+                await Grid.initializeGrid(this.manager);
                 const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
                 await reconcileStartupOrders({
                     manager: this.manager,
@@ -902,7 +895,8 @@ class DEXBot {
                 });
             } else {
                 // No existing orders: place initial orders on-chain
-                this._log('No existing chain orders found. Placing initial orders.');
+                // placeInitialOrders() handles both Grid.initializeGrid() and broadcast
+                this._log('Generating new grid and placing initial orders on-chain...');
                 await this.placeInitialOrders();
             }
             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
@@ -1019,6 +1013,14 @@ class DEXBot {
                         `${spreadResult.partialsMoved} partial(s) moved`);
                     persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
                 }
+
+                // check grid health immediately after spread check
+                const healthResult = await this.manager.checkGridHealth(
+                    this.updateOrdersOnChainBatch.bind(this)
+                );
+                if (healthResult.buyDust && healthResult.sellDust) {
+                    persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+                }
             });
         } catch (err) {
             this._warn(`Error checking spread condition at startup: ${err.message}`);
@@ -1034,6 +1036,31 @@ class DEXBot {
             await this._fillProcessingLock.acquire(async () => {
                 this._log('Grid regeneration triggered. Performing full grid resync...');
                 try {
+                    // 1. Reload configuration from disk to pick up any changes
+                    try {
+                        const { parseJsonWithComments } = require('./account_bots');
+                        const { createBotKey } = require('./account_orders');
+                        const content = fs.readFileSync(PROFILES_BOTS_FILE, 'utf8');
+                        const allBotsConfig = parseJsonWithComments(content).bots || [];
+                        
+                        // Find this bot by name or fallback to index if name changed? 
+                        // Better: find by current name.
+                        const myName = this.config.name;
+                        const updatedBot = allBotsConfig.find(b => b.name === myName);
+                        
+                        if (updatedBot) {
+                            this._log(`Reloaded configuration for bot '${myName}'`);
+                            // Keep botKey and index if they were set
+                            const oldKey = this.config.botKey;
+                            const oldIndex = this.config.botIndex;
+                            this.config = { ...updatedBot, botKey: oldKey, botIndex: oldIndex };
+                            this.manager.config = { ...this.manager.config, ...this.config };
+                        }
+                    } catch (e) {
+                        this._warn(`Failed to reload config during resync (using current settings): ${e.message}`);
+                    }
+
+                    // 2. Perform the actual grid recalculation
                     const readFn = () => chainOrders.readOpenOrders(this.accountId);
                     await Grid.recalculateGrid(this.manager, {
                         readOpenOrdersFn: readFn,
@@ -1042,7 +1069,8 @@ class DEXBot {
                         privateKey: this.privateKey,
                         config: this.config,
                     });
-                    // Reset cacheFunds when grid is regenerated
+                    
+                    // Reset cacheFunds when grid is regenerated (already handled inside recalculateGrid, but ensure local match)
                     this.manager.funds.cacheFunds = { buy: 0, sell: 0 };
                     this.manager.funds.btsFeesOwed = 0;
                     persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
@@ -1187,6 +1215,14 @@ class DEXBot {
                         if (spreadResult.ordersPlaced > 0) {
                             this._log(`✓ Spread correction at 4h fetch: ${spreadResult.ordersPlaced} order(s) placed, ` +
                                 `${spreadResult.partialsMoved} partial(s) moved`);
+                            persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
+                        }
+
+                        // check grid health after periodic blockchain fetch
+                        const healthResult = await this.manager.checkGridHealth(
+                            this.updateOrdersOnChainBatch.bind(this)
+                        );
+                        if (healthResult.buyDust && healthResult.sellDust) {
                             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
                         }
                     }

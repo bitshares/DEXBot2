@@ -64,6 +64,10 @@ const GRID_LIMITS = Object.freeze({
     // Example: If cacheFunds.buy = 100 and total.grid.buy = 1000, ratio = 10%
     // If threshold = 5%, then 10% >= 5% triggers update for buy side only
     GRID_REGENERATION_PERCENTAGE: 3,
+    // Threshold for considering a partial order as "dust" relative to neighboring active orders.
+    // If (partial.size / nearestActive.size) * 100 < PARTIAL_DUST_THRESHOLD_PERCENTAGE, it is marked for refill.
+    // Default: 5 (5%)
+    PARTIAL_DUST_THRESHOLD_PERCENTAGE: 5,
     // Grid comparison metrics
     // Detects significant divergence between calculated (in-memory) and persisted grid state
     // after order fills and rotations
@@ -97,7 +101,7 @@ const GRID_LIMITS = Object.freeze({
 // - 'info':  Standard production output. State changes (Active/Filled), keys confirmations, and errors.
 // - 'warn':  Warnings (non-critical issues) and errors only.
 // - 'error': Critical errors only.
-const LOG_LEVEL = 'info';
+const LOG_LEVEL = 'debug';
 
 module.exports = { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL };
 

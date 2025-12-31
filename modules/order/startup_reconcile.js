@@ -88,8 +88,7 @@ async function _updateChainOrderToGrid({ chainOrders, account, privateKey, manag
         orderType: gridOrder.type,
     });
 
-    const { getAssetFees } = require('./order/utils');
-    const btsFeeData = getAssetFees('BTS', 1);
+    const btsFeeData = OrderUtils.getAssetFees('BTS', 1);
 
     // Centralized Fund Tracking: Use manager's sync core to handle state transition and fund deduction
     await manager.synchronizeWithChain({
@@ -203,8 +202,7 @@ async function _createOrderFromGrid({ chainOrders, account, privateKey, manager,
         result[0].trx.operation_results[0][1];
 
     if (chainOrderId) {
-        const { getAssetFees } = require('./order/utils');
-        const btsFeeData = getAssetFees('BTS', 1);
+        const btsFeeData = OrderUtils.getAssetFees('BTS', 1);
 
         // Centralized Fund Tracking: Use manager's sync core to handle state transition and fund deduction
         // This keeps accountBalances accurate during startup by using the same logic as synchronizeWithChain

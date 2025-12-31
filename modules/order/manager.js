@@ -593,50 +593,9 @@ class OrderManager {
             this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
         }
 
-        const bumpTotal = (key, delta) => {
-            const next = (Number(this.accountTotals[key]) || 0) + delta;
-            this.accountTotals[key] = next < 0 ? 0 : next;
-        };
-
-        // CRITICAL FIX: Calculate available BEFORE updating chainFree
-        // This prevents double-counting proceeds in cacheFunds when processFilledOrders adds both proceeds and available
-        // Store the pre-update values so processFilledOrders can use them instead of recalculating
-        const availBeforeUpdate = {
-            buy: calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders),
-            sell: calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders)
-        };
-
-        // Partial proceeds: ONLY update chain totals/free, NOT cacheFunds
-        // (cacheFunds will be updated once by processFilledOrders to avoid double-counting)
-        if (gridOrder.type === ORDER_TYPES.SELL) {
-            // SELL partial: receive quote asset; free balance rises, base total drops
-            const proceeds = fillSize * price;
-            const oldBuyFree = this.accountTotals?.buyFree || 0;
-            bumpTotal('buyFree', proceeds);
-            this.logger.log(`[chainFree update] Partial SELL fill: buyFree ${oldBuyFree.toFixed(8)} + ${proceeds.toFixed(8)} proceeds = ${this.accountTotals.buyFree.toFixed(8)} BTS`, 'debug');
-            bumpTotal('buy', proceeds);
-            bumpTotal('sell', -fillSize);
-
-            // Store pre-update available for later use in processFilledOrders
-            // This prevents the proceeds from being included twice in cacheFunds calculation
-            this._preFillAvailable = availBeforeUpdate;
-
-            this.recalculateFunds();
-        } else if (gridOrder.type === ORDER_TYPES.BUY) {
-            // BUY partial: receive base asset; free base rises, quote total drops
-            const proceeds = fillSize / price;
-            const oldSellFree = this.accountTotals?.sellFree || 0;
-            bumpTotal('sellFree', proceeds);
-            this.logger.log(`[chainFree update] Partial BUY fill: sellFree ${oldSellFree.toFixed(8)} + ${proceeds.toFixed(8)} proceeds = ${this.accountTotals.sellFree.toFixed(8)} ${this.config?.assetA}`, 'debug');
-            bumpTotal('sell', proceeds);
-            bumpTotal('buy', -fillSize);
-
-            // Store pre-update available for later use in processFilledOrders
-            // This prevents the proceeds from being included twice in cacheFunds calculation
-            this._preFillAvailable = availBeforeUpdate;
-
-            this.recalculateFunds();
-        }
+        // Partial proceeds: Internal accounting only. 
+        // We no longer update accountTotals (chain totals) here to prevent double-counting
+        // during the transition to processFilledOrders.
     }
 
     // Note: findBestMatchByPrice is available from utils; callers should pass
@@ -968,14 +927,12 @@ class OrderManager {
             let bestPriceDiff = Infinity;
 
             for (const gridOrder of this.orders.values()) {
+                // MUST match type first, but allow SPREAD slots to match either side
+                if (gridOrder.type !== chainOrder.type && gridOrder.type !== ORDER_TYPES.SPREAD) continue;
+
                 // Skip if already confirmed active on another ID
                 if ((gridOrder.state === ORDER_STATES.ACTIVE || gridOrder.state === ORDER_STATES.PARTIAL) && gridOrder.orderId && parsedChainOrders.has(gridOrder.orderId)) continue;
-                // If it's active but the ID is dead/missing, we can match. If it's VIRTUAL, we can match.
-
-                if (gridOrder.type !== chainOrder.type) continue;
-                // Skip if this grid order's orderId is still valid on chain (covered by first pass)
-                if (gridOrder.orderId && parsedChainOrders.has(gridOrder.orderId)) continue;
-
+                
                 const priceDiff = Math.abs(gridOrder.price - chainOrder.price);
 
                 // Prefer using the chain-reported size when available for a more accurate tolerance
@@ -1127,14 +1084,6 @@ class OrderManager {
 
         // Convert back to float for the rest of the logic
         const newSize = blockchainToFloat(newSizeInt, precision);
-
-        // DEBUG: Log the integer calculations
-        this.logger.log(
-            `  Integer math: currentSize=${currentSize.toFixed(8)} (${currentSizeInt} units) - ` +
-            `filledAmount=${filledAmount.toFixed(8)} (${filledAmountInt} units) = ` +
-            `newSize=${newSize.toFixed(8)} (${newSizeInt} units), precision=${precision}`,
-            'debug'
-        );
 
         if (newSizeInt <= 0) {
             // Fully filled
@@ -1474,6 +1423,15 @@ class OrderManager {
     }
 
     /**
+     * Check structural health of the grid and perform dust recovery.
+     * @param {Function} updateOrdersOnChainBatch - Optional callback for broadcasting updates
+     */
+    async checkGridHealth(updateOrdersOnChainBatch = null) {
+        const Grid = require('./grid');
+        return await Grid.checkGridHealth(this, updateOrdersOnChainBatch);
+    }
+
+    /**
      * Process filled orders and trigger rebalancing.
      * For each filled order:
      * 1. Converts directly to VIRTUAL/SPREAD placeholder (single step)
@@ -1627,15 +1585,6 @@ class OrderManager {
             }
         }
 
-        // SYNC FUND CYCLING: Calculate available BEFORE updating chainFree
-        // _adjustFunds() stores the pre-update available in this._preFillAvailable
-        // This prevents double-counting proceeds that are included in the available calculation
-        let currentAvailBuy = this._preFillAvailable?.buy || calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
-        let currentAvailSell = this._preFillAvailable?.sell || calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
-
-        // Clear the stored values after use (in case this is called multiple times)
-        this._preFillAvailable = null;
-
         // Apply proceeds directly to accountTotals so availability reflects fills immediately (no waiting for a chain refresh)
         if (!this.accountTotals) {
             this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
@@ -1652,24 +1601,24 @@ class OrderManager {
         bumpTotal('buy', deltaBuyTotal);
         bumpTotal('sell', deltaSellTotal);
 
-        // Hold proceeds + available in cacheFunds so availability reflects them through rotation
+        // Hold proceeds in cacheFunds so availability reflects them through rotation
         const proceedsBefore = { buy: this.funds.cacheFunds.buy || 0, sell: this.funds.cacheFunds.sell || 0 };
-        this.funds.cacheFunds.buy = (this.funds.cacheFunds.buy || 0) + proceedsBuy + currentAvailBuy;
-        this.funds.cacheFunds.sell = (this.funds.cacheFunds.sell || 0) + proceedsSell + currentAvailSell;
+        this.funds.cacheFunds.buy = (this.funds.cacheFunds.buy || 0) + proceedsBuy;
+        this.funds.cacheFunds.sell = (this.funds.cacheFunds.sell || 0) + proceedsSell;
 
-        this.logger.log(`Proceeds + available funds added to cacheFunds: ` +
-            `Before Buy ${proceedsBefore.buy.toFixed(8)} + fill ${proceedsBuy.toFixed(8)} + avail ${currentAvailBuy.toFixed(8)} = After ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | ` +
-            `Before Sell ${proceedsBefore.sell.toFixed(8)} + fill ${proceedsSell.toFixed(8)} + avail ${currentAvailSell.toFixed(8)} = After ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
+        this.logger.log(`Proceeds added to cacheFunds: ` +
+            `Before Buy ${proceedsBefore.buy.toFixed(8)} + fill ${proceedsBuy.toFixed(8)} = After ${(this.funds.cacheFunds.buy || 0).toFixed(8)} | ` +
+            `Before Sell ${proceedsBefore.sell.toFixed(8)} + fill ${proceedsSell.toFixed(8)} = After ${(this.funds.cacheFunds.sell || 0).toFixed(8)}`, 'info');
 
         // Note: deductBtsFees() automatically determines which side has BTS and deducts from there
         if (hasBtsPair && this.funds.btsFeesOwed > 0) {
             await this.deductBtsFees();
         }
 
+        // CRITICAL: Update internal state from the new accountTotals and cacheFunds
         this.recalculateFunds();
 
         // CRITICAL: Persist pending proceeds and BTS fees so they survive bot restart
-        // These funds from partial fills must not be lost when the bot restarts
         const proceedsPersistedOk = await this._persistCacheFunds();
         if (!proceedsPersistedOk) {
             this.logger.log(`⚠ Pending proceeds not persisted - will be held in memory and retried`, 'warn');
@@ -1683,7 +1632,7 @@ class OrderManager {
 
         if (this.logger.level === 'debug') this._logAvailable('after proceeds apply');
 
-        // Log available funds before rotation
+        // Log actual available funds after all adjustments
         this.logger.log(`Available funds before rotation: Buy ${this.funds.available.buy.toFixed(8)} | Sell ${this.funds.available.sell.toFixed(8)}`, 'info');
         this._logAvailable('before rotation');
 
