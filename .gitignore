@@ -18,6 +18,11 @@ Thumbs.db
 .idea/
 
 # Logs
+
 *.log
+
 .env.pm2
+
 .claude/
+
+/scripts/repo-stats.html
