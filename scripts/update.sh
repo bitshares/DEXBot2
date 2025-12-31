@@ -97,10 +97,10 @@ else
 fi
 
 # Step 3: Prepare working directory
-# Discard any tracked changes and untracked files (except those in .gitignore)
+# Discard any tracked changes, unmerged conflicts, and untracked files
 # Note: profiles/ and .env are protected by .gitignore and git clean -fd
-log_info "Cleaning working directory..."
-git checkout -- .
+log_info "Cleaning working directory (force reset)..."
+git reset --hard
 git clean -fd
 
 if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
