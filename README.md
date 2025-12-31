@@ -106,7 +106,7 @@ The update script automatically:
 - Installs any new dependencies
 - Reloads PM2 processes if running
 - Ensures your `profiles/` directory is protected and unchanged
-- Keeps your changes to `modules/constants.js`
+- **Preserves your local settings** stored in `profiles/general.settings.json`
 - Logs all operations to `update.log`
 
 ## 🔧 Configuration
@@ -186,17 +186,29 @@ You can run bots directly via `node dexbot.js` or the `dexbot` CLI wrapper (inst
 - `dexbot start [bot_name]` — start a specific bot (or all active bots if omitted). Respects each bot's `dryRun` setting.
 - `dexbot drystart [bot_name]` — same as `start` but forces `dryRun=true` for safe simulation.
 - `dexbot disable {all|[bot_name]}` — mark a bot (or all bots) inactive in config.
-- `dexbot reset {all|[bot_name]}` — trigger a grid reset (auto-reloads if running, or applies on next start).
+- `dexbot reset {all|[bot_name]}` — trigger a **hard reset** from the blockchain. The bot will discard local state and rebuild the grid entirely from on-chain truth.
 
 #### Configuration Management
 
 - `dexbot keys` — manage master password and keyring via `modules/chain_keys.js`.
-- `dexbot bots` — open the interactive editor in `modules/account_bots.js` to create or edit bot entries.
+- `dexbot bots` — open the **Interactive Bot Editor**. Use this to manage bot instances or adjust **General settings** (global parameters) via a menu-driven interface.
 - `dexbot --cli-examples` — print curated CLI snippets for common tasks.
 
 `dexbot` is a thin wrapper around `./dexbot.js`. You can link it for system-wide use via `npm link` or run it with `npx dexbot`.
 
 If any active bot requires `preferredAccount`, dexbot will prompt once for the master password and reuse it for subsequent bots.
+
+## ⚙️ General Settings (Global)
+
+DEXBot2 now supports global parameter management via the interactive editor (`dexbot bots`). These settings are stored in `profiles/general.settings.json` and persist across repository updates.
+
+Available Global Parameters:
+- **Grid Cache Regeneration %**: Threshold for resizing the grid when proceeds accumulate (Default: `3%`).
+- **RMS Divergence Threshold %**: Maximum allowed deviation between in-memory and persisted grid state (Default: `14.3%`).
+- **Partial Dust Threshold %**: Threshold for identifying small "dust" orders for geometric refilling (Default: `5%`).
+- **Blockchain Fetch Interval**: Frequency of full account balance refreshes (Default: `240 min`).
+- **Sync Delay**: Polling delay for blockchain synchronization (Default: `500ms`).
+- **Log lvl**: Global verbosity control (`debug`, `info`, `warn`, `error`).
 
 ### 🎯 PM2 Process Management (Recommended for Production)
 

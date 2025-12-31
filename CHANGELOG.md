@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.5.0] - 2025-12-31 - Stability Milestone: Global Terminology Migration, General Settings & Grid Health
+
+### Added
+- **Persistent General Settings**: Implemented a new architecture using `profiles/general.settings.json` for untracked user overrides.
+- **Global Settings Manager**: Added a new sub-menu to `dexbot bots` to manage global parameters (Log Level, Grid Limits, Timing).
+- **Grid Health Monitoring**: New system to monitor structural grid integrity and log violations (e.g., ACTIVE orders further from market than VIRTUAL slots).
+- **Proactive Dust Recovery**: Automatically refills small partial orders (< 5%) to ideal geometric sizes using `cacheFunds` when detected on both sides.
+- **Sequential Fill Queue**: Implemented thread-safe sequential processing of fill events using AsyncLock to prevent accounting race conditions.
+
+### Changed
+- **Global Terminology Migration**: Renamed all occurrences of `marketPrice` to `startPrice` across codebase, CLI, and documentation to better reflect its role as the grid center.
+- **Menu-Driven Bot Editor**: Refactored `modules/account_bots.js` into a sectional, menu-driven interface for faster configuration.
+- **Simplified Update Process**: Removed fragile git stashing from `update.sh` and `update-dev.sh`; user settings are now preserved via untracked JSON.
+- **Default Log Level**: Changed default `LOG_LEVEL` from `debug` to `info`.
+
+### Fixed
+- **Fund Double-Counting**: Fixed a critical bug in `processFilledOrders` where proceeds were incorrectly added to available funds twice.
+- **Startup Double-Initialization**: Resolved a race condition that could cause corrupted virtual order sizes during bot startup.
+- **Reset Reliability**: Fixed `node dexbot reset` command to ensure a true hard reset from blockchain state, including hot-reloading of `bots.json`.
+- **Module Path Corrections**: Fixed incorrect relative paths in `startup_reconcile.js` and streamlined operational logging.
+
+---
+
 **Note on v0.4.6**: This version includes a backported critical cacheFunds double-counting fix that was originally released in v0.4.7, then retagged to v0.4.6 for proper patch versioning. v0.4.7 release was deleted. Users should upgrade to v0.4.6 to fix the 649.72 BTS discrepancy issue.
 
 ---
