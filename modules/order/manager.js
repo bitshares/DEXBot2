@@ -136,6 +136,8 @@ class OrderManager {
         this._accountTotalsResolve = null;
         // Orders that need price correction on blockchain (orderId matched but price outside tolerance)
         this.ordersNeedingPriceCorrection = [];
+        // Orders marked for cancellation (surplus or outside grid range)
+        this.ordersPendingCancellation = [];
         // Shadow map: tracks orderIds -> timestamp that are currently 'in-flight'.
         // This implements Optimistic Locking with Auto-Expiration.
         this.shadowOrderIds = new Map();
@@ -904,9 +906,11 @@ class OrderManager {
         const updatedOrders = [];
         const ordersNeedingCorrection = [];
         const chainOrderIdsOnGrid = new Set();
+        const matchedGridOrderIds = new Set();  // Track grid slots already matched to prevent reassignment
 
-        // Clear previous correction list
+        // Clear previous correction and cancellation lists
         this.ordersNeedingPriceCorrection = [];
+        this.ordersPendingCancellation = [];
 
         // First pass: Match by orderId and check price tolerance
         for (const gridOrder of this.orders.values()) {
@@ -919,6 +923,7 @@ class OrderManager {
                 // Order still exists on chain - check price tolerance
                 // Mark as ACTIVE now that we confirmed it's on chain
                 gridOrder.state = ORDER_STATES.ACTIVE;
+                matchedGridOrderIds.add(gridOrder.id);  // This grid slot is now claimed by this chain order
 
                 const toleranceCheck = checkPriceWithinTolerance(gridOrder, chainOrder, this.assets);
 
@@ -1019,9 +1024,12 @@ class OrderManager {
                 // MUST match type first, but allow SPREAD slots to match either side
                 if (gridOrder.type !== chainOrder.type && gridOrder.type !== ORDER_TYPES.SPREAD) continue;
 
+                // SKIP if this grid slot is already matched to another chain order (ONE-TO-ONE mapping)
+                if (matchedGridOrderIds.has(gridOrder.id)) continue;
+
                 // Skip if already confirmed active on another ID
                 if ((gridOrder.state === ORDER_STATES.ACTIVE || gridOrder.state === ORDER_STATES.PARTIAL) && gridOrder.orderId && parsedChainOrders.has(gridOrder.orderId)) continue;
-                
+
                 const priceDiff = Math.abs(gridOrder.price - chainOrder.price);
 
                 // Prefer using the chain-reported size when available for a more accurate tolerance
@@ -1052,6 +1060,8 @@ class OrderManager {
                 this.logger.log(`Order ${bestMatch.id}: Found matching open order ${chainOrderId} (diff=${bestPriceDiff.toFixed(8)}). Syncing...`, 'info');
                 bestMatch.orderId = chainOrderId;
                 bestMatch.state = ORDER_STATES.ACTIVE;
+                matchedGridOrderIds.add(bestMatch.id);  // Mark this grid slot as matched (ONE-TO-ONE mapping)
+
                 // Update size from chain but NEVER update price
                 const oldSize = Number(bestMatch.size || 0);
                 const newSize = Number(chainOrder.size || 0);
@@ -1061,6 +1071,21 @@ class OrderManager {
                 const newInt = floatToBlockchainInt(newSize, precision);
                 if (oldInt !== newInt) {
                     applyChainSizeToGridOrder(this, bestMatch, newSize);
+                    // Transition to PARTIAL if size changed and has remainder
+                    if (newInt > 0) {
+                        if (bestMatch.state === ORDER_STATES.ACTIVE) {
+                            bestMatch.state = ORDER_STATES.PARTIAL;
+                            this.logger.log(`Order ${bestMatch.id}: transitioned to PARTIAL with remaining size ${newSize.toFixed(8)}`, 'debug');
+                        }
+                    } else {
+                        // Fully filled - convert to SPREAD placeholder
+                        bestMatch.type = ORDER_TYPES.SPREAD;
+                        bestMatch.state = ORDER_STATES.VIRTUAL;
+                        bestMatch.size = 0;
+                        bestMatch.orderId = null;
+                        filledOrders.push({ ...bestMatch });
+                        this.logger.log(`Order ${bestMatch.id}: fully filled during sync, converted to SPREAD placeholder`, 'debug');
+                    }
                 }
                 this._updateOrder(bestMatch);
                 updatedOrders.push(bestMatch);
@@ -1078,6 +1103,135 @@ class OrderManager {
         // Log summary of orders needing correction
         if (ordersNeedingCorrection.length > 0) {
             this.logger.log(`${ordersNeedingCorrection.length} order(s) need price correction on blockchain`, 'warn');
+        }
+
+        // === POST-SYNC: Handle surplus orders and target matching ===
+
+        // Count matched active orders by type
+        const matchedBuyOrders = Array.from(matchedGridOrderIds)
+            .map(id => this.orders.get(id))
+            .filter(o => o && (o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) && o.type === ORDER_TYPES.BUY);
+        const matchedSellOrders = Array.from(matchedGridOrderIds)
+            .map(id => this.orders.get(id))
+            .filter(o => o && (o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) && o.type === ORDER_TYPES.SELL);
+
+        const targetBuy = this.config.activeOrders?.buy || 0;
+        const targetSell = this.config.activeOrders?.sell || 0;
+
+        this.logger.log(
+            `Post-sync counts: BUY ${matchedBuyOrders.length}/${targetBuy}, SELL ${matchedSellOrders.length}/${targetSell}. ` +
+            `Matched grid slots: ${matchedGridOrderIds.size}, Unmatched chain orders: ${parsedChainOrders.size - chainOrderIdsOnGrid.size}`,
+            'info'
+        );
+
+        // Find unmatched chain orders (those without matching grid slots)
+        const unmatchedChainOrders = Array.from(parsedChainOrders.values())
+            .filter(co => !chainOrderIdsOnGrid.has(co.orderId));
+
+        // === Handle BUY side ===
+        if (matchedBuyOrders.length < targetBuy && unmatchedChainOrders.length > 0) {
+            // Below target: match unmatched orders to HIGHEST virtual BUY slot (premium position)
+            const highestVirtualBuy = Array.from(this.orders.values())
+                .filter(o => o.type === ORDER_TYPES.BUY && o.state === ORDER_STATES.VIRTUAL && !matchedGridOrderIds.has(o.id))
+                .sort((a, b) => b.price - a.price)[0];  // Highest price = best bid
+
+            if (highestVirtualBuy) {
+                // Match unmatched BUY orders to this premium slot
+                const buyOrdersToMatch = unmatchedChainOrders.filter(co => co.type === ORDER_TYPES.BUY);
+                if (buyOrdersToMatch.length > 0 && matchedBuyOrders.length < targetBuy) {
+                    const chainBuy = buyOrdersToMatch[0];
+                    this.logger.log(
+                        `Below target for BUY (${matchedBuyOrders.length}/${targetBuy}): ` +
+                        `Matching chain order ${chainBuy.orderId} to premium grid slot ${highestVirtualBuy.id}`,
+                        'info'
+                    );
+                    highestVirtualBuy.orderId = chainBuy.orderId;
+                    highestVirtualBuy.state = ORDER_STATES.ACTIVE;
+                    highestVirtualBuy.size = chainBuy.size;
+                    matchedGridOrderIds.add(highestVirtualBuy.id);
+                    chainOrderIdsOnGrid.add(chainBuy.orderId);
+                    this._updateOrder(highestVirtualBuy);
+                    updatedOrders.push(highestVirtualBuy);
+                }
+            }
+        } else if (matchedBuyOrders.length > targetBuy) {
+            // Above target: mark worst BUY matches for cancellation
+            const buyOrdersByPriceDiff = matchedBuyOrders
+                .map(o => ({
+                    order: o,
+                    priceDiff: Math.abs(o.price - parsedChainOrders.get(o.orderId)?.price || 0)
+                }))
+                .sort((a, b) => b.priceDiff - a.priceDiff);  // Worst first (highest diff)
+
+            const surplusBuyCount = matchedBuyOrders.length - targetBuy;
+            for (let i = 0; i < surplusBuyCount && i < buyOrdersByPriceDiff.length; i++) {
+                const buyOrder = buyOrdersByPriceDiff[i].order;
+                this.logger.log(
+                    `Surplus BUY order: ${buyOrder.orderId} (diff=${buyOrdersByPriceDiff[i].priceDiff.toFixed(8)}). ` +
+                    `Marking for cancellation (${i + 1}/${surplusBuyCount}).`,
+                    'warn'
+                );
+                this.ordersPendingCancellation.push({
+                    orderId: buyOrder.orderId,
+                    gridOrderId: buyOrder.id,
+                    type: ORDER_TYPES.BUY,
+                    reason: 'surplus',
+                    priceDiff: buyOrdersByPriceDiff[i].priceDiff
+                });
+            }
+        }
+
+        // === Handle SELL side ===
+        if (matchedSellOrders.length < targetSell && unmatchedChainOrders.length > 0) {
+            // Below target: match unmatched orders to LOWEST virtual SELL slot (premium position)
+            const lowestVirtualSell = Array.from(this.orders.values())
+                .filter(o => o.type === ORDER_TYPES.SELL && o.state === ORDER_STATES.VIRTUAL && !matchedGridOrderIds.has(o.id))
+                .sort((a, b) => a.price - b.price)[0];  // Lowest price = best ask
+
+            if (lowestVirtualSell) {
+                // Match unmatched SELL orders to this premium slot
+                const sellOrdersToMatch = unmatchedChainOrders.filter(co => co.type === ORDER_TYPES.SELL);
+                if (sellOrdersToMatch.length > 0 && matchedSellOrders.length < targetSell) {
+                    const chainSell = sellOrdersToMatch[0];
+                    this.logger.log(
+                        `Below target for SELL (${matchedSellOrders.length}/${targetSell}): ` +
+                        `Matching chain order ${chainSell.orderId} to premium grid slot ${lowestVirtualSell.id}`,
+                        'info'
+                    );
+                    lowestVirtualSell.orderId = chainSell.orderId;
+                    lowestVirtualSell.state = ORDER_STATES.ACTIVE;
+                    lowestVirtualSell.size = chainSell.size;
+                    matchedGridOrderIds.add(lowestVirtualSell.id);
+                    chainOrderIdsOnGrid.add(chainSell.orderId);
+                    this._updateOrder(lowestVirtualSell);
+                    updatedOrders.push(lowestVirtualSell);
+                }
+            }
+        } else if (matchedSellOrders.length > targetSell) {
+            // Above target: mark worst SELL matches for cancellation
+            const sellOrdersByPriceDiff = matchedSellOrders
+                .map(o => ({
+                    order: o,
+                    priceDiff: Math.abs(o.price - parsedChainOrders.get(o.orderId)?.price || 0)
+                }))
+                .sort((a, b) => b.priceDiff - a.priceDiff);  // Worst first (highest diff)
+
+            const surplusSellCount = matchedSellOrders.length - targetSell;
+            for (let i = 0; i < surplusSellCount && i < sellOrdersByPriceDiff.length; i++) {
+                const sellOrder = sellOrdersByPriceDiff[i].order;
+                this.logger.log(
+                    `Surplus SELL order: ${sellOrder.orderId} (diff=${sellOrdersByPriceDiff[i].priceDiff.toFixed(8)}). ` +
+                    `Marking for cancellation (${i + 1}/${surplusSellCount}).`,
+                    'warn'
+                );
+                this.ordersPendingCancellation.push({
+                    orderId: sellOrder.orderId,
+                    gridOrderId: sellOrder.id,
+                    type: ORDER_TYPES.SELL,
+                    reason: 'surplus',
+                    priceDiff: sellOrdersByPriceDiff[i].priceDiff
+                });
+            }
         }
 
         return { filledOrders, updatedOrders, ordersNeedingCorrection };
