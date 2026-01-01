@@ -1362,6 +1362,33 @@ class OrderManager {
                 updatedOrder.orderId = orderId;
             }
 
+            // ANCHOR & REFILL: Handle delayed rotation for Case A (Dust Refill)
+            // When this order is marked as isDoubleOrder (dust refilled), check if fill threshold is met
+            if (updatedOrder.isDoubleOrder && updatedOrder.mergedDustSize) {
+                const mergedDustSize = Number(updatedOrder.mergedDustSize);
+                const totalFilled = filledAmount; // Accumulated fills tracked by manager elsewhere
+
+                // Check if we've filled enough to justify rotating the opposite side
+                if (totalFilled >= mergedDustSize) {
+                    this.logger.log(
+                        `[DELAYED ROTATION TRIGGERED] Order ${updatedOrder.id}: totalFilled=${formatOrderSize(totalFilled)} >= mergedDustSize=${formatOrderSize(mergedDustSize)}. ` +
+                        `Stripping isDoubleOrder flag and enabling rotation on opposite side.`,
+                        'info'
+                    );
+
+                    // Strip the double order marker to allow rotation to proceed
+                    updatedOrder.isDoubleOrder = false;
+                    updatedOrder.pendingRotation = false;
+                    // Note: mergedDustSize is kept for divergence calculations
+                } else {
+                    this.logger.log(
+                        `[DELAYED ROTATION PENDING] Order ${updatedOrder.id}: totalFilled=${formatOrderSize(totalFilled)} < mergedDustSize=${formatOrderSize(mergedDustSize)}. ` +
+                        `Rotation still pending. ${formatOrderSize(mergedDustSize - totalFilled)} more needed.`,
+                        'debug'
+                    );
+                }
+            }
+
             updatedOrders.push(updatedOrder);
             partialFill = true;
         }
@@ -2059,8 +2086,98 @@ class OrderManager {
             const reservedGridIds = new Set();
             const moveInfo = this.preparePartialOrderMove(partialOrders[0], partialMoveSlots, reservedGridIds);
             if (moveInfo) {
-                partialMoves.push(moveInfo);
-                this.logger.log(`Prepared partial ${oppositeType} move: ${moveInfo.partialOrder.id} -> ${moveInfo.newGridId}`, 'debug');
+                // NEW: Branching by Size - Case A (Dust) vs Case B (Substantial)
+                const isAnchorDecision = this._evaluatePartialOrderAnchor(partialOrders[0], moveInfo);
+
+                if (isAnchorDecision.isDust) {
+                    // Case A: Dust Refill - Merge dust into new allocation, delay rotation
+                    const mergedDustSize = partialOrders[0].size;
+                    const newSize = isAnchorDecision.idealSize + mergedDustSize;
+
+                    this.logger.log(
+                        `[DUST REFILL] Partial ${oppositeType} ${partialOrders[0].id}: size=${partialOrders[0].size.toFixed(8)} ` +
+                        `is ${(isAnchorDecision.percentOfIdeal * 100).toFixed(1)}% of ideal=${isAnchorDecision.idealSize.toFixed(8)}. ` +
+                        `Merging dust into new geometric allocation. New size: ${newSize.toFixed(8)}`,
+                        'info'
+                    );
+
+                    // CRITICAL: Upgrade the partial order size to ideal + dust
+                    // This ensures the partial order grows to absorb the merged dust
+                    moveInfo.partialOrder.size = newSize;
+                    this._updateOrder(moveInfo.partialOrder);
+
+                    // Mark partial order for dust refill (no move, just anchor in place)
+                    const dustRefillInfo = {
+                        partialOrder: moveInfo.partialOrder,
+                        isDustRefill: true,
+                        isDoubleOrder: true,
+                        mergedDustSize: mergedDustSize,
+                        idealSize: isAnchorDecision.idealSize,
+                        newGridId: moveInfo.newGridId,
+                        newPrice: moveInfo.newPrice,
+                        pendingRotation: true, // Set now - wait for fill threshold before rotating opposite side
+                        vacatedGridId: moveInfo.vacatedGridId,
+                        vacatedPrice: moveInfo.vacatedPrice
+                    };
+                    partialMoves.push(dustRefillInfo);
+                } else {
+                    // Case B: Full Anchor + Residual - Anchor to 100% ideal, create residual order
+                    const idealSize = isAnchorDecision.idealSize;
+
+                    this.logger.log(
+                        `[FULL ANCHOR] Partial ${oppositeType} ${partialOrders[0].id}: size=${partialOrders[0].size.toFixed(8)} ` +
+                        `is ${(isAnchorDecision.percentOfIdeal * 100).toFixed(1)}% of ideal=${idealSize.toFixed(8)}. ` +
+                        `Anchoring to full ideal size and creating residual order.`,
+                        'info'
+                    );
+
+                    // CRITICAL: Upgrade the partial order size to idealSize
+                    // This anchors the order to exactly 100% of the geometric ideal
+                    moveInfo.partialOrder.size = idealSize;
+                    this._updateOrder(moveInfo.partialOrder);
+
+                    // Calculate residual capital for new order at spread
+                    const residualCapital = isAnchorDecision.residualCapital;
+
+                    partialMoves.push(moveInfo);
+
+                    // If there's residual capital, create a new order at the spread
+                    if (residualCapital > 0) {
+                        // Find the spread price (closest to market on opposite side)
+                        const { ORDER_STATES } = require('../constants');
+                        const spreadOrders = Array.from(this.orders.values())
+                            .filter(o => o.type === oppositeType && o.state === ORDER_STATES.SPREAD);
+                        const spreadPrice = spreadOrders.length > 0
+                            ? (oppositeType === ORDER_TYPES.BUY
+                                ? Math.max(...spreadOrders.map(o => o.price))
+                                : Math.min(...spreadOrders.map(o => o.price)))
+                            : moveInfo.newPrice;
+
+                        // Size the residual order
+                        const precision = getPrecisionForSide(this.assets, side);
+                        const { floatToBlockchainInt, blockchainToFloat } = require('./utils');
+                        const residualSize = residualCapital / spreadPrice;
+                        const quantizedResidualSize = blockchainToFloat(floatToBlockchainInt(residualSize, precision), precision);
+
+                        if (quantizedResidualSize > 0) {
+                            const residualOrder = {
+                                id: null, // Will be assigned when placed on-chain
+                                type: oppositeType,
+                                price: spreadPrice,
+                                size: quantizedResidualSize,
+                                state: ORDER_STATES.VIRTUAL,
+                                isResidualFromAnchor: true,
+                                anchoredFromPartialId: partialOrders[0].id
+                            };
+                            ordersToPlace.push(residualOrder);
+                            this.logger.log(
+                                `[RESIDUAL ORDER] Created residual ${oppositeType} order at spread price ${spreadPrice.toFixed(4)}, ` +
+                                `size ${quantizedResidualSize.toFixed(8)} from capital ${residualCapital.toFixed(8)}`,
+                                'info'
+                            );
+                        }
+                    }
+                }
             }
         } else if (partialOrders.length > 1) {
             this.logger.log(`WARNING: ${partialOrders.length} partial ${oppositeType} orders exist - skipping partial move`, 'warn');
@@ -2627,6 +2744,68 @@ class OrderManager {
      * @param {Set} reservedGridIds - Grid IDs that will be consumed by rotations/placements in this batch (avoid landing here)
      * @returns {Object|null} Move info { partialOrder, newGridId, newPrice, newMinToReceive } or null if cannot move
      */
+
+    /**
+     * Evaluate whether a partial order should be treated as "Dust" or "Substantial".
+     * Used for the Anchor & Refill strategy to decide between:
+     * - Dust (<5% of ideal): Merge into new allocation with delayed rotation
+     * - Substantial (>=5% of ideal): Anchor to 100% ideal and create residual order
+     *
+     * @param {Object} partialOrder - The partial order to evaluate
+     * @param {Object} moveInfo - Move info from preparePartialOrderMove with target grid info
+     * @returns {Object} Decision info { isDust: boolean, idealSize: number, percentOfIdeal: number, residualCapital?: number }
+     */
+    _evaluatePartialOrderAnchor(partialOrder, moveInfo) {
+        if (!moveInfo || !moveInfo.targetGridOrder) {
+            return { isDust: true, idealSize: 0, percentOfIdeal: 0 };
+        }
+
+        const idealSize = moveInfo.targetGridOrder.size || 0;
+        const partialSize = partialOrder.size || 0;
+
+        if (idealSize <= 0) {
+            this.logger.log(`Cannot evaluate partial order ${partialOrder.id}: target grid slot has no ideal size`, 'warn');
+            return { isDust: true, idealSize, percentOfIdeal: 0 };
+        }
+
+        const percentOfIdeal = partialSize / idealSize;
+        const DUST_THRESHOLD = 0.05; // 5% threshold
+
+        if (percentOfIdeal < DUST_THRESHOLD) {
+            // Case A: Dust
+            return {
+                isDust: true,
+                idealSize,
+                percentOfIdeal,
+                mergedDustSize: partialSize
+            };
+        } else {
+            // Case B: Substantial
+            // Calculate residual capital: what's left over after anchoring to ideal
+            let residualCapital = 0;
+
+            if (partialOrder.type === ORDER_TYPES.SELL) {
+                // SELL: partial is in base asset, will receive quote asset
+                // Residual = (current_partial_size - ideal_size) * new_price
+                const extraSize = Math.max(0, partialSize - idealSize);
+                residualCapital = extraSize * moveInfo.newPrice;
+            } else {
+                // BUY: partial is in quote asset, will receive base asset
+                // Residual = (current_partial_quote - ideal_quote) = (size - idealSize) in quote terms
+                const extraQuote = Math.max(0, partialSize - idealSize);
+                residualCapital = extraQuote;
+            }
+
+            return {
+                isDust: false,
+                idealSize,
+                percentOfIdeal,
+                newSize: idealSize,
+                residualCapital: Math.max(0, residualCapital)
+            };
+        }
+    }
+
     preparePartialOrderMove(partialOrder, gridSlotsToMove, reservedGridIds = new Set()) {
         if (!partialOrder || gridSlotsToMove <= 0) return null;
 

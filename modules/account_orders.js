@@ -609,7 +609,8 @@ class AccountOrders {
     // Preserve orderId for both ACTIVE and PARTIAL orders
     const shouldHaveId = order.state === ORDER_STATES.ACTIVE || order.state === ORDER_STATES.PARTIAL;
     const orderId = shouldHaveId ? (order.orderId || order.id || '') : '';
-    return {
+
+    const serialized = {
       id: order.id || null,
       type: order.type || null,
       state: order.state || null,
@@ -617,6 +618,27 @@ class AccountOrders {
       size: Number.isFinite(sizeValue) ? sizeValue : 0,
       orderId
     };
+
+    // NEW: Persist Anchor & Refill strategy fields
+    // isDoubleOrder: marks partial orders that have merged dust (Case A: Dust Refill)
+    if (order.isDoubleOrder) {
+      serialized.isDoubleOrder = true;
+    }
+
+    // mergedDustSize: amount of dust merged into this order's new allocation
+    if (order.mergedDustSize !== undefined && order.mergedDustSize !== null) {
+      const mergedDustValue = Number(order.mergedDustSize);
+      if (Number.isFinite(mergedDustValue) && mergedDustValue > 0) {
+        serialized.mergedDustSize = mergedDustValue;
+      }
+    }
+
+    // pendingRotation: marks when rotation is delayed until fill threshold is reached
+    if (order.pendingRotation) {
+      serialized.pendingRotation = true;
+    }
+
+    return serialized;
   }
 }
 

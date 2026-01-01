@@ -468,6 +468,21 @@ class DEXBot {
         const createAndSyncOrder = async (order) => {
             this.manager.logger.log(`Placing ${order.type} order: size=${order.size}, price=${order.price}`, 'debug');
             const args = buildCreateOrderArgs(order, assetA, assetB);
+
+            // CRITICAL: Update order size in manager if buildCreateOrderArgs quantized it
+            // This ensures the order object matches what was actually placed on blockchain
+            if (args.amountToSell !== order.size) {
+                const gridOrder = this.manager.orders.get(order.id);
+                if (gridOrder) {
+                    gridOrder.size = args.amountToSell;
+                    this.manager._updateOrder(gridOrder);
+                    this.manager.logger.log(
+                        `Order ${order.id} size quantized: ${order.size} -> ${args.amountToSell}`,
+                        'debug'
+                    );
+                }
+            }
+
             const result = await chainOrders.createOrder(
                 this.account, this.privateKey, args.amountToSell, args.sellAssetId,
                 args.minToReceive, args.receiveAssetId, null, false
@@ -571,6 +586,15 @@ class DEXBot {
             if (partialMoves && partialMoves.length > 0) {
                 for (const moveInfo of partialMoves) {
                     try {
+                        // Skip Dust Refill orders - they don't move on-chain, just marked in-memory
+                        if (moveInfo.isDustRefill) {
+                            this.manager.logger.log(
+                                `[DUST REFILL] Skipping chain update for partial ${moveInfo.partialOrder.orderId} - marked for merged allocation`,
+                                'debug'
+                            );
+                            continue;
+                        }
+
                         const { partialOrder, newPrice } = moveInfo;
                         if (!partialOrder.orderId) continue;
 

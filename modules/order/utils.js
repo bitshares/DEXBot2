@@ -1410,22 +1410,34 @@ async function applyGridDivergenceCorrections(manager, accountOrders, botKey, up
  * Build create order arguments from an order object and asset information.
  * Handles both SELL and BUY orders, calculating appropriate amounts based on order type.
  *
+ * PRECISION FIX: Quantizes order size to blockchain precision BEFORE placement.
+ * This ensures no off-by-one errors between calculated size and blockchain storage.
+ *
  * @param {Object} order - Order object with type, size, and price
  * @param {Object} assetA - Base asset object with id property
  * @param {Object} assetB - Quote asset object with id property
  * @returns {Object} - { amountToSell, sellAssetId, minToReceive, receiveAssetId }
  */
 function buildCreateOrderArgs(order, assetA, assetB) {
+    // CRITICAL: Quantize order size to blockchain precision BEFORE placing
+    // This ensures no off-by-one errors between calculated size and blockchain storage
+    const precision = (order.type === 'sell')
+        ? (assetA?.precision ?? 8)
+        : (assetB?.precision ?? 8);
+
+    // Convert to blockchain int and back to ensure exact precision match
+    const quantizedSize = blockchainToFloat(floatToBlockchainInt(order.size, precision), precision);
+
     let amountToSell, sellAssetId, minToReceive, receiveAssetId;
     if (order.type === 'sell') {
-        amountToSell = order.size;
+        amountToSell = quantizedSize;
         sellAssetId = assetA.id;
-        minToReceive = order.size * order.price;
+        minToReceive = quantizedSize * order.price;
         receiveAssetId = assetB.id;
     } else {
-        amountToSell = order.size;
+        amountToSell = quantizedSize;
         sellAssetId = assetB.id;
-        minToReceive = order.size / order.price;
+        minToReceive = quantizedSize / order.price;
         receiveAssetId = assetA.id;
     }
     return { amountToSell, sellAssetId, minToReceive, receiveAssetId };
@@ -1530,14 +1542,32 @@ function mapOrderSizes(orders) {
  * @returns {number} Count of ACTIVE + PARTIAL orders of the given type
  */
 function countOrdersByType(orderType, ordersMap) {
-    const { ORDER_STATES } = require('../constants');
+    const { ORDER_STATES, ORDER_TYPES } = require('../constants');
     if (!ordersMap || ordersMap.size === 0) return 0;
 
     let count = 0;
+    let hasOppositeWithPendingRotation = false;
+
+    // First pass: check if opposite side has pendingRotation markers (delayed rotation for dust refill)
+    const oppositeType = orderType === ORDER_TYPES.BUY ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
     for (const order of ordersMap.values()) {
-        if (order.type === orderType &&
-            (order.state === ORDER_STATES.ACTIVE || order.state === ORDER_STATES.PARTIAL)) {
-            count++;
+        if (order.type === oppositeType && order.pendingRotation) {
+            hasOppositeWithPendingRotation = true;
+            break;
+        }
+    }
+
+    // Second pass: count active/partial orders of target type
+    // PENDING-AWARE: If opposite side has pending rotation, also count virtual orders
+    // on this side as "effective active" (they're waiting to activate as rotation partners)
+    for (const order of ordersMap.values()) {
+        if (order.type === orderType) {
+            if (order.state === ORDER_STATES.ACTIVE || order.state === ORDER_STATES.PARTIAL) {
+                count++;
+            } else if (hasOppositeWithPendingRotation && order.state === ORDER_STATES.VIRTUAL) {
+                // Count virtual orders as virtual representatives of the active orders on opposite side
+                count++;
+            }
         }
     }
     return count;
@@ -1900,20 +1930,26 @@ function calculateGridSideDivergenceMetric(calculatedOrders, persistedOrders, si
         if (persOrder) {
             // Matched by ID: compare sizes
             const calcSize = Number(calcOrder.size) || 0;
-            const persSize = Number(persOrder.size) || 0;
+            let comparisonTarget = Number(persOrder.size) || 0;
 
-            if (persSize > 0) {
+            // DOUBLE-AWARE: If this order has merged dust, the expected size is ideal + dust
+            if (persOrder.isDoubleOrder && persOrder.mergedDustSize) {
+                comparisonTarget = (Number(persOrder.size) || 0) + (Number(persOrder.mergedDustSize) || 0);
+            }
+
+            if (comparisonTarget > 0) {
                 // Normal relative difference when both sizes are positive
-                const relativeDiff = (calcSize - persSize) / persSize;
+                const relativeDiff = (calcSize - comparisonTarget) / comparisonTarget;
                 const relativePercent = Math.abs(relativeDiff) * 100;
 
                 // Track large deviations for debugging
                 if (relativePercent > 10) {  // More than 10% different
                     largeDeviations.push({
                         id: calcOrder.id,
-                        persSize: persSize.toFixed(8),
+                        persSize: comparisonTarget.toFixed(8),
                         calcSize: calcSize.toFixed(8),
-                        percentDiff: relativePercent.toFixed(2)
+                        percentDiff: relativePercent.toFixed(2),
+                        isDoubleOrder: persOrder.isDoubleOrder ? 'true' : 'false'
                     });
                 }
 
