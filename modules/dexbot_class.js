@@ -1273,6 +1273,25 @@ class DEXBot {
                     this._log(`Fetching blockchain account values (interval: every ${intervalMin}min)`);
                     await this.manager.fetchAccountTotals(this.accountId);
 
+                    // Sync with current on-chain orders to detect divergence
+                    let chainOpenOrders = [];
+                    if (!this.config.dryRun) {
+                        try {
+                            chainOpenOrders = await chainOrders.readOpenOrders(this.accountId);
+                            const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'periodicBlockchainFetch');
+
+                            // Log divergence summary
+                            if (syncResult.unmatchedGridOrders && syncResult.unmatchedGridOrders.length > 0) {
+                                this._log(`Periodic sync: ${syncResult.unmatchedGridOrders.length} grid order(s) not found on chain (treating as filled)`, 'warn');
+                            }
+                            if (syncResult.unmatchedChainOrders && syncResult.unmatchedChainOrders.length > 0) {
+                                this._log(`Periodic sync: ${syncResult.unmatchedChainOrders.length} chain order(s) not in grid (surplus/divergence)`, 'warn');
+                            }
+                        } catch (err) {
+                            this._warn(`Error reading open orders during periodic fetch: ${err.message}`);
+                        }
+                    }
+
                     // Check if newly fetched blockchain funds trigger a grid update
                     if (this.manager && this.manager.orders && this.manager.orders.size > 0) {
                         const gridCheckResult = Grid.checkAndUpdateGridIfNeeded(this.manager, this.manager.funds.cacheFunds);
