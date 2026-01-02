@@ -707,7 +707,15 @@ class StrategyEngine {
 
         const targetGridOrder = mgr.orders.get(newGridId);
         if (targetGridOrder) {
-            const newState = partialOrder.size >= (targetGridOrder.size || 0) ? ORDER_STATES.ACTIVE : ORDER_STATES.PARTIAL;
+            // Use blockchain integer precision for state determination (consistent with rest of system)
+            const { floatToBlockchainInt } = require('./utils');
+            const precision = (partialOrder.type === ORDER_TYPES.SELL)
+                ? mgr.assets?.assetA?.precision || 5
+                : mgr.assets?.assetB?.precision || 5;
+            const partialInt = floatToBlockchainInt(partialOrder.size, precision);
+            const idealInt = floatToBlockchainInt(targetGridOrder.size || 0, precision);
+            const newState = partialInt >= idealInt ? ORDER_STATES.ACTIVE : ORDER_STATES.PARTIAL;
+
             const updatedNew = {
                 ...targetGridOrder, ...partialOrder, type: partialOrder.type,
                 state: newState, orderId: partialOrder.orderId, size: partialOrder.size, price: newPrice

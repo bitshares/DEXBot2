@@ -335,12 +335,18 @@ class SyncEngine {
         switch (source) {
             case 'createOrder': {
                 const { gridOrderId, chainOrderId, isPartialPlacement, fee } = chainData;
-                const gridOrder = mgr.orders.get(gridOrderId);
-                if (gridOrder) {
-                    const newState = isPartialPlacement ? ORDER_STATES.PARTIAL : ORDER_STATES.ACTIVE;
-                    const updatedOrder = { ...gridOrder, state: newState, orderId: chainOrderId };
-                    mgr.accountant.updateOptimisticFreeBalance(gridOrder, updatedOrder, 'createOrder', fee);
-                    mgr._updateOrder(updatedOrder);
+                // Lock order to prevent concurrent modifications during state transition
+                mgr.lockOrders([gridOrderId]);
+                try {
+                    const gridOrder = mgr.orders.get(gridOrderId);
+                    if (gridOrder) {
+                        const newState = isPartialPlacement ? ORDER_STATES.PARTIAL : ORDER_STATES.ACTIVE;
+                        const updatedOrder = { ...gridOrder, state: newState, orderId: chainOrderId };
+                        mgr.accountant.updateOptimisticFreeBalance(gridOrder, updatedOrder, 'createOrder', fee);
+                        mgr._updateOrder(updatedOrder);
+                    }
+                } finally {
+                    mgr.unlockOrders([gridOrderId]);
                 }
                 break;
             }
@@ -348,9 +354,20 @@ class SyncEngine {
                 const orderId = chainData;
                 const gridOrder = findMatchingGridOrderByOpenOrder({ orderId }, { orders: mgr.orders, ordersByState: mgr._ordersByState, assets: mgr.assets, calcToleranceFn: (p, s, t) => calculatePriceTolerance(p, s, t, mgr.assets), logger: mgr.logger });
                 if (gridOrder) {
-                    const updatedOrder = { ...gridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
-                    mgr.accountant.updateOptimisticFreeBalance(gridOrder, updatedOrder, 'cancelOrder');
-                    mgr._updateOrder(updatedOrder);
+                    // Lock both chain orderId and grid order ID to prevent concurrent modifications
+                    const orderIds = [orderId, gridOrder.id].filter(Boolean);
+                    mgr.lockOrders(orderIds);
+                    try {
+                        // Re-fetch to ensure we have latest state after acquiring lock
+                        const currentGridOrder = mgr.orders.get(gridOrder.id);
+                        if (currentGridOrder && currentGridOrder.orderId === orderId) {
+                            const updatedOrder = { ...currentGridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
+                            mgr.accountant.updateOptimisticFreeBalance(currentGridOrder, updatedOrder, 'cancelOrder');
+                            mgr._updateOrder(updatedOrder);
+                        }
+                    } finally {
+                        mgr.unlockOrders(orderIds);
+                    }
                 }
                 break;
             }
