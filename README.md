@@ -506,11 +506,12 @@ BOT_NAME=my-bot RUN_LOOP_MS=3000 node dexbot.js
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+1. Fork the repository and create a feature branch
+2. Make your changes and test with `npm test`
+3. For Jest tests: `./scripts/dev-install.sh` then `npm run test:unit`
+4. Submit a pull request
+
+**Development Setup:** `npm install` then optionally `./scripts/dev-install.sh` for Jest testing framework
 
 ## 📄 License
 
