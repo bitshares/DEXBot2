@@ -38,16 +38,7 @@ const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVE
 const { parsePercentageString, blockchainToFloat, floatToBlockchainInt, resolveRelativePrice, calculatePriceTolerance, checkPriceWithinTolerance, parseChainOrder, findMatchingGridOrderByOpenOrder, findMatchingGridOrderByHistory, applyChainSizeToGridOrder, correctOrderPriceOnChain, getMinOrderSize, getAssetFees, computeChainFundTotals, calculateAvailableFundsValue, calculateSpreadFromOrders, resolveConfigValue, compareBlockchainSizes, filterOrdersByType, countOrdersByType, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, calculateOrderSizes, formatOrderSize, convertToSpreadPlaceholder, getCacheFundsValue, getGridTotalValue, getTotalGridFundsAvailable, hasValidAccountTotals, getChainFreeKey } = require('./utils');
 const Logger = require('./logger');
 const AsyncLock = require('./async_lock');
-// Grid functions (initialize/recalculate) are intended to be
-// called directly via require('./grid').initializeGrid(manager) by callers.
-
-// Constants for manager operations are provided by modules/constants.js
-// Size comparisons are performed by converting human-readable floats
-// to blockchain integer amounts using floatToBlockchainInt(...) and
-// comparing integers. This provides exact, deterministic behavior that
-// matches on-chain granularity and avoids arbitrary tolerances.
-// MIN_ORDER_SIZE_FACTOR and MIN_SPREAD_FACTOR are defined in modules/constants.js
-// and exposed via GRID_LIMITS (e.g. GRID_LIMITS.MIN_ORDER_SIZE_FACTOR)
+const Accountant = require('./accounting');
 
 /**
  * OrderManager class - manages grid-based trading strategy
@@ -115,6 +106,10 @@ class OrderManager {
         this.logger = new Logger(LOG_LEVEL);
         this.logger.marketName = this.marketName;
         this.orders = new Map();
+        
+        // Specialized Engines
+        this.accountant = new Accountant(this);
+
         // Indices for fast lookup by state and type (optimization)
         this._ordersByState = {
             [ORDER_STATES.VIRTUAL]: new Set(),
@@ -185,25 +180,10 @@ class OrderManager {
     // -------------------------------------------------------------------------
 
     /**
-     * Deduct from chainFree (accountTotals) for an order type.
-     * Used when moving from VIRTUAL→ACTIVE (funds become locked).
-     * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
-     * @param {number} size - Amount to deduct
-     * @param {string} operation - Description for logging
+     * Internal helper to deduct an amount from the optimistic chainFree balance.
      */
     _deductFromChainFree(orderType, size, operation = 'move') {
-        const isBuy = orderType === ORDER_TYPES.BUY;
-        const key = isBuy ? 'buyFree' : 'sellFree';
-
-        if (this.accountTotals && this.accountTotals[key] !== undefined) {
-            const oldFree = this.accountTotals[key];
-            this.accountTotals[key] = Math.max(0, oldFree - size);
-            const asset = isBuy ? (this.config?.assetB || 'quote') : (this.config?.assetA || 'base');
-            this.logger.log(
-                `[chainFree update] ${orderType} order ${operation}: ${oldFree.toFixed(8)} - ${size.toFixed(8)} = ${this.accountTotals[key].toFixed(8)} ${asset}`,
-                'debug'
-            );
-        }
+        return this.accountant.deductFromChainFree(orderType, size, operation);
     }
 
     // -------------------------------------------------------------------------
@@ -293,77 +273,17 @@ class OrderManager {
     }
 
     /**
-     * Add to chainFree (accountTotals) for an order type.
-     * Used when moving from ACTIVE→VIRTUAL (funds become free).
-     * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
-     * @param {number} size - Amount to add
-     * @param {string} operation - Description for logging
+     * Internal helper to add an amount back to the optimistic chainFree balance.
      */
     _addToChainFree(orderType, size, operation = 'release') {
-        const isBuy = orderType === ORDER_TYPES.BUY;
-        const key = isBuy ? 'buyFree' : 'sellFree';
-
-        if (this.accountTotals && this.accountTotals[key] !== undefined) {
-            const oldFree = this.accountTotals[key];
-            this.accountTotals[key] = oldFree + size;
-            const asset = isBuy ? (this.config?.assetB || 'quote') : (this.config?.assetA || 'base');
-            this.logger.log(
-                `[chainFree update] ${orderType} order ${operation}: ${oldFree.toFixed(8)} + ${size.toFixed(8)} = ${this.accountTotals[key].toFixed(8)} ${asset}`,
-                'debug'
-            );
-        }
+        return this.accountant.addToChainFree(orderType, size, operation);
     }
 
     /**
-     * Unified helper to update the optimistic chainFree balance based on order state/size changes.
-     * Centralizing this logic prevents "fund leaks" during complex state transitions.
-     *
-     * @param {Object} oldOrder - Order state before change
-     * @param {Object} newOrder - Order state after change
-     * @param {string} context - Logging context
-     * @param {number} fee - Optional transaction fee to deduct from chainFree (if BTS side)
+     * Update optimistic free balance during order state transitions.
      */
     _updateOptimisticFreeBalance(oldOrder, newOrder, context, fee = 0) {
-        if (!oldOrder || !newOrder) return;
-
-        const oldIsActive = (oldOrder.state === ORDER_STATES.ACTIVE || oldOrder.state === ORDER_STATES.PARTIAL);
-        const newIsActive = (newOrder.state === ORDER_STATES.ACTIVE || newOrder.state === ORDER_STATES.PARTIAL);
-        const oldSize = Number(oldOrder.size) || 0;
-        const newSize = Number(newOrder.size) || 0;
-
-        // Determine which side (if any) is BTS, as fees are taken from BTS balance
-        const btsSide = (this.config?.assetA === 'BTS') ? 'sell' :
-            (this.config?.assetB === 'BTS') ? 'buy' : null;
-
-        // Transition: VIRTUAL -> ACTIVE (Activation/Placement)
-        if (!oldIsActive && newIsActive) {
-            if (newSize > 0) {
-                this._deductFromChainFree(newOrder.type, newSize, `${context} (${oldOrder.state}->${newOrder.state})`);
-            }
-            // Deduct BTS fee if this side is the BTS balance side
-            if (fee > 0 && btsSide && newOrder.type === (btsSide === 'buy' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL)) {
-                this._deductFromChainFree(newOrder.type, fee, `${context} (tx-fee)`);
-            }
-        }
-        // Transition: ACTIVE -> VIRTUAL (Cancellation/Cleanup)
-        else if (oldIsActive && !newIsActive) {
-            if (oldSize > 0) {
-                this._addToChainFree(oldOrder.type, oldSize, `${context} (${oldOrder.state}->${newOrder.state})`);
-            }
-        }
-        // Check for size resize (already Active)
-        else if (oldIsActive && newIsActive) {
-            const sizeDelta = newSize - oldSize;
-            if (sizeDelta > 0) {
-                this._deductFromChainFree(newOrder.type, sizeDelta, `${context} (resize-up)`);
-            } else if (sizeDelta < 0) {
-                this._addToChainFree(newOrder.type, Math.abs(sizeDelta), `${context} (resize-down)`);
-            }
-            // If fee is provided for an update/rotation, deduct on BTS side
-            if (fee > 0 && btsSide && newOrder.type === (btsSide === 'buy' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL)) {
-                this._deductFromChainFree(newOrder.type, fee, `${context} (tx-fee)`);
-            }
-        }
+        return this.accountant.updateOptimisticFreeBalance(oldOrder, newOrder, context, fee);
     }
 
     /**
@@ -441,35 +361,10 @@ class OrderManager {
      * NOTE: This is a PURE calculation function - it does NOT modify any state.
      */
     /**
-     * Actually deduct BTS fees from cacheFunds (has side effects).
-     * Called by processFilledOrders() after all proceeds have been added to cacheFunds.
-     *
-     * @param {string|null} requestedSide - Optional side to deduct from ('buy' or 'sell').
-     *                                       If not provided, deducts from the side that has BTS.
+     * Accumulate and deduct BTS blockchain fees from cache funds.
      */
     async deductBtsFees(requestedSide = null) {
-        if (!this.funds.btsFeesOwed || this.funds.btsFeesOwed <= 0) return;
-
-        const assetA = this.config.assetA;
-        const assetB = this.config.assetB;
-        const btsSide = (assetA === 'BTS') ? 'sell' :
-            (assetB === 'BTS') ? 'buy' : null;
-
-        // Only deduct if the requested side (if provided) matches the BTS side
-        const side = requestedSide ? (requestedSide === btsSide ? btsSide : null) : btsSide;
-
-        if (side) {
-            const cache = this.funds.cacheFunds?.[side] || 0;
-            const feesOwedThisSide = Math.min(this.funds.btsFeesOwed, cache);
-
-            this.logger.log(`Deducting ${feesOwedThisSide.toFixed(8)} BTS fees from cacheFunds.${side}. Remaining fees: ${(this.funds.btsFeesOwed - feesOwedThisSide).toFixed(8)} BTS`, 'info');
-
-            this.funds.cacheFunds[side] -= feesOwedThisSide;
-            this.funds.btsFeesOwed -= feesOwedThisSide;
-
-            await this._persistCacheFunds(); // Merged persistence call
-            await this._persistBtsFeesOwed();
-        }
+        return await this.accountant.deductBtsFees(requestedSide);
     }
 
     /**
@@ -578,63 +473,11 @@ class OrderManager {
      *
      * Called automatically by _updateOrder() whenever order state changes.
      */
+    /**
+     * Recalculate all fund values based on current order states.
+     */
     recalculateFunds() {
-        if (!this.funds) this.resetFunds();
-
-        let gridBuy = 0, gridSell = 0;
-        let chainBuy = 0, chainSell = 0;
-        let virtuelBuy = 0, virtuelSell = 0;
-
-        for (const order of this.orders.values()) {
-            const size = Number(order.size) || 0;
-            if (size <= 0) continue;
-
-            if (order.type === ORDER_TYPES.BUY) {
-                if (order.state === ORDER_STATES.ACTIVE || order.state === ORDER_STATES.PARTIAL) {
-                    gridBuy += size;
-                    if (order.orderId) chainBuy += size;
-                } else if (order.state === ORDER_STATES.VIRTUAL) {
-                    virtuelBuy += size;
-                }
-            } else if (order.type === ORDER_TYPES.SELL) {
-                if (order.state === ORDER_STATES.ACTIVE || order.state === ORDER_STATES.PARTIAL) {
-                    gridSell += size;
-                    if (order.orderId) chainSell += size;
-                } else if (order.state === ORDER_STATES.VIRTUAL) {
-                    virtuelSell += size;
-                }
-            }
-        }
-
-        // Get chain free balances (stored via setAccountTotals)
-        const chainFreeBuy = this.accountTotals?.buyFree || 0;
-        const chainFreeSell = this.accountTotals?.sellFree || 0;
-
-        // Set committed
-        this.funds.committed.grid = { buy: gridBuy, sell: gridSell };
-        this.funds.committed.chain = { buy: chainBuy, sell: chainSell };
-
-        // Set virtuel (virtual orders) - alias: reserved
-        this.funds.virtuel = { buy: virtuelBuy, sell: virtuelSell };
-        this.funds.reserved = this.funds.virtuel; // backwards compat alias
-
-        // Set totals
-        // Prefer on-chain totals (free + locked in open orders) when available.
-        // Fallback to inferred totals based on grid orders that have an orderId.
-        const inferredChainTotalBuy = chainFreeBuy + chainBuy;
-        const inferredChainTotalSell = chainFreeSell + chainSell;
-        const onChainTotalBuy = Number.isFinite(Number(this.accountTotals?.buy)) ? Number(this.accountTotals.buy) : null;
-        const onChainTotalSell = Number.isFinite(Number(this.accountTotals?.sell)) ? Number(this.accountTotals.sell) : null;
-        this.funds.total.chain = {
-            buy: onChainTotalBuy !== null ? Math.max(onChainTotalBuy, inferredChainTotalBuy) : inferredChainTotalBuy,
-            sell: onChainTotalSell !== null ? Math.max(onChainTotalSell, inferredChainTotalSell) : inferredChainTotalSell
-        };
-        this.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
-
-        // Set available using centralized calculation function
-        // Formula: available = max(0, chainFree - virtuel - cacheFunds - applicableBtsFeesOwed - btsFeesReservation)
-        this.funds.available.buy = calculateAvailableFundsValue('buy', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
-        this.funds.available.sell = calculateAvailableFundsValue('sell', this.accountTotals, this.funds, this.config.assetA, this.config.assetB, this.config.activeOrders);
+        return this.accountant.recalculateFunds();
     }
 
     _updateOrder(order) {
@@ -672,21 +515,7 @@ class OrderManager {
 
     // Adjust funds for partial fills detected via size deltas (applied before _updateOrder recalc)
     _adjustFunds(gridOrder, deltaSize) {
-        if (!gridOrder || !Number.isFinite(deltaSize)) return;
-        if (deltaSize >= 0) return; // only react to size decreases (fills)
-
-        const fillSize = Math.abs(deltaSize);
-        const price = Number(gridOrder.price || 0);
-        if (fillSize <= 0 || price <= 0) return;
-
-        if (!this.funds) this.resetFunds();
-        if (!this.accountTotals) {
-            this.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
-        }
-
-        // Partial proceeds: Internal accounting only. 
-        // We no longer update accountTotals (chain totals) here to prevent double-counting
-        // during the transition to processFilledOrders.
+        return this.accountant.adjustFunds(gridOrder, deltaSize);
     }
 
     // Note: findBestMatchByPrice is available from utils; callers should pass
@@ -698,24 +527,9 @@ class OrderManager {
 
     /**
      * Initialize the funds structure with zeroed values.
-     * Sets up accountTotals (buyFree/sellFree from chain) and the funds object
-     * with available, total, virtuel, committed, and cacheFunds.
      */
     resetFunds() {
-        this.accountTotals = this.accountTotals || (this.config.accountTotals ? { ...this.config.accountTotals } : { buy: null, sell: null, buyFree: null, sellFree: null });
-
-        this.funds = {
-            available: { buy: 0, sell: 0 },
-            total: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
-            virtuel: { buy: 0, sell: 0 },
-            reserved: { buy: 0, sell: 0 }, // backwards compat alias
-            committed: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
-            cacheFunds: { buy: 0, sell: 0 },       // Surplus from rotation + fill proceeds
-            btsFeesOwed: 0                         // Unpaid BTS fees (deducted from cache)
-        };
-        // Make reserved an alias for virtuel
-        this.funds.reserved = this.funds.virtuel;
-        // (Removed legacy `pendingProceeds` accessor; use `cacheFunds` instead.)
+        return this.accountant.resetFunds();
     }
 
     /**
