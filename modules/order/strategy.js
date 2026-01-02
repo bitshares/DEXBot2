@@ -400,10 +400,22 @@ class StrategyEngine {
                     }
                 }
             } finally {
-                for (const p of partialOrders) {
-                    if (originalPartialData.has(p.id)) {
-                        p.state = originalPartialData.get(p.id).state;
+                // Restore original states through _updateOrder to keep indices in sync
+                // Use batch mode to avoid redundant fund recalculations
+                mgr.pauseFundRecalc();
+                try {
+                    for (const p of partialOrders) {
+                        if (originalPartialData.has(p.id)) {
+                            const originalData = originalPartialData.get(p.id);
+                            const currentOrder = mgr.orders.get(p.id);
+                            if (currentOrder && originalData && originalData.state !== undefined) {
+                                const restoredOrder = { ...currentOrder, state: originalData.state };
+                                mgr._updateOrder(restoredOrder);
+                            }
+                        }
                     }
+                } finally {
+                    mgr.resumeFundRecalc();
                 }
             }
         }

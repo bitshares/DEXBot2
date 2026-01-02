@@ -319,8 +319,14 @@ class OrderManager {
             this.logger.log(`Warning: Order ${order.id} has negative size ${order.size}`, 'warn');
             return;
         }
-        if (!Object.values(ORDER_STATES).includes(order.state)) {
-            this.logger.log(`Error: Invalid order state ${order.state} for order ${order.id}`, 'error');
+        // Validate state if provided (allow undefined for intermediate operations)
+        if (order.state !== undefined && !Object.values(ORDER_STATES).includes(order.state)) {
+            this.logger.log(`Error: Invalid order state '${order.state}' for order ${order.id}. Valid states: ${Object.values(ORDER_STATES).join(', ')}`, 'error');
+            return;
+        }
+        // Skip update if state is undefined (incomplete order object)
+        if (order.state === undefined) {
+            this.logger.log(`Debug: Skipping order ${order.id} - state not set`, 'debug');
             return;
         }
 
