@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.5.1] - 2026-01-01 - Anchor & Refill Strategy, Precision Quantization & Operational Robustness
+
+### Added
+- **Anchor & Refill Strategy**: Major architectural upgrade for partial order handling. Instead of moving partials, the bot now anchors them in place.
+  - **Case A: Merged Refill (Dust)**: Merges dust (< 5%) into the next geometric allocation and delays the opposite-side rotation until the dust portion is filled.
+  - **Case B: Full Anchor (Substantial)**: Upgrades partials (>= 5%) to 100% ideal size and places the leftover capital as a residual order at the spread.
+- **On-Chain Alignment for Refills**: The bot now broadcasts `limit_order_update` for dust refills to ensure on-chain sizes perfectly match the merged internal allocation.
+- **Cumulative Fill Tracking**: Added `filledSinceRefill` property to accurately trigger delayed rotations across multiple partial fills.
+- **Precision Quantization**: Implemented size quantization to exact blockchain precision before order placement, eliminating float rounding errors.
+- **Pending-Aware Health Checks**: Updated `countOrdersByType` and `checkGridHealth` to recognize intentional gaps created by delayed rotations, preventing false-positive corrections.
+- **Double-Aware Divergence Engine**: Updated `calculateGridSideDivergenceMetric` to account for merged dust sizes, preventing unnecessary grid resets for anchored orders.
+- **Periodic Order Synchronization**: Added `readOpenOrders` to the 4-hour periodic fetch to automatically reconcile the internal grid with the blockchain source of truth.
+- **Modernized Test Suite**: Added comprehensive unit, integration, and E2E tests for the Anchor & Refill strategy and precision fixes.
+
+### Changed
+- **Pipeline-Aware Monitoring**: `checkGridHealth` now only executes when the order pipeline is clear (no pending fills or corrections), increasing operational stability.
+- **Memory-Chain Alignment**: Quantized order sizes are synchronized back to the internal memory state to ensure 1:1 parity with blockchain integers.
+- **State Persistence**: Added full serialization for new strategy fields (`isDoubleOrder`, `mergedDustSize`, `pendingRotation`, `filledSinceRefill`).
+
+### Fixed
+- **Sync Reversion Protection**: Prevented the bot from prematurely reverting merged sizes back to old on-chain sizes during synchronization gaps.
+- **Off-by-One Eradication**: Fixed a recurring issue where small float remainders would block grid flow or cause spurious partial-state transitions.
+- **Race Condition Handling**: Improved observability and lock management in `dexbot_class.js` to ensure sequential consistency during high-volume fill events.
+
+---
+
 ## [0.5.0] - 2025-12-31 - Stability Milestone: Global Terminology Migration, General Settings & Grid Health
 
 ### Added
