@@ -193,7 +193,7 @@ class Accountant {
         const allowedBuyTolerance = Math.max(precisionSlackBuy, chainTotalBuy * PERCENT_TOLERANCE);
 
         if (diffBuy > allowedBuyTolerance) {
-            mgr._metrics?.invariantViolations && (mgr._metrics.invariantViolations.buy++);
+            if (mgr._metrics?.invariantViolations) mgr._metrics.invariantViolations.buy++;
             mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (BUY): chainTotal (${chainTotalBuy.toFixed(8)}) != chainFree (${chainFreeBuy.toFixed(8)}) + chainCommitted (${chainBuy.toFixed(8)}) = ${expectedBuy.toFixed(8)} (diff: ${diffBuy.toFixed(8)}, allowed: ${allowedBuyTolerance.toFixed(8)})`,
                 'warn'
@@ -207,7 +207,7 @@ class Accountant {
         const allowedSellTolerance = Math.max(precisionSlackSell, chainTotalSell * PERCENT_TOLERANCE);
 
         if (diffSell > allowedSellTolerance) {
-            mgr._metrics?.invariantViolations && (mgr._metrics.invariantViolations.sell++);
+            if (mgr._metrics?.invariantViolations) mgr._metrics.invariantViolations.sell++;
             mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (SELL): chainTotal (${chainTotalSell.toFixed(8)}) != chainFree (${chainFreeSell.toFixed(8)}) + chainCommitted (${chainSell.toFixed(8)}) = ${expectedSell.toFixed(8)} (diff: ${diffSell.toFixed(8)}, allowed: ${allowedSellTolerance.toFixed(8)})`,
                 'warn'

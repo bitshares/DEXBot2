@@ -1877,27 +1877,25 @@ class Grid {
                     state: ORDER_STATES.VIRTUAL
                 };
 
-                // Deduct from chainFree immediately (atomic check-and-deduct)
-                if (manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
-                    ordersToPlace.push(newOrder);
-
-                    // Lock order during state transition to prevent concurrent modifications
-                    manager.lockOrders([newOrder.id]);
-                    try {
-                        // Update the order in manager.orders
-                        manager._updateOrder(newOrder);
-                    } finally {
-                        manager.unlockOrders([newOrder.id]);
+                // Lock order before fund deduction for atomic operation
+                manager.lockOrders([newOrder.id]);
+                try {
+                    // Deduct from chainFree immediately (atomic check-and-deduct)
+                    if (!manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
+                        manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
+                        return { ordersToPlace, partialMoves };
                     }
+
+                    ordersToPlace.push(newOrder);
+                    manager._updateOrder(newOrder);
 
                     manager.logger?.log?.(
                         `Prepared spread correction order at vacated slot ${slot.id}: ` +
                         `${oppositeType} at ${slot.price.toFixed(4)}, geometric size ${geometricSize.toFixed(8)}`,
                         'info'
                     );
-                } else {
-                    manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
-                    return { ordersToPlace, partialMoves };
+                } finally {
+                    manager.unlockOrders([newOrder.id]);
                 }
             }
         } else {
@@ -1987,27 +1985,25 @@ class Grid {
                     state: ORDER_STATES.VIRTUAL
                 };
 
-                // Deduct from chainFree immediately (atomic check-and-deduct)
-                if (manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
-                    ordersToPlace.push(convertedOrder);
-
-                    // Lock order during state transition to prevent concurrent modifications
-                    manager.lockOrders([convertedOrder.id]);
-                    try {
-                        // Update the order in manager.orders
-                        manager._updateOrder(convertedOrder);
-                    } finally {
-                        manager.unlockOrders([convertedOrder.id]);
+                // Lock order before fund deduction for atomic operation
+                manager.lockOrders([convertedOrder.id]);
+                try {
+                    // Deduct from chainFree immediately (atomic check-and-deduct)
+                    if (!manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
+                        manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
+                        return { ordersToPlace, partialMoves };
                     }
+
+                    ordersToPlace.push(convertedOrder);
+                    manager._updateOrder(convertedOrder);
 
                     manager.logger?.log?.(
                         `Selected candidate slot for spread correction: ${selectedSlot.id} (${selectedSlot.type}) at ${selectedSlot.price.toFixed(4)}, ` +
                         `new size ${geometricSize.toFixed(8)} (boundary was ${boundaryPrice ? boundaryPrice.toFixed(4) : 'N/A'})`,
                         'info'
                     );
-                } else {
-                    manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
-                    return { ordersToPlace, partialMoves };
+                } finally {
+                    manager.unlockOrders([convertedOrder.id]);
                 }
             } else {
                 manager.logger?.log?.(`No SPREAD or VIRTUAL candidate slots available for spread correction`, 'warn');
