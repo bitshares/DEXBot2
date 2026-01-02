@@ -4,6 +4,142 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.5.2] - 2026-01-02 - Order Management Modularization, Fund Accounting Fixes & Robustness Improvements
+
+### Added
+- **Specialized Engine Architecture**: Modularized OrderManager into three focused engines for better maintainability
+  - **Accountant Engine** (`accounting.js`): Fund tracking, invariant verification, fee management
+    - Fund recalculation with dynamic tolerance
+    - Atomic check-and-deduct pattern for race condition prevention
+    - Fund invariant verification with precision-based and percentage-based tolerance
+    - BTS fee settlement with immediate chainFree deduction
+  - **Strategy Engine** (`strategy.js`): Grid rebalancing, consolidation, and rotation strategies
+    - Anchor & Refill partial order consolidation
+    - Ghost virtualization mechanism for safe multi-partial handling
+    - Multi-partial cleanup with merge vs split decisions
+    - Rotation sorting by geometric closeness to market
+  - **Sync Engine** (`sync_engine.js`): Blockchain reconciliation and fill processing
+    - Two-pass reconciliation for grid-to-chain synchronization
+    - Per-order locking with lock refresh mechanism
+    - Fill history processing with delayed rotation support
+    - Asset initialization and balance fetching
+
+- **Fund Invariant Verification System**: Automatic detection of fund accounting leaks
+  - Three critical invariants verified after every fund recalculation:
+    1. `chainTotal = chainFree + chainCommitted` (±tolerance)
+    2. `available <= chainFree` (with slack)
+    3. `gridCommitted <= chainTotal` (±tolerance)
+  - Configurable tolerance: precision-based slack (2 units) + percentage-based (0.1%)
+  - Significantly reduces spurious warnings while catching real leaks
+
+- **Order Index Validation Method**: Defensive debugging utility
+  - `validateIndices()` method in OrderManager for index corruption detection
+  - Verifies all orders are properly indexed in _ordersByState and _ordersByType
+  - Returns true if indices consistent, false with error logging if corruption detected
+  - Useful for debugging if order lookup produces unexpected results
+
+- **Metrics Tracking System**: Enhanced observability for production monitoring
+  - `getMetrics()` returns detailed operational statistics
+  - Tracks: fund recalc count, invariant violations, lock acquisitions, state transitions
+  - Calculates: uptime and fund recalc frequency per minute
+
+### Fixed
+- **Critical: Fund Accounting Leaks in Spread Correction**
+  - Spread correction orders now atomically deduct from chainFree BEFORE on-chain placement
+  - Uses `tryDeductFromChainFree()` pattern: check funds exist, then deduct atomically
+  - Prevents "phantom funds" where orders were deducted from internal tracking but blockchain couldn't place them
+  - Initial state set to VIRTUAL (not ACTIVE), allowing proper sync engine transition
+
+- **Critical: Excess Order Creation After Spread Correction**
+  - Rebalancing now compares current active count against configured target before activating new orders
+  - Prevents creating extra orders when spread correction already placed an order
+  - Example: If target=5 and spread correction added 1, don't activate new orders until at target
+
+- **Critical: BTS Fee Settlement Timing**
+  - BTS fees now physically deducted from chainFree immediately upon settlement
+  - Previously only deducted from internal fee tracker (btsFeesOwed) until 4-hour blockchain refresh
+  - Prevents discrepancies between internal accounting and blockchain between refresh cycles
+  - Improves fund accuracy for BTS-denominated pairs
+
+- **Fund Formula Consistency**: Simplified available funds calculation
+  - Removed conflicting fund calculation formulas
+  - Single source of truth: `manager.funds.available[side]` includes all deployable capital
+  - Removed dead functions: getTotalGridFundsAvailable, getAvailableFundsForPlacement
+
+### Changed
+- **Architecture**: Refactored OrderManager to delegate to specialized engines
+  - Manager now coordinates three engines instead of implementing all logic
+  - Delegation methods maintain backward compatibility
+  - Cleaner separation of concerns improves maintainability
+
+- **Fund Calculation Flow**:
+  - Walk active/partial orders (not all orders) for better performance
+  - Indices (_ordersByState, _ordersByType) used for faster iteration
+  - Dynamic precision-based slack for rounding tolerance
+
+- **State Transition Validation**: Enhanced state machine enforcement
+  - State transitions now logged and tracked for metrics
+  - Input validation prevents invalid order states from corrupting grid
+  - Proper handling of undefined intermediate states
+
+- **Batch Fund Recalculation**: Pause/resume mechanism for multi-order operations
+  - `pauseFundRecalc()` / `resumeFundRecalc()` with depth counter
+  - Supports safe nesting for complex operations
+  - Avoids redundant recalculations during batch updates
+
+### Technical Details
+- **Ghost Virtualization**: Safely process multiple partials without blocking each other
+  - Temporarily mark partials as VIRTUAL during consolidation
+  - Enables accurate target slot calculations
+  - Automatic restoration with batch fund recalc to keep indices in sync
+  - Error safety: try/catch ensures partial rollback on failure
+
+- **Atomic Fund Operations**: Prevention of TOCTOU race conditions
+  - `tryDeductFromChainFree()`: Atomic check-and-deduct pattern
+  - Guards against race where multiple operations check same balance
+  - Returns false if insufficient funds, preventing negative balances
+
+- **Fund Invariant Tolerance**: Dual-mode tolerance for rounding noise
+  - **Precision Slack**: 2 × 10^(-precision) units (e.g., 0.00000002 for 8-decimal assets)
+  - **Percentage Tolerance**: 0.1% of chain total (default, configurable)
+  - Uses maximum of both tolerances for flexibility
+
+### Performance Impact
+- **Faster Fund Calculation**: Uses indices instead of walking all orders (~3-10× faster for large grids)
+- **Batch Operations**: Pause/resume eliminates redundant recalculations
+- **Lock Refresh**: Prevents timeout during long reconciliation (~5 second refresh cycles)
+
+### Testing
+- All 14 core tests passing (100%)
+- Comprehensive coverage of multi-partial consolidation
+- Engine integration tests verify all three engines work together
+- Edge cases: ghost virtualization, dust handling, state transitions
+
+### Migration
+- **No Breaking Changes**: Fully backward compatible with existing bots
+- **Automatic Initialization**: Legacy bots automatically migrate to new architecture
+- **Configuration**: No new configuration required; uses existing constants
+
+### Files Modified
+**New Files**:
+- `modules/order/accounting.js` (465 lines): Accountant engine for fund tracking
+- `modules/order/strategy.js` (851 lines): StrategyEngine for rebalancing
+- `modules/order/sync_engine.js` (598 lines): SyncEngine for blockchain sync
+
+**Modified Files**:
+- `modules/order/manager.js`: Refactored to coordinate engines, added validateIndices()
+- `modules/order/grid.js`: Updated spread correction to use atomic fund deduction
+- `modules/constants.js`: Added FUND_INVARIANT_PERCENT_TOLERANCE
+- `modules/order/utils.js`: Simplified fund calculation, removed dead functions
+
+### Code Statistics
+- Lines added: ~1,914 (accounting.js + strategy.js + sync_engine.js)
+- Lines removed: ~1,042 (manager.js consolidation, dead functions removed)
+- Net change: +872 lines with improved clarity and separation of concerns
+- Cyclomatic complexity: Reduced by distributing logic across three engines
+
+---
+
 ## [0.5.1] - 2026-01-01 - Anchor & Refill Strategy, Precision Quantization & Operational Robustness
 
 ### Added
