@@ -14,7 +14,7 @@
  * to keep the funds structure consistent with order state changes.
  */
 
-const { ORDER_TYPES, ORDER_STATES, TIMING } = require('../constants');
+const { ORDER_TYPES, ORDER_STATES, TIMING, GRID_LIMITS } = require('../constants');
 
 // ---------------------------------------------------------------------------
 // Parsing helpers
@@ -138,14 +138,30 @@ function computeChainFundTotals(accountTotals, committedChain) {
 
 /**
  * Calculates available funds for a specific side (buy/sell).
- * Accounts for: chain free balance, virtual orders, cache, pending proceeds, and BTS fees.
+ *
+ * FORMULA: available = max(0, chainFree - virtuel - btsFeesOwed - btsFeesReservation)
+ *
+ * NOTE ON CACHEFUNDS:
+ * cacheFunds (unspent fill proceeds and rotation surpluses) is intentionally NOT subtracted
+ * from available. This is because cacheFunds represents capital that is still available for
+ * grid sizing and order creation. It's kept separate from chainFree to track proceeds that
+ * will be rotated back into the grid in future cycles. cacheFunds is added to grid sizing
+ * calculations separately during rebalancing.
+ *
+ * FUND COMPONENTS:
+ * - chainFree: Unallocated funds on blockchain (free to use immediately)
+ * - virtuel: Funds reserved for VIRTUAL grid orders (not yet on-chain)
+ * - btsFeesOwed: Accumulated BTS fees waiting to be settled from cacheFunds
+ * - btsFeesReservation: Buffer reserved for future order creation fees
+ * - cacheFunds: Fill proceeds and rotation surplus (added to grid sizing separately)
  *
  * @param {string} side - 'buy' or 'sell'
  * @param {Object} accountTotals - Account totals with buyFree/sellFree
  * @param {Object} funds - Fund tracking object
  * @param {string} assetA - Asset A symbol (to determine BTS side)
  * @param {string} assetB - Asset B symbol (to determine BTS side)
- * @returns {number} Available funds for the side, always >= 0
+ * @param {Object} activeOrders - Target order counts (for BTS fee reservation)
+ * @returns {number} Available funds for the side (chainFree minus reserved/owed), always >= 0
  */
 function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB, activeOrders = null) {
     if (!side || (side !== 'buy' && side !== 'sell')) return 0;
@@ -2011,12 +2027,15 @@ function calculateGridSideDivergenceMetric(calculatedOrders, persistedOrders, si
     const meanSquaredDiff = totalOrders > 0 ? sumSquaredDiff / totalOrders : 0;
     const metric = Math.sqrt(meanSquaredDiff);
 
-    // Log divergence breakdown if significant
-    if (metric > 0.1) {
+    // Log divergence breakdown only when metric exceeds regeneration threshold
+    // Uses same threshold as grid regeneration logic (GRID_COMPARISON.RMS_PERCENTAGE)
+    const rmsThreshold = (GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE || 14.3) / 100;
+    if (metric > rmsThreshold) {
         console.log(`\nDEBUG [${sideName}] Divergence Calculation Breakdown:`);
         console.log(`  Matched orders: ${matchCount}`);
         console.log(`  Unmatched orders: ${unmatchedCount}`);
         console.log(`  RMS (Root Mean Square): ${metric.toFixed(4)} (${(metric * 100).toFixed(2)}%)`);
+        console.log(`  Threshold: ${(rmsThreshold * 100).toFixed(1)}%`);
         if (largeDeviations.length > 0) {
             console.log(`  Large deviations (>10%): ${largeDeviations.length}`);
         }
