@@ -10,15 +10,16 @@
  */
 
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, TIMING, GRID_LIMITS, LOG_LEVEL } = require('../constants');
-const { 
-    calculatePriceTolerance, 
-    findMatchingGridOrderByOpenOrder, 
-    calculateAvailableFundsValue, 
+const {
+    calculatePriceTolerance,
+    findMatchingGridOrderByOpenOrder,
+    calculateAvailableFundsValue,
     getMinOrderSize,
     getAssetFees,
     computeChainFundTotals,
     hasValidAccountTotals,
-    resolveConfigValue
+    resolveConfigValue,
+    floatToBlockchainInt
 } = require('./utils');
 const Logger = require('./logger');
 const AsyncLock = require('./async_lock');
@@ -64,14 +65,53 @@ class OrderManager {
         this.ordersPendingCancellation = [];
         this.shadowOrderIds = new Map();
         this._correctionsLock = new AsyncLock();
+        this._syncLock = new AsyncLock();  // Prevents concurrent full-sync operations (defense-in-depth)
         this._recentlyRotatedOrderIds = new Set();
         this._gridSidesUpdated = [];
         this._pauseFundRecalcDepth = 0;  // Counter for safe nested pausing (not boolean)
+
+        // Metrics for observability
+        this._metrics = {
+            fundRecalcCount: 0,
+            invariantViolations: { buy: 0, sell: 0 },
+            lockAcquisitions: 0,
+            lockContentionSkips: 0,
+            stateTransitions: {},
+            lastSyncDurationMs: 0,
+            metricsStartTime: Date.now()
+        };
     }
 
     // --- Accounting Delegation ---
     resetFunds() { return this.accountant.resetFunds(); }
-    recalculateFunds() { return this.accountant.recalculateFunds(); }
+
+    recalculateFunds() {
+        this._metrics.fundRecalcCount++;
+        return this.accountant.recalculateFunds();
+    }
+
+    /**
+     * Get metrics for observability and monitoring
+     */
+    getMetrics() {
+        const now = Date.now();
+        const uptime = now - this._metrics.metricsStartTime;
+        return {
+            ...this._metrics,
+            timestamp: now,
+            uptimeMs: uptime,
+            fundRecalcPerMinute: (this._metrics.fundRecalcCount / (uptime / 60000)).toFixed(2)
+        };
+    }
+
+    /**
+     * Record state transition for metrics tracking
+     */
+    _recordStateTransition(fromState, toState) {
+        if (!fromState || !toState) return;
+        const key = `${fromState}→${toState}`;
+        this._metrics.stateTransitions[key] = (this._metrics.stateTransitions[key] || 0) + 1;
+    }
     _deductFromChainFree(type, size, op) { return this.accountant.deductFromChainFree(type, size, op); }
     _addToChainFree(type, size, op) { return this.accountant.addToChainFree(type, size, op); }
     _updateOptimisticFreeBalance(oldO, newO, ctx, fee) { return this.accountant.updateOptimisticFreeBalance(oldO, newO, ctx, fee); }
@@ -349,6 +389,9 @@ class OrderManager {
                 );
                 return;
             }
+
+            // Record state transition for metrics
+            this._recordStateTransition(existing.state, order.state);
         }
         if (existing) {
             this._ordersByState[existing.state]?.delete(order.id);
@@ -405,11 +448,17 @@ class OrderManager {
         const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
         const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, this.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
 
+        // Use integer arithmetic for size comparisons to match blockchain behavior
+        const sellPrecision = this.assets?.assetA?.precision || 5;
+        const buyPrecision = this.assets?.assetB?.precision || 5;
+        const minSellSizeInt = floatToBlockchainInt(minSellSize, sellPrecision);
+        const minBuySizeInt = floatToBlockchainInt(minBuySize, buyPrecision);
+
         const vSells = this.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL).sort((a, b) => a.price - b.price).slice(0, sellCount);
-        const validSells = vSells.filter(o => o.size >= minSellSize).sort((a, b) => b.price - a.price);
+        const validSells = vSells.filter(o => floatToBlockchainInt(o.size, sellPrecision) >= minSellSizeInt).sort((a, b) => b.price - a.price);
 
         const vBuys = this.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL).sort((a, b) => b.price - a.price).slice(0, buyCount);
-        const validBuys = vBuys.filter(o => o.size >= minBuySize).sort((a, b) => a.price - b.price);
+        const validBuys = vBuys.filter(o => floatToBlockchainInt(o.size, buyPrecision) >= minBuySizeInt).sort((a, b) => a.price - b.price);
 
         return [...validSells, ...validBuys];
     }

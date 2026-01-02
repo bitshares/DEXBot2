@@ -8,8 +8,8 @@
         "assetB": null,
         "active": false,
         "index": null,
-        "createdAt": "2026-01-02T04:33:39.431Z",
-        "updatedAt": "2026-01-02T04:33:39.431Z"
+        "createdAt": "2026-01-02T04:44:24.054Z",
+        "updatedAt": "2026-01-02T04:44:24.054Z"
       },
       "grid": [
         {
@@ -87,9 +87,9 @@
       },
       "btsFeesOwed": 0,
       "processedFills": {},
-      "createdAt": "2026-01-02T04:33:39.431Z",
-      "lastUpdated": "2026-01-02T04:33:39.431Z"
+      "createdAt": "2026-01-02T04:44:24.054Z",
+      "lastUpdated": "2026-01-02T04:44:24.054Z"
     }
   },
-  "lastUpdated": "2026-01-02T04:33:39.431Z"
+  "lastUpdated": "2026-01-02T04:44:24.054Z"
 }

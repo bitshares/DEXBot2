@@ -170,14 +170,27 @@ class Accountant {
      * INVARIANT 1: chainTotal = chainFree + chainCommitted
      * INVARIANT 2: available <= chainFree
      * INVARIANT 3: gridCommitted <= chainTotal
+     *
+     * TOLERANCE: Dynamic based on asset precision. Allows 2 units of slack
+     * (one unit from each operand's rounding). This accounts for the fact that
+     * both chainFree and chainCommitted are calculated independently and may
+     * each have minor rounding differences.
      */
     _verifyFundInvariants(mgr, chainFreeBuy, chainFreeSell, chainBuy, chainSell) {
-        const tolerance = 0.00001; // Allow small floating-point rounding errors
+        // Dynamic tolerance based on asset precision
+        // For assetB (quote, used for BUY side): tolerance = 2 * 10^(-precision)
+        // For assetA (base, used for SELL side): tolerance = 2 * 10^(-precision)
+        const buyPrecision = mgr.assets?.assetB?.precision || 5;
+        const sellPrecision = mgr.assets?.assetA?.precision || 5;
+
+        const buyTolerance = 2 * Math.pow(10, -buyPrecision);
+        const sellTolerance = 2 * Math.pow(10, -sellPrecision);
 
         // INVARIANT 1: For BUY side
         const chainTotalBuy = mgr.funds.total.chain.buy;
         const expectedBuy = chainFreeBuy + chainBuy;
-        if (Math.abs(chainTotalBuy - expectedBuy) > tolerance) {
+        if (Math.abs(chainTotalBuy - expectedBuy) > buyTolerance) {
+            mgr._metrics.invariantViolations.buy++;
             mgr.logger.log(
                 `WARNING: Fund invariant violation (BUY): chainTotal (${chainTotalBuy.toFixed(8)}) != chainFree (${chainFreeBuy.toFixed(8)}) + chainCommitted (${chainBuy.toFixed(8)}) = ${expectedBuy.toFixed(8)}`,
                 'warn'
@@ -187,7 +200,8 @@ class Accountant {
         // INVARIANT 1: For SELL side
         const chainTotalSell = mgr.funds.total.chain.sell;
         const expectedSell = chainFreeSell + chainSell;
-        if (Math.abs(chainTotalSell - expectedSell) > tolerance) {
+        if (Math.abs(chainTotalSell - expectedSell) > sellTolerance) {
+            mgr._metrics.invariantViolations.sell++;
             mgr.logger.log(
                 `WARNING: Fund invariant violation (SELL): chainTotal (${chainTotalSell.toFixed(8)}) != chainFree (${chainFreeSell.toFixed(8)}) + chainCommitted (${chainSell.toFixed(8)}) = ${expectedSell.toFixed(8)}`,
                 'warn'
@@ -195,13 +209,13 @@ class Accountant {
         }
 
         // INVARIANT 2: Available should not exceed chainFree
-        if (mgr.funds.available.buy > chainFreeBuy + tolerance) {
+        if (mgr.funds.available.buy > chainFreeBuy + buyTolerance) {
             mgr.logger.log(
                 `WARNING: Fund invariant violation (BUY available): available (${mgr.funds.available.buy.toFixed(8)}) > chainFree (${chainFreeBuy.toFixed(8)})`,
                 'warn'
             );
         }
-        if (mgr.funds.available.sell > chainFreeSell + tolerance) {
+        if (mgr.funds.available.sell > chainFreeSell + sellTolerance) {
             mgr.logger.log(
                 `WARNING: Fund invariant violation (SELL available): available (${mgr.funds.available.sell.toFixed(8)}) > chainFree (${chainFreeSell.toFixed(8)})`,
                 'warn'
@@ -211,13 +225,13 @@ class Accountant {
         // INVARIANT 3: Grid committed should not exceed chain total
         const gridCommittedBuy = mgr.funds.committed.grid.buy;
         const gridCommittedSell = mgr.funds.committed.grid.sell;
-        if (gridCommittedBuy > chainTotalBuy + tolerance) {
+        if (gridCommittedBuy > chainTotalBuy + buyTolerance) {
             mgr.logger.log(
                 `WARNING: Fund invariant violation (BUY grid): gridCommitted (${gridCommittedBuy.toFixed(8)}) > chainTotal (${chainTotalBuy.toFixed(8)})`,
                 'warn'
             );
         }
-        if (gridCommittedSell > chainTotalSell + tolerance) {
+        if (gridCommittedSell > chainTotalSell + sellTolerance) {
             mgr.logger.log(
                 `WARNING: Fund invariant violation (SELL grid): gridCommitted (${gridCommittedSell.toFixed(8)}) > chainTotal (${chainTotalSell.toFixed(8)})`,
                 'warn'
@@ -226,7 +240,57 @@ class Accountant {
     }
 
     /**
+     * Check if sufficient funds exist AND atomically deduct.
+     * This prevents race conditions where multiple operations check the same balance
+     * and all think they have enough funds, leading to negative balances.
+     *
+     * ATOMIC CHECK-AND-DEDUCT:
+     * This pattern solves the TOCTOU (Time-of-Check vs Time-of-Use) race where:
+     * 1. Op A checks: buyFree=1000 (has 1000)
+     * 2. Op B checks: buyFree=1000 (has 1000)  ← Race condition!
+     * 3. Op A deducts: buyFree=400
+     * 4. Op B deducts: buyFree=-600 ← PROBLEM!
+     *
+     * With atomic check-and-deduct, either both checks succeed or one fails.
+     */
+    tryDeductFromChainFree(orderType, size, operation = 'move') {
+        const mgr = this.manager;
+        const isBuy = orderType === ORDER_TYPES.BUY;
+        const key = isBuy ? 'buyFree' : 'sellFree';
+
+        if (!mgr.accountTotals || mgr.accountTotals[key] === undefined) {
+            mgr.logger.log(
+                `[chainFree check-and-deduct] ${orderType} order ${operation}: accountTotals not available`,
+                'warn'
+            );
+            return false;
+        }
+
+        const current = Number(mgr.accountTotals[key]) || 0;
+
+        // Check: Do we have enough?
+        if (current < size) {
+            mgr.logger.log(
+                `[chainFree check-and-deduct] ${orderType} order ${operation}: INSUFFICIENT FUNDS (have ${current.toFixed(8)}, need ${size.toFixed(8)})`,
+                'warn'
+            );
+            return false;
+        }
+
+        // Deduct: Now that we've passed the check, deduct
+        mgr.accountTotals[key] = Math.max(0, current - size);
+        const asset = isBuy ? (mgr.config?.assetB || 'quote') : (mgr.config?.assetA || 'base');
+        mgr.logger.log(
+            `[chainFree update] ${orderType} order ${operation}: ${current.toFixed(8)} - ${size.toFixed(8)} = ${mgr.accountTotals[key].toFixed(8)} ${asset}`,
+            'debug'
+        );
+        return true;
+    }
+
+    /**
      * Deduct an amount from the optimistic chainFree balance.
+     * DEPRECATED: Use tryDeductFromChainFree() for new code to prevent race conditions.
+     * This method is kept for backward compatibility but doesn't validate availability.
      */
     deductFromChainFree(orderType, size, operation = 'move') {
         const mgr = this.manager;

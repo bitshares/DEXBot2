@@ -30,8 +30,14 @@ class SyncEngine {
      * This is the MAIN SYNCHRONIZATION MECHANISM that corrects the grid state when
      * the blockchain state diverges from our local expectations.
      *
-     * CRITICAL: This method locks all orders that might be modified during reconciliation
-     * to prevent concurrent races with createOrder/cancelOrder operations.
+     * CRITICAL: This method uses AsyncLock (defense-in-depth) to ensure only one
+     * full-sync operation runs at a time. WITHIN that lock, per-order locks prevent
+     * concurrent createOrder/cancelOrder races.
+     *
+     * LOCK HIERARCHY:
+     * 1. _syncLock (AsyncLock): Ensures only one full-sync at a time
+     * 2. Per-order locks (shadowOrderIds): Protect specific orders during sync
+     * 3. Lock refresh mechanism: Prevents timeout during long reconciliation
      *
      * RECONCILIATION FLOW:
      * ========================================================================
@@ -72,7 +78,20 @@ class SyncEngine {
      * - Precision mismatches (blockchain integer precision vs float grid)
      * - Double spending prevention (each chain order matched to at most one grid order)
      */
-    syncFromOpenOrders(chainOrders, fillInfo = null) {
+    async syncFromOpenOrders(chainOrders, fillInfo = null) {
+        const mgr = this.manager;
+
+        // Defense-in-depth: Use AsyncLock to ensure only one full-sync at a time
+        return await mgr._syncLock.acquire(async () => {
+            return this._doSyncFromOpenOrders(chainOrders, fillInfo);
+        });
+    }
+
+    /**
+     * Internal method that performs the actual sync logic.
+     * Called within _syncLock to guarantee exclusive execution.
+     */
+    async _doSyncFromOpenOrders(chainOrders, fillInfo = null) {
         const mgr = this.manager;
         if (!chainOrders || !Array.isArray(chainOrders)) {
             return { filledOrders: [], updatedOrders: [], ordersNeedingCorrection: [] };
@@ -123,11 +142,24 @@ class SyncEngine {
 
         // Lock orders before reconciliation
         mgr.lockOrders([...orderIdsToLock]);
+
+        // Set up lock refresh mechanism to prevent timeout during long reconciliation
+        // Refreshes every 5 seconds to keep locks alive (LOCK_TIMEOUT_MS is 10s)
+        const lockRefreshInterval = setInterval(() => {
+            const now = Date.now();
+            for (const id of orderIdsToLock) {
+                mgr.shadowOrderIds.set(id, now);
+            }
+            mgr.logger?.log?.(`Refreshed locks for ${orderIdsToLock.size} orders to prevent timeout expiry`, 'debug');
+        }, 5000);
+
         try {
             // Reconciliation logic moved below in the try block
             this._performSyncFromOpenOrders(mgr, assetAPrecision, assetBPrecision, parsedChainOrders,
                                             chainOrderIdsOnGrid, matchedGridOrderIds, filledOrders, updatedOrders, ordersNeedingCorrection);
         } finally {
+            // Stop refresh interval first
+            clearInterval(lockRefreshInterval);
             // Unlock after reconciliation completes
             mgr.unlockOrders([...orderIdsToLock]);
         }
