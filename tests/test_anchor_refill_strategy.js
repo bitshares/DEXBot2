@@ -41,23 +41,23 @@ function testDustClassification() {
         newPrice: 0.95
     };
 
-    // Test dust case: 2% of ideal
+    // Test dust case: 1% of ideal (well below 5% or 10% thresholds)
     const dustPartial = {
         id: 'buy-3',
         orderId: 'chain-order-1',
         type: ORDER_TYPES.BUY,
         state: ORDER_STATES.PARTIAL,
         price: 0.93,
-        size: 2.0  // 2% of 100
+        size: 1.0  // 1% of 100
     };
 
     const decision = mgr._evaluatePartialOrderAnchor(dustPartial, moveInfo);
 
-    assert(decision.isDust === true, `Expected isDust=true for 2% partial, got ${decision.isDust}`);
-    assert(Math.abs(decision.percentOfIdeal - 0.02) < 0.001, `Expected percentOfIdeal=0.02, got ${decision.percentOfIdeal}`);
-    assert(decision.mergedDustSize === 2.0, `Expected mergedDustSize=2.0, got ${decision.mergedDustSize}`);
+    assert(decision.isDust === true, `Expected isDust=true for 1% partial, got ${decision.isDust}`);
+    assert(Math.abs(decision.percentOfIdeal - 0.01) < 0.001, `Expected percentOfIdeal=0.01, got ${decision.percentOfIdeal}`);
+    assert(decision.mergedDustSize === 1.0, `Expected mergedDustSize=1.0, got ${decision.mergedDustSize}`);
 
-    console.log(`✓ Dust classification correct: 2% < 5% threshold`);
+    console.log(`✓ Dust classification correct: 1% < threshold`);
     console.log(`  - isDust: ${decision.isDust}`);
     console.log(`  - percentOfIdeal: ${(decision.percentOfIdeal * 100).toFixed(1)}%`);
     console.log(`  - mergedDustSize: ${decision.mergedDustSize}`);
@@ -65,7 +65,7 @@ function testDustClassification() {
 
 // Test 2: _evaluatePartialOrderAnchor - Substantial Classification
 function testSubstantialClassification() {
-    console.log('\n[Test 2] Substantial Classification (≥ 5% threshold)');
+    console.log('\n[Test 2] Substantial Classification (≥ threshold)');
 
     const cfg = { assetA: 'BTS', assetB: 'USD', startPrice: 1.0, botFunds: { buy: 1000, sell: 1000 } };
     const mgr = new OrderManager(cfg);
@@ -90,27 +90,27 @@ function testSubstantialClassification() {
         newPrice: 1.05
     };
 
-    // Test substantial case: 8% of ideal (SELL order)
+    // Test substantial case: 25% of ideal (well above 5% or 10% thresholds)
     const substantialPartial = {
         id: 'sell-3',
         orderId: 'chain-order-2',
         type: ORDER_TYPES.SELL,
         state: ORDER_STATES.PARTIAL,
         price: 1.03,
-        size: 8.0  // 8% of 100
+        size: 25.0  // 25% of 100
     };
 
     const decision = mgr._evaluatePartialOrderAnchor(substantialPartial, moveInfo);
 
-    assert(decision.isDust === false, `Expected isDust=false for 8% partial, got ${decision.isDust}`);
-    assert(Math.abs(decision.percentOfIdeal - 0.08) < 0.001, `Expected percentOfIdeal=0.08, got ${decision.percentOfIdeal}`);
+    assert(decision.isDust === false, `Expected isDust=false for 25% partial, got ${decision.isDust}`);
+    assert(Math.abs(decision.percentOfIdeal - 0.25) < 0.001, `Expected percentOfIdeal=0.25, got ${decision.percentOfIdeal}`);
     assert(decision.newSize === idealSize, `Expected newSize=${idealSize}, got ${decision.newSize}`);
 
-    // For SELL: residualCapital = (8 - 100) * newPrice (but clamped to 0)
-    // Since 8 < 100, residualCapital should be 0
+    // For SELL: residualCapital = (25 - 100) * newPrice (but clamped to 0)
+    // Since 25 < 100, residualCapital should be 0
     assert(decision.residualCapital === 0, `Expected residualCapital=0 for smaller partial, got ${decision.residualCapital}`);
 
-    console.log(`✓ Substantial classification correct: 8% ≥ 5% threshold`);
+    console.log(`✓ Substantial classification correct: 25% ≥ threshold`);
     console.log(`  - isDust: ${decision.isDust}`);
     console.log(`  - percentOfIdeal: ${(decision.percentOfIdeal * 100).toFixed(1)}%`);
     console.log(`  - newSize: ${decision.newSize}`);

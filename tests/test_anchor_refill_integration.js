@@ -34,7 +34,7 @@ function setupManager(name) {
     return mgr;
 }
 
-// Test 1: Case A - Dust Refill (small partial < 5%)
+// Test 1: Case A - Dust Refill (small partial < threshold)
 async function testCaseADustRefill() {
     console.log('\n[Test 1] Case A: Dust Refill - Decision Logic');
     console.log('-'.repeat(70));
@@ -48,7 +48,7 @@ async function testCaseADustRefill() {
         type: ORDER_TYPES.BUY,
         state: ORDER_STATES.PARTIAL,
         price: 0.95,
-        size: 2.0  // 2% of ideal
+        size: 1.0  // 1% of ideal (well below 5% or 10% thresholds)
     };
 
     const moveInfo = {
@@ -65,7 +65,7 @@ async function testCaseADustRefill() {
 
     const decision = mgr._evaluatePartialOrderAnchor(dustPartial, moveInfo);
 
-    console.log('  Testing dust classification (2% < 5% threshold):');
+    console.log('  Testing dust classification (1% < threshold):');
     assert(decision.isDust === true, `Expected isDust=true, got ${decision.isDust}`);
     console.log(`  ✓ isDust: ${decision.isDust}`);
     console.log(`  ✓ percentOfIdeal: ${(decision.percentOfIdeal * 100).toFixed(1)}%`);
@@ -73,21 +73,21 @@ async function testCaseADustRefill() {
     console.log(`  ✓ Strategy: Dust will be merged into new allocation with delayed rotation`);
 }
 
-// Test 2: Case B - Full Anchor with Residual (large partial >= 5%)
+// Test 2: Case B - Full Anchor with Residual (large partial >= threshold)
 async function testCaseBFullAnchor() {
     console.log('\n[Test 2] Case B: Full Anchor - Decision Logic');
     console.log('-'.repeat(70));
 
     const mgr = setupManager('anchor-test');
 
-    // Test with substantial partial >= 5%
+    // Test with substantial partial (25% of ideal)
     const substantialPartial = {
         id: 'sell-2',
         orderId: 'chain-sell-1',
         type: ORDER_TYPES.SELL,
         state: ORDER_STATES.PARTIAL,
         price: 1.03,
-        size: 150.0  // 150% of ideal (has residual capital)
+        size: 25.0  // 25% of ideal (well above 5% or 10% thresholds)
     };
 
     const moveInfo = {
@@ -104,7 +104,7 @@ async function testCaseBFullAnchor() {
 
     const decision = mgr._evaluatePartialOrderAnchor(substantialPartial, moveInfo);
 
-    console.log('  Testing substantial classification (150% of ideal):');
+    console.log('  Testing substantial classification (25% of ideal):');
     assert(decision.isDust === false, `Expected isDust=false, got ${decision.isDust}`);
     assert(decision.newSize === 100.0, `Expected newSize=100, got ${decision.newSize}`);
     console.log(`  ✓ isDust: ${decision.isDust}`);

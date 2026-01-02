@@ -633,6 +633,14 @@ class AccountOrders {
       }
     }
 
+    // filledSinceRefill: accumulated fill progress toward clearing the dust debt
+    if (order.filledSinceRefill !== undefined && order.filledSinceRefill !== null) {
+      const filledValue = Number(order.filledSinceRefill);
+      if (Number.isFinite(filledValue) && filledValue > 0) {
+        serialized.filledSinceRefill = filledValue;
+      }
+    }
+
     // pendingRotation: marks when rotation is delayed until fill threshold is reached
     if (order.pendingRotation) {
       serialized.pendingRotation = true;

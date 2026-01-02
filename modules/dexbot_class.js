@@ -586,22 +586,14 @@ class DEXBot {
             if (partialMoves && partialMoves.length > 0) {
                 for (const moveInfo of partialMoves) {
                     try {
-                        // Skip Dust Refill orders - they don't move on-chain, just marked in-memory
-                        if (moveInfo.isDustRefill) {
-                            this.manager.logger.log(
-                                `[DUST REFILL] Skipping chain update for partial ${moveInfo.partialOrder.orderId} - marked for merged allocation`,
-                                'debug'
-                            );
-                            continue;
-                        }
-
-                        const { partialOrder, newPrice } = moveInfo;
+                        const { partialOrder, newPrice, newSize } = moveInfo;
                         if (!partialOrder.orderId) continue;
 
                         const op = await chainOrders.buildUpdateOrderOp(
                             this.account, partialOrder.orderId,
                             {
                                 newPrice: newPrice,
+                                amountToSell: newSize, // Use the new merged size
                                 orderType: partialOrder.type
                             }
                         );

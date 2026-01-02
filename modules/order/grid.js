@@ -1424,6 +1424,10 @@ class Grid {
             let seenActive = false;
             let seenVirtual = false;
             
+            // Pending-Aware Check: determine if opposite side has a delayed rotation
+            const oppositeType = type === 'SELL' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+            const hasOppositeWithPendingRotation = allOrders.some(o => o.type === oppositeType && o.pendingRotation);
+
             // Multi-Partial Check
             const partials = orders.filter(o => o.state === ORDER_STATES.PARTIAL);
             if (partials.length > 1) {
@@ -1432,12 +1436,14 @@ class Grid {
 
             // Iterate from market outwards
             for (const o of orders) {
-                if (o.state === ORDER_STATES.ACTIVE) seenActive = true;
+                if (o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) seenActive = true;
                 if (o.state === ORDER_STATES.VIRTUAL) {
                     seenVirtual = true;
                 }
-                if (o.state === ORDER_STATES.ACTIVE && seenVirtual) {
-                    manager.logger.log(`Grid health violation (${type}): ACTIVE order ${o.id} is further from market than a VIRTUAL slot.`, 'warn');
+                
+                // Only log structural violation if it's not an intentional gap from a delayed rotation
+                if ((o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) && seenVirtual && !hasOppositeWithPendingRotation) {
+                    manager.logger.log(`Grid health violation (${type}): ON-CHAIN order ${o.id} is further from market than a VIRTUAL slot.`, 'warn');
                 }
             }
         };

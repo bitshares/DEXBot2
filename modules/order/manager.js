@@ -1343,9 +1343,8 @@ class OrderManager {
             this.logger.log(`Order ${matchedGridOrder.id} (${orderId}) PARTIALLY FILLED: ${formatOrderSize(filledAmount)} filled, remaining ${formatOrderSize(newSize)}, cacheFunds: Buy ${formatOrderSize(this.funds.cacheFunds.buy || 0)} | Sell ${formatOrderSize(this.funds.cacheFunds.sell || 0)}`, 'info');
 
             // Create a "virtual" filled order with just the filled amount for proceeds calculation
-            // Mark as partial so processFilledOrders knows NOT to trigger rebalancing
+            // Mark as partial so processFilledOrders knows NOT to trigger rebalancing by default
             const filledPortion = { ...matchedGridOrder, size: filledAmount, isPartial: true };
-            filledOrders.push(filledPortion);
 
             // Create copy for update with remaining size
             const updatedOrder = { ...matchedGridOrder };
@@ -1365,8 +1364,11 @@ class OrderManager {
             // ANCHOR & REFILL: Handle delayed rotation for Case A (Dust Refill)
             // When this order is marked as isDoubleOrder (dust refilled), check if fill threshold is met
             if (updatedOrder.isDoubleOrder && updatedOrder.mergedDustSize) {
+                // Accumulate fill amount across multiple events
+                updatedOrder.filledSinceRefill = (Number(updatedOrder.filledSinceRefill) || 0) + filledAmount;
+                
                 const mergedDustSize = Number(updatedOrder.mergedDustSize);
-                const totalFilled = filledAmount; // Accumulated fills tracked by manager elsewhere
+                const totalFilled = updatedOrder.filledSinceRefill;
 
                 // Check if we've filled enough to justify rotating the opposite side
                 if (totalFilled >= mergedDustSize) {
@@ -1376,9 +1378,13 @@ class OrderManager {
                         'info'
                     );
 
-                    // Strip the double order marker to allow rotation to proceed
+                    // Signal to processFilledOrders that we should trigger a rotation now
+                    filledPortion.isDelayedRotationTrigger = true;
+
+                    // Strip the double order marker to allow future rotations to proceed normally
                     updatedOrder.isDoubleOrder = false;
                     updatedOrder.pendingRotation = false;
+                    updatedOrder.filledSinceRefill = 0; // Reset accumulation
                     // Note: mergedDustSize is kept for divergence calculations
                 } else {
                     this.logger.log(
@@ -1390,6 +1396,7 @@ class OrderManager {
             }
 
             updatedOrders.push(updatedOrder);
+            filledOrders.push(filledPortion);
             partialFill = true;
         }
 
@@ -1765,6 +1772,12 @@ class OrderManager {
             const isPartial = filledOrder.isPartial === true;
             if (isPartial) {
                 partialFillCount[filledOrder.type]++;
+                
+                // ANCHOR & REFILL: If this partial fill cleared the dust debt, trigger rotation
+                if (filledOrder.isDelayedRotationTrigger) {
+                    filledCounts[filledOrder.type]++;
+                    this.logger.log(`Delayed rotation trigger detected for ${filledOrder.type} order ${filledOrder.id}`, 'debug');
+                }
             } else {
                 filledCounts[filledOrder.type]++;
             }
@@ -2101,23 +2114,20 @@ class OrderManager {
                         'info'
                     );
 
-                    // CRITICAL: Upgrade the partial order size to ideal + dust
-                    // This ensures the partial order grows to absorb the merged dust
-                    moveInfo.partialOrder.size = newSize;
-                    this._updateOrder(moveInfo.partialOrder);
-
-                    // Mark partial order for dust refill (no move, just anchor in place)
+                    // Mark partial order for dust refill
                     const dustRefillInfo = {
-                        partialOrder: moveInfo.partialOrder,
-                        isDustRefill: true,
-                        isDoubleOrder: true,
-                        mergedDustSize: mergedDustSize,
-                        idealSize: isAnchorDecision.idealSize,
-                        newGridId: moveInfo.newGridId,
-                        newPrice: moveInfo.newPrice,
-                        pendingRotation: true, // Set now - wait for fill threshold before rotating opposite side
-                        vacatedGridId: moveInfo.vacatedGridId,
-                        vacatedPrice: moveInfo.vacatedPrice
+                        ...moveInfo,
+                        partialOrder: {
+                            ...moveInfo.partialOrder,
+                            size: newSize,
+                            isDustRefill: true,
+                            isDoubleOrder: true,
+                            mergedDustSize: mergedDustSize,
+                            filledSinceRefill: 0,
+                            pendingRotation: true
+                        },
+                        newSize: newSize,
+                        isDustRefill: true
                     };
                     partialMoves.push(dustRefillInfo);
                 } else {
@@ -2769,9 +2779,8 @@ class OrderManager {
         }
 
         const percentOfIdeal = partialSize / idealSize;
-        const DUST_THRESHOLD = 0.05; // 5% threshold
 
-        if (percentOfIdeal < DUST_THRESHOLD) {
+        if (percentOfIdeal < (GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE || 5) / 100) {
             // Case A: Dust
             return {
                 isDust: true,
@@ -2948,7 +2957,8 @@ class OrderManager {
         if (targetGridOrder) {
             const updatedNew = {
                 ...targetGridOrder,
-                type: partialOrder.type,  // Preserve the partial order's type (buy/sell)
+                ...partialOrder,          // Spread the partialOrder to bring in strategy flags and new size
+                type: partialOrder.type,  // Ensure type is preserved
                 state: ORDER_STATES.PARTIAL,
                 orderId: partialOrder.orderId,
                 size: partialOrder.size,

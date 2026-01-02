@@ -504,6 +504,15 @@ function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
     }
     const oldSize = Number(gridOrder.size || 0);
     const newSize = Number.isFinite(Number(chainSize)) ? Number(chainSize) : oldSize;
+
+    // ANCHOR & REFILL PROTECTION: If this is a dust refill that hasn't moved on-chain yet,
+    // don't revert its size back to the tiny on-chain amount during sync.
+    // We only accept the chain size if it's DIFFERENT from what we have and it's NOT a dust refill gap.
+    if (gridOrder.isDustRefill && newSize < oldSize) {
+        manager.logger?.log?.(`Sync: Preserving dust refill size for ${gridOrder.id} (${oldSize.toFixed(8)}) despite smaller chain size (${newSize.toFixed(8)})`, 'debug');
+        return;
+    }
+
     const delta = newSize - oldSize;
     const precision = (gridOrder.type === ORDER_TYPES.SELL) ? manager.assets?.assetA?.precision : manager.assets?.assetB?.precision;
     const oldInt = floatToBlockchainInt(oldSize, precision);
