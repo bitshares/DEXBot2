@@ -288,16 +288,25 @@ This ensures seamless resumption after being offline without missing fill procee
 ### 📡 Periodic Blockchain Fetch
 DEXBot can automatically refresh your blockchain account balances at regular intervals to keep order values up-to-date:
 - **Default interval**: 240 minutes (4 hours)
-- **Configurable**: Set `BLOCKCHAIN_FETCH_INTERVAL_MIN` in `modules/constants.js`
+- **Configurable**: Set `BLOCKCHAIN_FETCH_INTERVAL_MIN` via `dexbot bots` menu (option 2: "Timing (Core)") or in `profiles/general.settings.json`
 - **Automatic**: Runs in background without interrupting trading
 - **Disable**: Set interval to `0` or an invalid value to disable periodic fetches
 
 This ensures your bot's internal account balance tracking stays synchronized with the blockchain, especially useful for accounts that receive external transfers or participate in other trading activities.
 
-Configure via environment variable or `modules/constants.js`:
-```javascript
-TIMING: {
-    BLOCKCHAIN_FETCH_INTERVAL_MIN: 240  // fetch every 4 hours (0 = disabled)
+**Configuration Options** (via `dexbot bots` → Timing (Core)):
+- `SYNC_DELAY_MS`: Delay between blockchain operations (default: 500ms)
+- `ACCOUNT_TOTALS_TIMEOUT_MS`: Timeout for account balance fetch (default: 10000ms)
+- `BLOCKCHAIN_FETCH_INTERVAL_MIN`: Periodic blockchain fetch interval (default: 240 min = 4 hours)
+- `LOCK_TIMEOUT_MS`: Order lock auto-expiry timeout (default: 10000ms)
+
+Or configure directly in `profiles/general.settings.json`:
+```json
+{
+  "TIMING": {
+    "BLOCKCHAIN_FETCH_INTERVAL_MIN": 240,
+    "LOCK_TIMEOUT_MS": 10000
+  }
 }
 ```
 
@@ -348,13 +357,19 @@ DEXBot automatically regenerates grid order sizes when market conditions or cach
 - Maintains capital efficiency by redistributing proceeds back into orders
 
 **Customization:**
-You can adjust thresholds in `modules/constants.js`:
-```javascript
-GRID_REGENERATION_PERCENTAGE: 3,  // Cache funds threshold (%)
-GRID_COMPARISON: {
-    RMS_PERCENTAGE: 14.3  // Grid divergence RMS threshold (%)
+You can adjust thresholds via `dexbot bots` menu (option 1: "Grid Limits") or in `profiles/general.settings.json`:
+```json
+{
+  "GRID_LIMITS": {
+    "GRID_REGENERATION_PERCENTAGE": 3,
+    "PARTIAL_DUST_THRESHOLD_PERCENTAGE": 5,
+    "GRID_COMPARISON": {
+      "RMS_PERCENTAGE": 14.3
+    }
+  }
 }
 ```
+Or edit `modules/constants.js` directly for code-level changes.
 
 ### 📌 Trigger-File Grid Regeneration
 Create a trigger file `profiles/recalculate.<bot-key>.trigger` to request immediate grid regeneration on the next polling cycle. This allows external scripts to request recalculation without restarting the bot.
@@ -460,7 +475,7 @@ Below is a short summary of the modules in this repository and what they provide
 
 Core order generation, management, and grid algorithms:
 
-- `modules/constants.js`: Centralized order constants (types: `SELL`, `BUY`, `SPREAD`; states: `VIRTUAL`, `ACTIVE`, `PARTIAL`), timing constants, and `DEFAULT_CONFIG`.
+- `modules/constants.js`: Centralized configuration hub with order constants (types: `SELL`, `BUY`, `SPREAD`; states: `VIRTUAL`, `ACTIVE`, `PARTIAL`), timing constants, grid limits, precision defaults, fee parameters, API limits, fill processing config, maintenance settings, and `DEFAULT_CONFIG`. Loads user overrides from `profiles/general.settings.json`.
 - `modules/order/index.js`: Public entry point: exports `OrderManager` and `runOrderManagerCalculation()` (dry-run helper).
 - `modules/order/logger.js`: Colored console logger and `logOrderGrid()` helper for formatted output.
 - `modules/order/async_lock.js`: Queue-based AsyncLock utility for race condition prevention. Provides FIFO mutual exclusion for protecting critical sections across the codebase. Used by all modules that require atomic operations.
