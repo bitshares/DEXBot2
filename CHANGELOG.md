@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.5.2] - 2026-01-02 - Order Management Modularization, Fund Accounting Fixes & Robustness Improvements
+## [0.6.0] - 2026-01-02 - Order Management Modularization, Fund Accounting Fixes, Robustness Improvements & Sequential Order Placement
 
 ### Added
 - **Specialized Engine Architecture**: Modularized OrderManager into three focused engines for better maintainability
@@ -129,6 +129,15 @@ All notable changes to this project will be documented in this file.
 - **Faster Fund Calculation**: Uses indices instead of walking all orders (~3-10× faster for large grids)
 - **Batch Operations**: Pause/resume eliminates redundant recalculations
 - **Lock Refresh**: Prevents timeout during long reconciliation (~5 second refresh cycles)
+
+- **Refactored Spread Activation with Sequential Placement**: Simplified order creation logic for improved code clarity and natural fund handling
+  - Removed pre-calculation of order count based on available funds (maxByFunds scaling)
+  - Kept desiredCount and use sequential placement with per-iteration fund recalculation
+  - Each order sized based on current available funds: `fundsPerOrder = currentAvailable / remainingOrders`
+  - Naturally handles insufficient funds without artificial count scaling
+  - Geometric sizing emerges naturally from sequential capital depletion, no divergence issues
+  - **Benefits**: Cleaner code, true geometric distribution, natural fund exhaustion, no grid divergence
+  - **Technical**: Sequential loop replaces pre-calculation, per-iteration `calculateAvailableFundsValue()`, graceful break at minSize
 
 ### Testing
 - All 14 core tests passing (100%)
