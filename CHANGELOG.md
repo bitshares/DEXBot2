@@ -7,6 +7,28 @@ All notable changes to this project will be documented in this file.
 ## [0.6.0] - 2026-01-02 - Order Management Modularization, Fund Accounting Fixes, Robustness Improvements & Sequential Order Placement
 
 ### Added
+- **Complete Constants Centralization**: Consolidated 60+ hardcoded magic numbers into a single source of truth
+  - **New Constants Sections**:
+    - `PRECISION_DEFAULTS`: Asset precision fallback (5), price tolerance (0.1%)
+    - `INCREMENT_BOUNDS`: Grid increment percentage bounds (0.01% - 10%)
+    - `FEE_PARAMETERS`: BTS fee reservation multiplier (5), fallback fee (100)
+    - `API_LIMITS`: Pool batch size (100), scan batches (100), orderbook depth (5), limit orders batch (100)
+    - `FILL_PROCESSING`: Fill mode ('history'), operation type (4), taker indicator (0)
+    - `MAINTENANCE`: Cleanup probability (0.1)
+  - **Grid Constants Additions**:
+    - `MIN_SPREAD_ORDERS`: Minimum number of spread orders (2)
+    - `SPREAD_WIDENING_MULTIPLIER`: Buffer multiplier for spread condition threshold (1.5)
+  - **Impact**: Eliminates scattered magic numbers across 10 files, improves maintainability and consistency
+  - **Lock Refresh**: Now correctly uses `LOCK_TIMEOUT_MS / 2` instead of hardcoded 5000
+
+- **Enhanced Settings Configuration**:
+  - Split `TIMING` configuration menu into two clear sections:
+    - **Timing (Core)**: Fetch interval, sync delay, lock timeout
+    - **Timing (Fill)**: Dedup window, cleanup interval, record retention
+  - `EXPERT` section support for advanced settings (accessible via JSON-only, not menu)
+  - Maintained backward compatibility with existing settings
+  - **Note**: New constants (PRECISION_DEFAULTS, INCREMENT_BOUNDS, FEE_PARAMETERS, API_LIMITS, FILL_PROCESSING, MAINTENANCE) are intentionally code-only (not exposed in general.settings.json) as they are stable defaults unlikely to need user tuning. Users can still modify constants.js directly if needed.
+
 - **Specialized Engine Architecture**: Modularized OrderManager into three focused engines for better maintainability
   - **Accountant Engine** (`accounting.js`): Fund tracking, invariant verification, fee management
     - Fund recalculation with dynamic tolerance
@@ -156,18 +178,29 @@ All notable changes to this project will be documented in this file.
 - `modules/order/strategy.js` (851 lines): StrategyEngine for rebalancing
 - `modules/order/sync_engine.js` (598 lines): SyncEngine for blockchain sync
 
-**Modified Files**:
+**Major Updates (Constants Centralization)**:
+- `modules/constants.js`: Added 8 new constant sections (PRECISION_DEFAULTS, INCREMENT_BOUNDS, FEE_PARAMETERS, API_LIMITS, FILL_PROCESSING, MAINTENANCE + 2 grid constants), added EXPERT section loader for advanced settings
+- `modules/order/sync_engine.js`: Replaced 4 precision fallback occurrences, changed lock refresh from hardcoded 5000 to LOCK_TIMEOUT_MS/2
+- `modules/order/strategy.js`: Replaced 8 precision fallback occurrences, replaced BTS fee parameters with constants
+- `modules/order/utils.js`: Replaced precision tolerance (0.001), API limits (batch sizes, orderbook depth, pool batches), increment bounds validation, fee parameters with centralized constants
+- `modules/order/accounting.js`: Replaced 2 precision fallback occurrences with PRECISION_DEFAULTS
+- `modules/order/grid.js`: Replaced MIN_SPREAD_ORDERS (2), SPREAD_WIDENING_MULTIPLIER (1.5), account totals timeout (10000), increment bounds validation with constants
+- `modules/chain_orders.js`: Replaced fill processing mode ('history') and operation type (4) with FILL_PROCESSING constants
+- `modules/dexbot_class.js`: Replaced cleanup probability (0.1) with MAINTENANCE.CLEANUP_PROBABILITY
+- `modules/order/manager.js`: Replaced 2 precision fallback occurrences and timeout cap (10000) with centralized constants
+- `modules/account_bots.js`: Split TIMING menu into "Timing (Core)" and "Timing (Fill)" options (from earlier in session)
+
+**Other Modified Files**:
 - `modules/order/manager.js`: Refactored to coordinate engines, added validateIndices(), added SPREAD order state validation
 - `modules/order/grid.js`: Updated spread correction to use atomic fund deduction, added order locking for atomicity, added null-safe logger calls
-- `modules/constants.js`: Added FUND_INVARIANT_PERCENT_TOLERANCE
-- `modules/order/utils.js`: Simplified fund calculation, removed dead functions, removed noop _adjustFunds call
-- `modules/order/accounting.js`: Added null-safe fund invariant logging, removed empty adjustFunds() method
 
 ### Code Statistics
-- Lines added: ~1,914 (accounting.js + strategy.js + sync_engine.js)
-- Lines removed: ~1,042 (manager.js consolidation, dead functions removed)
-- Net change: +872 lines with improved clarity and separation of concerns
-- Cyclomatic complexity: Reduced by distributing logic across three engines
+- Lines added: ~2,095 (accounting.js + strategy.js + sync_engine.js + constants centralization)
+- Lines removed: ~1,150 (manager.js consolidation, dead functions removed, scattered magic numbers consolidated)
+- Net change: +945 lines with improved clarity, separation of concerns, and maintainability
+- Cyclomatic complexity: Reduced by distributing logic across three engines and centralizing constants
+- **Constants Consolidation**: 60+ magic numbers centralized → 1 source of truth (modules/constants.js)
+- **Files Updated for Centralization**: 10 files (sync_engine, strategy, utils, accounting, grid, chain_orders, dexbot_class, manager, account_bots, constants)
 
 ---
 
