@@ -158,15 +158,16 @@ class Accountant {
         mgr.funds.virtuel = { buy: virtuelBuy, sell: virtuelSell };
         mgr.funds.reserved = mgr.funds.virtuel; // backwards compat alias
 
-        // Set totals (infer from free + committed, or use reported if available)
-        const inferredChainTotalBuy = chainFreeBuy + chainBuy;
-        const inferredChainTotalSell = chainFreeSell + chainSell;
-        const onChainTotalBuy = Number.isFinite(Number(mgr.accountTotals?.buy)) ? Number(mgr.accountTotals.buy) : null;
-        const onChainTotalSell = Number.isFinite(Number(mgr.accountTotals?.sell)) ? Number(mgr.accountTotals.sell) : null;
+        // Set totals based on accountable funds only (chainFree + chainCommitted from on-chain orders)
+        // Do NOT use blockchain-reported totals as they may include vesting balances, call orders,
+        // or settlements that are outside our trading view and would violate the invariant.
+        // For trading purposes: chainTotal = chainFree (unallocated) + chainCommitted (in orders)
+        const chainTotalBuy = chainFreeBuy + chainBuy;
+        const chainTotalSell = chainFreeSell + chainSell;
 
         mgr.funds.total.chain = {
-            buy: onChainTotalBuy !== null ? Math.max(onChainTotalBuy, inferredChainTotalBuy) : inferredChainTotalBuy,
-            sell: onChainTotalSell !== null ? Math.max(onChainTotalSell, inferredChainTotalSell) : inferredChainTotalSell
+            buy: chainTotalBuy,
+            sell: chainTotalSell
         };
         mgr.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
 
@@ -427,7 +428,12 @@ class Accountant {
     }
 
     /**
-     * Accumulate and deduct BTS blockchain fees from cache funds.
+     * Deduct pending BTS blockchain fees from chainFree and cacheFunds.
+     *
+     * When BTS is the trading asset, fees represent real money leaving the account.
+     * They must be deducted from chainFree immediately to reflect true available balance.
+     *
+     * @param {string} requestedSide - Optional side to deduct from ('buy' or 'sell')
      */
     async deductBtsFees(requestedSide = null) {
         const mgr = this.manager;
@@ -440,24 +446,39 @@ class Accountant {
 
         const side = requestedSide ? (requestedSide === btsSide ? btsSide : null) : btsSide;
 
-        if (side) {
+        if (side && mgr.funds.btsFeesOwed > 0) {
+            // CRITICAL: Deduct ALL owed fees from chainFree immediately when BTS is the trading asset
+            // Do NOT wait for cacheFunds - these are real fees already incurred and must be deducted
+            const feesOwedThisSide = mgr.funds.btsFeesOwed;
             const cache = mgr.funds.cacheFunds?.[side] || 0;
-            const feesOwedThisSide = Math.min(mgr.funds.btsFeesOwed, cache);
 
-            if (feesOwedThisSide > 0) {
-                mgr.logger.log(`Deducting ${feesOwedThisSide.toFixed(8)} BTS fees from cacheFunds.${side} and chainFree.${side}. Remaining fees: ${(mgr.funds.btsFeesOwed - feesOwedThisSide).toFixed(8)} BTS`, 'info');
+            // First deduct from cacheFunds (preferred, as it's surplus from fills/rotations)
+            const cacheDeduction = Math.min(feesOwedThisSide, cache);
+            const chainDeduction = feesOwedThisSide - cacheDeduction;
 
-                // Deduct from logical trackers
-                mgr.funds.cacheFunds[side] -= feesOwedThisSide;
-                mgr.funds.btsFeesOwed -= feesOwedThisSide;
+            mgr.logger.log(
+                `Deducting BTS fees: ${cacheDeduction.toFixed(8)} from cacheFunds, ` +
+                `${chainDeduction.toFixed(8)} from chainFree (total owed: ${feesOwedThisSide.toFixed(8)} BTS)`,
+                'info'
+            );
 
-                // CRITICAL: Physically deduct from optimistic chainFree balance so recalculateFunds stays correct
-                const orderType = (side === 'buy') ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
-                this.deductFromChainFree(orderType, feesOwedThisSide, 'bts-fee-settlement');
-
-                await mgr._persistCacheFunds();
-                await mgr._persistBtsFeesOwed();
+            // Deduct from cacheFunds first if available
+            if (cacheDeduction > 0) {
+                mgr.funds.cacheFunds[side] -= cacheDeduction;
             }
+
+            // CRITICAL: Always deduct remaining fees from chainFree to reflect real balance
+            // This ensures invariant stays: chainTotal = chainFree + chainCommitted
+            if (chainDeduction > 0) {
+                const orderType = (side === 'buy') ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+                this.deductFromChainFree(orderType, chainDeduction, 'bts-fee-settlement');
+            }
+
+            // Update total owed (now fully settled)
+            mgr.funds.btsFeesOwed = 0;
+
+            await mgr._persistCacheFunds();
+            await mgr._persistBtsFeesOwed();
         }
     }
 

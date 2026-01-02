@@ -97,25 +97,31 @@ class Logger {
     }
 
     /**
-     * Print a summary of fund status for diagnostics.
+     * Print a summary of fund status for diagnostics with optional context.
      * Displays the complete fund structure from manager.funds:
-    * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed)
+     * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed)
      * - total.chain: Total on-chain balance (chainFree + committed.chain)
      * - total.grid: Total grid allocation (committed.grid + virtuel)
      * - virtuel: VIRTUAL order sizes (reserved for future on-chain placement)
      * - committed.grid: ACTIVE order sizes (internal grid tracking)
      * - committed.chain: ACTIVE orders with orderId (confirmed on blockchain)
-     * 
+     * - cacheFunds: Fill proceeds and rotation surplus
+     * - btsFeesOwed: Pending BTS transaction fees
+     *
      * @param {OrderManager} manager - OrderManager instance to read funds from
+     * @param {string} context - Optional context string describing when this is called (e.g., "AFTER fill", "BEFORE rotation")
      */
-    logFundsStatus(manager) {
+    logFundsStatus(manager, context = '') {
         if (!manager) return;
-        // Only show detailed fund logging in debug mode
-        if (manager.logger?.level !== 'debug') return;
+        // Show detailed fund logging in debug mode
+        const isDebugMode = manager.logger?.level === 'debug';
 
         const buyName = manager.config?.assetB || 'quote';
         const sellName = manager.config?.assetA || 'base';
-        console.log('\n===== FUNDS STATUS =====');
+
+        // Build header with context
+        const headerContext = context ? ` [${context}]` : '';
+        console.log(`\n===== FUNDS STATUS${headerContext} =====`);
 
         // Use new nested structure
         const availableBuy = Number.isFinite(Number(manager.funds?.available?.buy)) ? manager.funds.available.buy.toFixed(8) : 'N/A';
@@ -172,8 +178,11 @@ class Logger {
         console.log(`cacheFunds: ${buy}Buy ${cacheBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${cacheSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`btsFeesOwed (all): ${btsFeesOwed.toFixed(8)} BTS`);
 
-        console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation) ===${reset}`);
-        console.log(`${debug}Note: cacheFunds is kept separate and added to available for rebalancing decisions${reset}`);
+        // Only show formula and notes in debug mode
+        if (isDebugMode) {
+            console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation) ===${reset}`);
+            console.log(`${debug}Note: cacheFunds is kept separate and added to available for rebalancing decisions${reset}`);
+        }
     }
 
     // Print a comprehensive status summary using manager state.

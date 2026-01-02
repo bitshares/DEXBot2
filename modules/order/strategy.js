@@ -159,6 +159,8 @@ class StrategyEngine {
             mgr.funds.cacheFunds.buy = (mgr.funds.cacheFunds.buy || 0) + proceedsBuy;
             mgr.funds.cacheFunds.sell = (mgr.funds.cacheFunds.sell || 0) + proceedsSell;
 
+            // CRITICAL: Settle all pending BTS fees immediately after fills
+            // This ensures chainFree reflects true available balance when BTS is the trading asset
             if (hasBtsPair && mgr.funds.btsFeesOwed > 0) await mgr.accountant.deductBtsFees();
 
             mgr.recalculateFunds();
@@ -190,6 +192,10 @@ class StrategyEngine {
 
             mgr.recalculateFunds();
             await mgr._persistCacheFunds();
+
+            // Log funding state after fill processing
+            mgr.logger.logFundsStatus(mgr, `AFTER processFilledOrders (${filledOrders.length} fills)`);
+
             return newOrders;
         } finally {
             mgr.resumeFundRecalc();

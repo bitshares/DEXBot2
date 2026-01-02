@@ -238,18 +238,32 @@ class DEXBot {
 
                             this.manager.logger.log(`>>> Processing sequential fill for order ${filledOrder.id} (${i}/${allFilledOrders.length})`, 'info');
 
-                            // Create an exclusion set from ALL other pending fills in the worklist
+                            // Create an exclusion set from OTHER pending fills in the worklist
                             // to prevent the rebalancer from picking an order that is about to be processed
+                            // BUT: Do NOT exclude the current fill we're processing right now!
                             const fullExcludeSet = new Set();
                             for (const other of allFilledOrders) {
+                                // Skip the current fill - we WANT to process it
+                                if (other === filledOrder) continue;
                                 if (other.orderId) fullExcludeSet.add(other.orderId);
                                 if (other.id) fullExcludeSet.add(other.id);
                             }
 
+                            // Log funding state before processing this fill
+                            this.manager.logger.logFundsStatus(this.manager, `BEFORE processing fill ${filledOrder.id}`);
+
                             const rebalanceResult = await this.manager.processFilledOrders([filledOrder], fullExcludeSet);
+
+                            // Log funding state after rebalance calculation (before actual placement)
+                            this.manager.logger.logFundsStatus(this.manager, `AFTER rebalanceOrders calculated for ${filledOrder.id} (planned: ${rebalanceResult.ordersToPlace?.length || 0} new, ${rebalanceResult.ordersToRotate?.length || 0} rotations)`);
+
                             const batchResult = await this.updateOrdersOnChainBatch(rebalanceResult);
 
-                            if (batchResult.hadRotation) anyRotations = true;
+                            if (batchResult.hadRotation) {
+                                anyRotations = true;
+                                // Log funding state after rotation completes
+                                this.manager.logger.logFundsStatus(this.manager, `AFTER rotation completed for ${filledOrder.id}`);
+                            }
                             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
 
                             // INTERRUPT CHECK: Did new fills arrive while we broadcasted?
@@ -855,6 +869,10 @@ class DEXBot {
                     }
                 }
 
+                // Log funding state after all batch operations (placement + rotations) complete
+                this.manager.recalculateFunds();
+                this.manager.logger.logFundsStatus(this.manager, `AFTER updateOrdersOnChainBatch (placed=${ordersToPlace.length}, rotated=${ordersToRotate.length})`);
+
             } catch (err) {
                 this.manager.logger.log(`Batch transaction failed: ${err.message}`, 'error');
                 return { executed: false, hadRotation: false };
@@ -927,6 +945,12 @@ class DEXBot {
         } catch (err) {
             this._warn(`Fee cache initialization failed: ${err.message}`);
         }
+
+        // CRITICAL: Activate fill listener BEFORE any grid operations or order placement
+        // This ensures we capture fills that occur during startup (initial placement, syncing, corrections)
+        // Must happen after manager initialization and fee cache setup but before any operations
+        await chainOrders.listenForFills(this.account || undefined, this._createFillCallback(chainOrders));
+        this._log('Fill listener activated (ready to process fills during startup)');
 
         const persistedGrid = this.accountOrders.loadBotGrid(this.config.botKey);
         const persistedCacheFunds = this.accountOrders.loadCacheFunds(this.config.botKey);
@@ -1222,11 +1246,6 @@ class DEXBot {
         } catch (err) {
             this._warn(`Failed to setup file watcher: ${err.message}`);
         }
-
-        // Activate fill listener AFTER all startup operations complete
-        // This prevents race conditions between startup grid operations and fill processing
-        await chainOrders.listenForFills(this.account || undefined, this._createFillCallback(chainOrders));
-        this._log('Fill listener activated (after startup complete)');
 
         // Start periodic blockchain fetch to keep blockchain variables updated
         this._setupBlockchainFetchInterval();
