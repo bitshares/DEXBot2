@@ -1881,22 +1881,28 @@ class Grid {
                 if (manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
                     ordersToPlace.push(newOrder);
 
-                    // Update the order in manager.orders
-                    manager._updateOrder(newOrder);
+                    // Lock order during state transition to prevent concurrent modifications
+                    manager.lockOrders([newOrder.id]);
+                    try {
+                        // Update the order in manager.orders
+                        manager._updateOrder(newOrder);
+                    } finally {
+                        manager.unlockOrders([newOrder.id]);
+                    }
 
-                    manager.logger.log(
+                    manager.logger?.log?.(
                         `Prepared spread correction order at vacated slot ${slot.id}: ` +
                         `${oppositeType} at ${slot.price.toFixed(4)}, geometric size ${geometricSize.toFixed(8)}`,
                         'info'
                     );
                 } else {
-                    manager.logger.log(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
+                    manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
                     return { ordersToPlace, partialMoves };
                 }
             }
         } else {
             // No partials to move (or no vacated slots) - activate a pool of candidate slots (VIRTUAL or SPREAD)
-            manager.logger.log(
+            manager.logger?.log?.(
                 `Selecting candidate slot for spread correction (pooling VIRTUAL and SPREAD slots)`,
                 'debug'
             );
@@ -1985,20 +1991,26 @@ class Grid {
                 if (manager.accountant.tryDeductFromChainFree(oppositeType, geometricSize, 'spread-correction')) {
                     ordersToPlace.push(convertedOrder);
 
-                    // Update the order in manager.orders
-                    manager._updateOrder(convertedOrder);
+                    // Lock order during state transition to prevent concurrent modifications
+                    manager.lockOrders([convertedOrder.id]);
+                    try {
+                        // Update the order in manager.orders
+                        manager._updateOrder(convertedOrder);
+                    } finally {
+                        manager.unlockOrders([convertedOrder.id]);
+                    }
 
-                    manager.logger.log(
+                    manager.logger?.log?.(
                         `Selected candidate slot for spread correction: ${selectedSlot.id} (${selectedSlot.type}) at ${selectedSlot.price.toFixed(4)}, ` +
                         `new size ${geometricSize.toFixed(8)} (boundary was ${boundaryPrice ? boundaryPrice.toFixed(4) : 'N/A'})`,
                         'info'
                     );
                 } else {
-                    manager.logger.log(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
+                    manager.logger?.log?.(`Spread correction aborted: insufficient chainFree funds for ${oppositeType}`, 'warn');
                     return { ordersToPlace, partialMoves };
                 }
             } else {
-                manager.logger.log(`No SPREAD or VIRTUAL candidate slots available for spread correction`, 'warn');
+                manager.logger?.log?.(`No SPREAD or VIRTUAL candidate slots available for spread correction`, 'warn');
             }
         }
 

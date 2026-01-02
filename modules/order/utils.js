@@ -10,7 +10,7 @@
  * - correctOrderPriceOnChain: Corrects price mismatches, may affect committed funds
  * - getMinOrderSize: Calculates minimum order size based on asset precision
  * 
- * Fund-aware functions call manager._adjustFunds() or manager.recalculateFunds()
+ * Fund-aware functions call manager.recalculateFunds()
  * to keep the funds structure consistent with order state changes.
  */
 
@@ -517,7 +517,6 @@ function applyChainSizeToGridOrder(manager, gridOrder, chainSize) {
     const newInt = floatToBlockchainInt(newSize, precision);
     if (oldInt === newInt) { gridOrder.size = newSize; return; }
     manager.logger?.log?.(`Order ${gridOrder.id} size adjustment: ${oldSize.toFixed(8)} -> ${newSize.toFixed(8)} (delta: ${delta.toFixed(8)})`, 'debug');
-    try { manager._adjustFunds(gridOrder, delta); } catch (e) { /* best-effort */ }
     gridOrder.size = newSize;
     try { manager._updateOrder(gridOrder); } catch (e) { /* best-effort */ }
 

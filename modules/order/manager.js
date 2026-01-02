@@ -116,7 +116,6 @@ class OrderManager {
     _addToChainFree(type, size, op) { return this.accountant.addToChainFree(type, size, op); }
     _updateOptimisticFreeBalance(oldO, newO, ctx, fee) { return this.accountant.updateOptimisticFreeBalance(oldO, newO, ctx, fee); }
     async deductBtsFees(side) { return await this.accountant.deductBtsFees(side); }
-    _adjustFunds(order, delta) { return this.accountant.adjustFunds(order, delta); }
 
     // --- Strategy Delegation ---
     async rebalanceOrders(fCounts, extra, excl) { return await this.strategy.rebalanceOrders(fCounts, extra, excl); }
@@ -382,7 +381,7 @@ class OrderManager {
 
             const allowedNextStates = validTransitions[existing.state] || [];
             if (!allowedNextStates.includes(order.state)) {
-                this.logger.log(
+                this.logger?.log?.(
                     `Error: Invalid state transition for order ${order.id}: ${existing.state} → ${order.state}. ` +
                     `Valid next states: ${allowedNextStates.join(', ')}`,
                     'error'
@@ -392,6 +391,17 @@ class OrderManager {
 
             // Record state transition for metrics
             this._recordStateTransition(existing.state, order.state);
+        }
+
+        // SPREAD type orders should remain in VIRTUAL state and not transition
+        if (order.type === ORDER_TYPES.SPREAD && existing && existing.type === ORDER_TYPES.SPREAD) {
+            if (order.state !== ORDER_STATES.VIRTUAL) {
+                this.logger?.log?.(
+                    `Error: SPREAD type orders must be in VIRTUAL state, not ${order.state}`,
+                    'error'
+                );
+                return;
+            }
         }
         if (existing) {
             this._ordersByState[existing.state]?.delete(order.id);

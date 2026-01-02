@@ -193,8 +193,8 @@ class Accountant {
         const allowedBuyTolerance = Math.max(precisionSlackBuy, chainTotalBuy * PERCENT_TOLERANCE);
 
         if (diffBuy > allowedBuyTolerance) {
-            mgr._metrics.invariantViolations.buy++;
-            mgr.logger.log(
+            mgr._metrics?.invariantViolations && (mgr._metrics.invariantViolations.buy++);
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (BUY): chainTotal (${chainTotalBuy.toFixed(8)}) != chainFree (${chainFreeBuy.toFixed(8)}) + chainCommitted (${chainBuy.toFixed(8)}) = ${expectedBuy.toFixed(8)} (diff: ${diffBuy.toFixed(8)}, allowed: ${allowedBuyTolerance.toFixed(8)})`,
                 'warn'
             );
@@ -207,8 +207,8 @@ class Accountant {
         const allowedSellTolerance = Math.max(precisionSlackSell, chainTotalSell * PERCENT_TOLERANCE);
 
         if (diffSell > allowedSellTolerance) {
-            mgr._metrics.invariantViolations.sell++;
-            mgr.logger.log(
+            mgr._metrics?.invariantViolations && (mgr._metrics.invariantViolations.sell++);
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (SELL): chainTotal (${chainTotalSell.toFixed(8)}) != chainFree (${chainFreeSell.toFixed(8)}) + chainCommitted (${chainSell.toFixed(8)}) = ${expectedSell.toFixed(8)} (diff: ${diffSell.toFixed(8)}, allowed: ${allowedSellTolerance.toFixed(8)})`,
                 'warn'
             );
@@ -216,13 +216,13 @@ class Accountant {
 
         // INVARIANT 2: Available should not exceed chainFree
         if (mgr.funds.available.buy > chainFreeBuy + allowedBuyTolerance) {
-            mgr.logger.log(
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (BUY available): available (${mgr.funds.available.buy.toFixed(8)}) > chainFree (${chainFreeBuy.toFixed(8)})`,
                 'warn'
             );
         }
         if (mgr.funds.available.sell > chainFreeSell + allowedSellTolerance) {
-            mgr.logger.log(
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (SELL available): available (${mgr.funds.available.sell.toFixed(8)}) > chainFree (${chainFreeSell.toFixed(8)})`,
                 'warn'
             );
@@ -232,13 +232,13 @@ class Accountant {
         const gridCommittedBuy = mgr.funds.committed.grid.buy;
         const gridCommittedSell = mgr.funds.committed.grid.sell;
         if (gridCommittedBuy > chainTotalBuy + allowedBuyTolerance) {
-            mgr.logger.log(
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (BUY grid): gridCommitted (${gridCommittedBuy.toFixed(8)}) > chainTotal (${chainTotalBuy.toFixed(8)})`,
                 'warn'
             );
         }
         if (gridCommittedSell > chainTotalSell + allowedSellTolerance) {
-            mgr.logger.log(
+            mgr.logger?.log?.(
                 `WARNING: Fund invariant violation (SELL grid): gridCommitted (${gridCommittedSell.toFixed(8)}) > chainTotal (${chainTotalSell.toFixed(8)})`,
                 'warn'
             );
@@ -439,27 +439,6 @@ class Accountant {
         }
     }
 
-    /**
-     * Adjust funds for partial fills detected via size deltas.
-     */
-    adjustFunds(gridOrder, deltaSize) {
-        const mgr = this.manager;
-        if (!gridOrder || !Number.isFinite(deltaSize)) return;
-        if (deltaSize >= 0) return; // only react to size decreases (fills)
-
-        const fillSize = Math.abs(deltaSize);
-        const price = Number(gridOrder.price || 0);
-        if (fillSize <= 0 || price <= 0) return;
-
-        if (!mgr.funds) this.resetFunds();
-        if (!mgr.accountTotals) {
-            mgr.accountTotals = { buy: 0, sell: 0, buyFree: 0, sellFree: 0 };
-        }
-
-        // Partial proceeds: Internal accounting only. 
-        // We no longer update accountTotals (chain totals) here to prevent double-counting
-        // during the transition to processFilledOrders.
-    }
 }
 
 module.exports = Accountant;
