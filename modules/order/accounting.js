@@ -160,8 +160,10 @@ class Accountant {
         mgr.funds.available.buy = calculateAvailableFundsValue('buy', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
         mgr.funds.available.sell = calculateAvailableFundsValue('sell', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
 
-        // Verify fund invariants to catch leaks early
-        this._verifyFundInvariants(mgr, chainFreeBuy, chainFreeSell, chainBuy, chainSell);
+        // Verify fund invariants to catch leaks early - but only if not in a batch update
+        if (mgr._pauseFundRecalcDepth === 0) {
+            this._verifyFundInvariants(mgr, chainFreeBuy, chainFreeSell, chainBuy, chainSell);
+        }
     }
 
     /**

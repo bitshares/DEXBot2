@@ -160,10 +160,12 @@ class SyncEngine {
         }, TIMING.LOCK_TIMEOUT_MS / 2);
 
         try {
+            mgr.pauseFundRecalc();
             // Reconciliation logic moved below in the try block
             this._performSyncFromOpenOrders(mgr, assetAPrecision, assetBPrecision, parsedChainOrders,
                                             chainOrderIdsOnGrid, matchedGridOrderIds, filledOrders, updatedOrders, ordersNeedingCorrection);
         } finally {
+            mgr.resumeFundRecalc();
             // Stop refresh interval first
             clearInterval(lockRefreshInterval);
             // Unlock after reconciliation completes
@@ -299,75 +301,80 @@ class SyncEngine {
         const mgr = this.manager;
         if (!fillOp || !fillOp.order_id) return { filledOrders: [], updatedOrders: [], partialFill: false };
 
-        const orderId = fillOp.order_id;
-        const paysAmount = fillOp.pays ? Number(fillOp.pays.amount) : 0;
-        const paysAssetId = fillOp.pays ? fillOp.pays.asset_id : null;
+        mgr.pauseFundRecalc();
+        try {
+            const orderId = fillOp.order_id;
+            const paysAmount = fillOp.pays ? Number(fillOp.pays.amount) : 0;
+            const paysAssetId = fillOp.pays ? fillOp.pays.asset_id : null;
 
-        const assetAPrecision = mgr.assets?.assetA?.precision || (() => {
-            mgr.logger?.log?.(`WARNING: Asset precision not found for assetA in syncFromFillHistory, using fallback precision=${PRECISION_DEFAULTS.ASSET_FALLBACK}`, 'warn');
-            return PRECISION_DEFAULTS.ASSET_FALLBACK;
-        })();
-        const assetBPrecision = mgr.assets?.assetB?.precision || (() => {
-            mgr.logger?.log?.(`WARNING: Asset precision not found for assetB in syncFromFillHistory, using fallback precision=${PRECISION_DEFAULTS.ASSET_FALLBACK}`, 'warn');
-            return PRECISION_DEFAULTS.ASSET_FALLBACK;
-        })();
+            const assetAPrecision = mgr.assets?.assetA?.precision || (() => {
+                mgr.logger?.log?.(`WARNING: Asset precision not found for assetA in syncFromFillHistory, using fallback precision=${PRECISION_DEFAULTS.ASSET_FALLBACK}`, 'warn');
+                return PRECISION_DEFAULTS.ASSET_FALLBACK;
+            })();
+            const assetBPrecision = mgr.assets?.assetB?.precision || (() => {
+                mgr.logger?.log?.(`WARNING: Asset precision not found for assetB in syncFromFillHistory, using fallback precision=${PRECISION_DEFAULTS.ASSET_FALLBACK}`, 'warn');
+                return PRECISION_DEFAULTS.ASSET_FALLBACK;
+            })();
 
-        let matchedGridOrder = null;
-        for (const gridOrder of mgr.orders.values()) {
-            if (gridOrder.orderId === orderId && (gridOrder.state === ORDER_STATES.ACTIVE || gridOrder.state === ORDER_STATES.PARTIAL)) {
-                matchedGridOrder = gridOrder;
-                break;
-            }
-        }
-
-        if (!matchedGridOrder) return { filledOrders: [], updatedOrders: [], partialFill: false };
-
-        const orderType = matchedGridOrder.type;
-        const currentSize = Number(matchedGridOrder.size || 0);
-        let filledAmount = 0;
-        if (orderType === ORDER_TYPES.SELL) {
-            if (paysAssetId === mgr.assets.assetA.id) filledAmount = blockchainToFloat(paysAmount, assetAPrecision);
-        } else {
-            if (paysAssetId === mgr.assets.assetB.id) filledAmount = blockchainToFloat(paysAmount, assetBPrecision);
-        }
-
-        const precision = (orderType === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
-        const currentSizeInt = floatToBlockchainInt(currentSize, precision);
-        const filledAmountInt = floatToBlockchainInt(filledAmount, precision);
-        const newSizeInt = Math.max(0, currentSizeInt - filledAmountInt);
-        const newSize = blockchainToFloat(newSizeInt, precision);
-
-        const filledOrders = [];
-        const updatedOrders = [];
-        if (newSizeInt <= 0) {
-            const filledOrder = { ...matchedGridOrder };
-            const spreadOrder = convertToSpreadPlaceholder(matchedGridOrder);
-            mgr._updateOrder(spreadOrder);
-            filledOrders.push(filledOrder);
-            return { filledOrders, updatedOrders, partialFill: false };
-        } else {
-            const filledPortion = { ...matchedGridOrder, size: filledAmount, isPartial: true };
-            const updatedOrder = { ...matchedGridOrder };
-            updatedOrder.state = ORDER_STATES.PARTIAL;
-            applyChainSizeToGridOrder(mgr, updatedOrder, newSize);
-
-            if (updatedOrder.isDoubleOrder && updatedOrder.mergedDustSize) {
-                updatedOrder.filledSinceRefill = (Number(updatedOrder.filledSinceRefill) || 0) + filledAmount;
-                const mergedDustSize = Number(updatedOrder.mergedDustSize);
-                if (updatedOrder.filledSinceRefill >= mergedDustSize) {
-                    filledPortion.isDelayedRotationTrigger = true;
-                    updatedOrder.state = ORDER_STATES.ACTIVE;
-                    updatedOrder.isDoubleOrder = false;
-                    updatedOrder.pendingRotation = false;
-                    updatedOrder.filledSinceRefill = 0;
-                } else {
-                    updatedOrder.state = ORDER_STATES.ACTIVE;
+            let matchedGridOrder = null;
+            for (const gridOrder of mgr.orders.values()) {
+                if (gridOrder.orderId === orderId && (gridOrder.state === ORDER_STATES.ACTIVE || gridOrder.state === ORDER_STATES.PARTIAL)) {
+                    matchedGridOrder = gridOrder;
+                    break;
                 }
             }
-            mgr._updateOrder(updatedOrder);
-            updatedOrders.push(updatedOrder);
-            filledOrders.push(filledPortion);
-            return { filledOrders, updatedOrders, partialFill: true };
+
+            if (!matchedGridOrder) return { filledOrders: [], updatedOrders: [], partialFill: false };
+
+            const orderType = matchedGridOrder.type;
+            const currentSize = Number(matchedGridOrder.size || 0);
+            let filledAmount = 0;
+            if (orderType === ORDER_TYPES.SELL) {
+                if (paysAssetId === mgr.assets.assetA.id) filledAmount = blockchainToFloat(paysAmount, assetAPrecision);
+            } else {
+                if (paysAssetId === mgr.assets.assetB.id) filledAmount = blockchainToFloat(paysAmount, assetBPrecision);
+            }
+
+            const precision = (orderType === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
+            const currentSizeInt = floatToBlockchainInt(currentSize, precision);
+            const filledAmountInt = floatToBlockchainInt(filledAmount, precision);
+            const newSizeInt = Math.max(0, currentSizeInt - filledAmountInt);
+            const newSize = blockchainToFloat(newSizeInt, precision);
+
+            const filledOrders = [];
+            const updatedOrders = [];
+            if (newSizeInt <= 0) {
+                const filledOrder = { ...matchedGridOrder };
+                const spreadOrder = convertToSpreadPlaceholder(matchedGridOrder);
+                mgr._updateOrder(spreadOrder);
+                filledOrders.push(filledOrder);
+                return { filledOrders, updatedOrders, partialFill: false };
+            } else {
+                const filledPortion = { ...matchedGridOrder, size: filledAmount, isPartial: true };
+                const updatedOrder = { ...matchedGridOrder };
+                updatedOrder.state = ORDER_STATES.PARTIAL;
+                applyChainSizeToGridOrder(mgr, updatedOrder, newSize);
+
+                if (updatedOrder.isDoubleOrder && updatedOrder.mergedDustSize) {
+                    updatedOrder.filledSinceRefill = (Number(updatedOrder.filledSinceRefill) || 0) + filledAmount;
+                    const mergedDustSize = Number(updatedOrder.mergedDustSize);
+                    if (updatedOrder.filledSinceRefill >= mergedDustSize) {
+                        filledPortion.isDelayedRotationTrigger = true;
+                        updatedOrder.state = ORDER_STATES.ACTIVE;
+                        updatedOrder.isDoubleOrder = false;
+                        updatedOrder.pendingRotation = false;
+                        updatedOrder.filledSinceRefill = 0;
+                    } else {
+                        updatedOrder.state = ORDER_STATES.ACTIVE;
+                    }
+                }
+                mgr._updateOrder(updatedOrder);
+                updatedOrders.push(updatedOrder);
+                filledOrders.push(filledPortion);
+                return { filledOrders, updatedOrders, partialFill: true };
+            }
+        } finally {
+            mgr.resumeFundRecalc();
         }
     }
 
