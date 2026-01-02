@@ -502,18 +502,32 @@ class StrategyEngine {
         const fundsPerOrder = cache / toRotate.length;
 
         for (const order of toRotate) {
-            const spreadOrders = mgr.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL);
+            const allSpreadOrders = mgr.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL);
+            
+            // Filter spread slots to ensure they are on the correct side of the marketAction
+            // For BUY rotation (moving outermost buy to spread): target must be < startPrice
+            // For SELL rotation (moving outermost sell to spread): target must be > startPrice
+            const spreadOrders = allSpreadOrders.filter(o => 
+                targetType === ORDER_TYPES.BUY 
+                    ? o.price < mgr.config.startPrice 
+                    : o.price > mgr.config.startPrice
+            );
+
             if (spreadOrders.length === 0) {
-                mgr.logger.log(`No SPREAD slots available for rotation`, 'warn');
+                mgr.logger.log(`No eligible SPREAD slots available for ${targetType} rotation`, 'warn');
                 break;
             }
 
-            // Create a copy before sorting to avoid modifying original list multiple times
+            // Create a copy before sorting
             const sortedSpreads = [...spreadOrders];
 
-            // Sort spread slots by closeness to market action (startPrice)
+            // Sort spread slots by closeness to market action
+            // For BUY: higher price is closer
+            // For SELL: lower price is closer
             sortedSpreads.sort((a, b) =>
-                Math.abs(a.price - mgr.config.startPrice) - Math.abs(b.price - mgr.config.startPrice)
+                targetType === ORDER_TYPES.BUY
+                    ? b.price - a.price // Highest first
+                    : a.price - b.price // Lowest first
             );
 
             const targetSpreadSlot = sortedSpreads[0];
