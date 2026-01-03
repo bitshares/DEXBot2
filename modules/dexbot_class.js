@@ -254,23 +254,15 @@ class DEXBot {
 
                             const rebalanceResult = await this.manager.processFilledOrders([filledOrder], fullExcludeSet);
 
-                            // Log grid diagnostics after processing fill
-                            this.manager.logger.logGridDiagnostics(this.manager, `AFTER processFilledOrders for ${filledOrder.id}`);
-
                             // Log funding state after rebalance calculation (before actual placement)
                             this.manager.logger.logFundsStatus(this.manager, `AFTER rebalanceOrders calculated for ${filledOrder.id} (planned: ${rebalanceResult.ordersToPlace?.length || 0} new, ${rebalanceResult.ordersToRotate?.length || 0} rotations)`);
 
                             const batchResult = await this.updateOrdersOnChainBatch(rebalanceResult);
 
-                            // Log grid diagnostics after batch execution
-                            this.manager.logger.logGridDiagnostics(this.manager, `AFTER updateOrdersOnChainBatch for ${filledOrder.id}`);
-
                             if (batchResult.hadRotation) {
                                 anyRotations = true;
                                 // Log funding state after rotation completes
                                 this.manager.logger.logFundsStatus(this.manager, `AFTER rotation completed for ${filledOrder.id}`);
-                                // Log grid diagnostics after rotation
-                                this.manager.logger.logGridDiagnostics(this.manager, `AFTER rotation completed for ${filledOrder.id}`);
                             }
                             persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
 
@@ -317,8 +309,6 @@ class DEXBot {
                             if (spreadResult && spreadResult.ordersPlaced > 0) {
                                 this.manager.logger.log(`✓ Spread correction after sequential fills: ${spreadResult.ordersPlaced} order(s) placed, ` +
                                     `${spreadResult.partialsMoved} partial(s) moved`, 'info');
-                                // Log grid diagnostics after spread correction
-                                this.manager.logger.logGridDiagnostics(this.manager, `AFTER spread correction (filled orders)`);
                                 persistGridSnapshot(this.manager, this.accountOrders, this.config.botKey);
                             }
 

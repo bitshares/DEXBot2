@@ -121,11 +121,23 @@ class Logger {
 
         // Build header with context
         const headerContext = context ? ` [${context}]` : '';
-        console.log(`\n===== FUNDS STATUS${headerContext} =====`);
 
         // Use new nested structure
         const availableBuy = Number.isFinite(Number(manager.funds?.available?.buy)) ? manager.funds.available.buy.toFixed(8) : 'N/A';
         const availableSell = Number.isFinite(Number(manager.funds?.available?.sell)) ? manager.funds.available.sell.toFixed(8) : 'N/A';
+
+        const c = this.colors;
+        const debug = c.debug;
+        const reset = c.reset;
+        const buy = c.buy;
+        const sell = c.sell;
+
+        if (!isDebugMode) {
+            this.log(`Funds Status${headerContext}: ${buy}Buy ${availableBuy}${reset} ${buyName} | ${sell}Sell ${availableSell}${reset} ${sellName}`, 'info');
+            return;
+        }
+
+        console.log(`\n===== FUNDS STATUS${headerContext} =====`);
 
         // Chain balances (from accountTotals)
         const chainFreeBuy = manager.accountTotals?.buyFree ?? 0;
@@ -152,12 +164,6 @@ class Logger {
         // BTS fees
         const btsFeesOwed = manager.funds?.btsFeesOwed ?? 0;
         const btsSide = (manager.config?.assetA === 'BTS') ? 'sell' : (manager.config?.assetB === 'BTS') ? 'buy' : null;
-
-        const c = this.colors;
-        const debug = c.debug;
-        const reset = c.reset;
-        const buy = c.buy;
-        const sell = c.sell;
 
         console.log(`\n${debug}=== AVAILABLE CALCULATION ===${reset}`);
         console.log(`funds.available: ${buy}Buy ${availableBuy}${reset} ${buyName} | ${sell}Sell ${availableSell}${reset} ${sellName}`);
