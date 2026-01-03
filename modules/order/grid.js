@@ -147,14 +147,16 @@ class Grid {
             price,
             type: i >= sellLevels.length - sellSpread ? (initialSpreadCount.sell++, ORDER_TYPES.SPREAD) : ORDER_TYPES.SELL,
             id: `sell-${i}`,
-            state: 'virtual'
+            state: 'virtual',
+            size: 0
         }));
 
         const buyOrders = buyLevels.map((price, i) => ({
             price,
             type: i < buySpread ? (initialSpreadCount.buy++, ORDER_TYPES.SPREAD) : ORDER_TYPES.BUY,
             id: `buy-${i}`,
-            state: 'virtual'
+            state: 'virtual',
+            size: 0
         }));
 
         return { orders: [...sellOrders, ...buyOrders], initialSpreadCount };
@@ -1469,7 +1471,7 @@ class Grid {
 
         const allOrders = Array.from(manager.orders.values());
         const { GRID_LIMITS, ORDER_TYPES, ORDER_STATES } = require('../constants');
-        const dustThreshold = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE || 10;
+        const dustThreshold = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE;
 
         // 1. Gather all orders and sort them by price distance from market
         const sells = allOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price); // Lowest sell (near market) first

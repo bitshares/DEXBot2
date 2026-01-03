@@ -421,7 +421,7 @@ class StrategyEngine {
                         const totalResidualCapital = accumulatedResidualCapital + (isAnchorDecision.residualCapital || 0);
                         const residualSize = totalResidualCapital / p.price;
                         const mergedSize = idealSize + residualSize;
-                        const dustThresholdPercent = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE || 5;
+                        const dustThresholdPercent = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE;
                         const maxMergedSize = idealSize * (1 + dustThresholdPercent / 100);
                         const shouldMerge = isAnchorDecision.isDust && mergedSize <= maxMergedSize;
 
@@ -589,7 +589,7 @@ class StrategyEngine {
         // Calculate percent using integer arithmetic to match blockchain behavior
         const percentOfIdeal = idealInt > 0 ? partialInt / idealInt : 0;
 
-        if (percentOfIdeal < (GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE || PRECISION_DEFAULTS.ASSET_FALLBACK) / 100) {
+        if (percentOfIdeal < GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE / 100) {
             return { isDust: true, idealSize, percentOfIdeal, mergedDustSize: partialSize };
         } else {
             let residualCapital = 0;

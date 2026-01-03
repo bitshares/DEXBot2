@@ -96,6 +96,9 @@ class OrderManager {
             lastSyncDurationMs: 0,
             metricsStartTime: Date.now()
         };
+
+        // Clean up any stale locks from previous process crash on startup
+        this._cleanExpiredLocks();
     }
 
     // --- Accounting Delegation ---

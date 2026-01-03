@@ -406,14 +406,26 @@ class SyncEngine {
                 if (updatedOrder.isDoubleOrder && updatedOrder.mergedDustSize) {
                     updatedOrder.filledSinceRefill = (Number(updatedOrder.filledSinceRefill) || 0) + filledAmount;
                     const mergedDustSize = Number(updatedOrder.mergedDustSize);
+
+                    // Double order stays ACTIVE while size >= original core size (before dust merged)
+                    // Once it drops below original core size, it becomes PARTIAL
+                    const originalCoreSize = (Number(matchedGridOrder.size) || 0) - mergedDustSize;
+                    const currentSize = Number(updatedOrder.size) || 0;
+
+                    if (currentSize < originalCoreSize) {
+                        // Order has filled below the original core size - become PARTIAL
+                        updatedOrder.state = ORDER_STATES.PARTIAL;
+                    } else {
+                        // Still at or above original core size - stay ACTIVE
+                        updatedOrder.state = ORDER_STATES.ACTIVE;
+                    }
+
+                    // When accumulated fills reach mergedDustSize, trigger delayed rotation
                     if (updatedOrder.filledSinceRefill >= mergedDustSize) {
                         filledPortion.isDelayedRotationTrigger = true;
-                        updatedOrder.state = ORDER_STATES.ACTIVE;
                         updatedOrder.isDoubleOrder = false;
                         updatedOrder.pendingRotation = false;
                         updatedOrder.filledSinceRefill = 0;
-                    } else {
-                        updatedOrder.state = ORDER_STATES.ACTIVE;
                     }
                 }
                 mgr._updateOrder(updatedOrder);
