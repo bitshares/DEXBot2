@@ -986,14 +986,20 @@ class Grid {
         }
 
         const { ORDER_STATES } = require('../constants'); // Moved up for use in filtering
-        // Separate orders by type and filter out PARTIAL and SPREAD orders from the comparison calculation
-        // PARTIAL: temporary states (remainder being filled) - excluded because they're transient
-        // SPREAD: placeholders with size 0 (filled orders) - excluded because they don't represent active grid
-        // This ensures divergence metric reflects the true active grid structure (ACTIVE orders only)
-        const calculatedBuys = filterOrdersByTypeAndState(calculatedGrid, ORDER_TYPES.BUY, ORDER_STATES.PARTIAL);
-        const calculatedSells = filterOrdersByTypeAndState(calculatedGrid, ORDER_TYPES.SELL, ORDER_STATES.PARTIAL);
-        const persistedBuys = filterOrdersByTypeAndState(persistedGrid, ORDER_TYPES.BUY, ORDER_STATES.PARTIAL);
-        const persistedSells = filterOrdersByTypeAndState(persistedGrid, ORDER_TYPES.SELL, ORDER_STATES.PARTIAL);
+
+        // Helper: Filter orders for RMS divergence calculation
+        // EXCLUDES: PARTIAL state orders (transient, being filled) and DOUBLE orders (merged dust with inflated sizes)
+        // INCLUDES: ACTIVE and VIRTUAL orders only (these represent the true intended grid structure)
+        // This ensures divergence metric reflects actual grid health, not temporary states
+        const filterForRmsCalculation = (orders, orderType) => {
+            return filterOrdersByTypeAndState(orders, orderType, ORDER_STATES.PARTIAL)
+                .filter(o => !o.isDoubleOrder);  // Exclude merged dust orders
+        };
+
+        const calculatedBuys = filterForRmsCalculation(calculatedGrid, ORDER_TYPES.BUY);
+        const calculatedSells = filterForRmsCalculation(calculatedGrid, ORDER_TYPES.SELL);
+        const persistedBuys = filterForRmsCalculation(persistedGrid, ORDER_TYPES.BUY);
+        const persistedSells = filterForRmsCalculation(persistedGrid, ORDER_TYPES.SELL);
 
         // Helper: Calculate ideal orders if manager is present
         // This ensures the comparison reflects what the grid SHOULD be (with available funds included)
@@ -1332,7 +1338,13 @@ class Grid {
         const currentSpread = Grid.calculateCurrentSpread(manager);
         // Threshold accounts for grid geometry: with N SPREAD orders, ACTIVE orders are N+1 steps apart
         // Using SPREAD_WIDENING_MULTIPLIER provides buffer for natural grid spacing while catching true widening
-        const targetSpread = manager.config.targetSpreadPercent + (manager.config.incrementPercent * GRID_LIMITS.SPREAD_WIDENING_MULTIPLIER);
+        const baseTargetSpread = manager.config.targetSpreadPercent + (manager.config.incrementPercent * GRID_LIMITS.SPREAD_WIDENING_MULTIPLIER);
+
+        // If a double order exists, allow an additional increment to spread threshold
+        // (double orders have extra funding which naturally widens spread on one side)
+        const hasDoubleOrder = Array.from(manager.orders.values()).some(order => order.isDoubleOrder);
+        const doubleOrderAdjustment = hasDoubleOrder ? manager.config.incrementPercent : 0;
+        const targetSpread = baseTargetSpread + doubleOrderAdjustment;
 
         // Only trigger spread warning if we have at least one order on BOTH sides
         const buyCount = countOrdersByType(ORDER_TYPES.BUY, manager.orders);

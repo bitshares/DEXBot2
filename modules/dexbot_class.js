@@ -544,7 +544,7 @@ class DEXBot {
     }
 
     async updateOrdersOnChainBatch(rebalanceResult) {
-        const { ordersToPlace, ordersToRotate = [], partialMoves = [] } = rebalanceResult;
+        const { ordersToPlace, ordersToRotate = [], partialMoves = [], ordersToUpdate = [] } = rebalanceResult;
 
         if (this.config.dryRun) {
             if (ordersToPlace && ordersToPlace.length > 0) {
@@ -555,6 +555,9 @@ class DEXBot {
             }
             if (partialMoves && partialMoves.length > 0) {
                 this.manager.logger.log(`Dry run: would move ${partialMoves.length} partial order(s) on-chain`, 'info');
+            }
+            if (ordersToUpdate && ordersToUpdate.length > 0) {
+                this.manager.logger.log(`Dry run: would update size of ${ordersToUpdate.length} order(s) on-chain`, 'info');
             }
             return;
         }
@@ -573,6 +576,9 @@ class DEXBot {
         if (partialMoves) partialMoves.forEach(m => {
             if (m.partialOrder?.orderId) idsToLock.add(m.partialOrder.orderId);
             if (m.newGridId) idsToLock.add(m.newGridId);
+        });
+        if (ordersToUpdate) ordersToUpdate.forEach(u => {
+            if (u.partialOrder?.orderId) idsToLock.add(u.partialOrder.orderId);
         });
 
         // LOCK ORDERS (Shadowing)
@@ -596,7 +602,45 @@ class DEXBot {
                 }
             }
 
-            // Step 2: Build update operations for partial order moves (processed before rotations for atomic swap semantics)
+            // Step 2: Build size update operations (SPLIT updates)
+            if (ordersToUpdate && ordersToUpdate.length > 0) {
+                this.manager.logger.log(`[SPLIT UPDATE] Processing ${ordersToUpdate.length} size update(s)`, 'info');
+                for (const updateInfo of ordersToUpdate) {
+                    try {
+                        const { partialOrder, newSize } = updateInfo;
+                        if (!partialOrder.orderId) continue;
+
+                        this.manager.logger.log(
+                            `[SPLIT UPDATE] Building size update: ${partialOrder.orderId} (${partialOrder.type}) ${partialOrder.size.toFixed(8)} -> ${newSize.toFixed(8)}`,
+                            'info'
+                        );
+
+                        // Size-only update: same price, new size
+                        const op = await chainOrders.buildUpdateOrderOp(
+                            this.account, partialOrder.orderId,
+                            {
+                                amountToSell: newSize,
+                                orderType: partialOrder.type
+                            }
+                        );
+
+                        if (op) {
+                            operations.push(op);
+                            opContexts.push({ kind: 'size-update', updateInfo });
+                            this.manager.logger.log(
+                                `[SPLIT UPDATE] ✓ Added size update op: ${partialOrder.orderId} size ${partialOrder.size.toFixed(8)} -> ${newSize.toFixed(8)}`,
+                                'info'
+                            );
+                        } else {
+                            this.manager.logger.log(`[SPLIT UPDATE] No change needed for size update of ${partialOrder.orderId}`, 'debug');
+                        }
+                    } catch (err) {
+                        this.manager.logger.log(`[SPLIT UPDATE] Failed to prepare size update op: ${err.message}`, 'error');
+                    }
+                }
+            }
+
+            // Step 3: Build update operations for partial order moves (processed before rotations for atomic swap semantics)
             if (partialMoves && partialMoves.length > 0) {
                 for (const moveInfo of partialMoves) {
                     try {
@@ -628,7 +672,7 @@ class DEXBot {
                 }
             }
 
-            // Step 3: Build update operations (rotation)
+            // Step 4: Build update operations (rotation)
             if (ordersToRotate && ordersToRotate.length > 0) {
                 const seenOrderIds = new Set();
                 const uniqueRotations = ordersToRotate.filter(r => {

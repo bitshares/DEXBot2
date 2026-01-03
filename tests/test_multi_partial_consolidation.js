@@ -86,11 +86,15 @@ async function testMultiPartialConsolidation() {
     // Execute rebalance logic
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    console.log('  Verifying partialMoves:');
-    assert(result.partialMoves.length === 3, `Expected 3 partial moves, got ${result.partialMoves.length}`);
+    console.log('  Verifying partialMoves and ordersToUpdate:');
+    console.log(`  partialMoves: ${result.partialMoves.length}, ordersToUpdate: ${result.ordersToUpdate.length}`);
 
-    // Sort result.partialMoves by price to be sure of indices (Outermost first)
-    const moves = result.partialMoves.sort((a, b) => b.newPrice - a.newPrice);
+    // Combine all moves for verification
+    const allMoves = [...result.partialMoves, ...result.ordersToUpdate];
+    assert(allMoves.length === 3, `Expected 3 total moves, got ${allMoves.length}`);
+
+    // Sort allMoves by price to be sure of indices (Outermost first)
+    const moves = allMoves.sort((a, b) => b.newPrice - a.newPrice);
 
     // P1 (Outermost): Should be upgraded to ideal size (10) and STAY AT 1.30
     console.log(`  Checking P1 (Outermost, 1.30): newPrice=${moves[0].newPrice}, size=${moves[0].partialOrder.size}`);
@@ -108,16 +112,18 @@ async function testMultiPartialConsolidation() {
     // Innermost partial (P3) at 1.10 price. Ideal=10.
     // Resulting merged size = 10 + (6 / 1.10) = 15.4545
     // 15.45 > 10.5 (threshold). Should SPLIT.
-    console.log(`  Checking P3 (Innermost, 1.10): newPrice=${moves[2].newPrice}, size=${moves[2].partialOrder.size}`);
+    console.log(`  Checking P3 (Innermost, 1.10): newPrice=${moves[2].newPrice}, size=${moves[2].newSize || moves[2].partialOrder.size}`);
     assert(moves[2].newPrice === 1.10, 'P3 should have stayed at its original price');
-    assert(moves[2].partialOrder.size === 10, `P3 should be restored to exactly ideal 10, got ${moves[2].partialOrder.size}`);
+    const p3Size = moves[2].newSize || moves[2].partialOrder.size;
+    assert(p3Size === 10, `P3 should be restored to exactly ideal 10, got ${p3Size}`);
     assert(!moves[2].partialOrder.isDoubleOrder, 'P3 should NOT be a double order (since it split)');
+    assert(moves[2].isSplitUpdate, 'P3 should be marked as a SPLIT update');
 
     // Verify residual order placement
     console.log(`  Checking ordersToPlace for residual: length=${result.ordersToPlace.length}`);
     assert(result.ordersToPlace.length >= 1, 'Should have created a residual order at the spread');
-    const residual = result.ordersToPlace.find(o => o.isResidualFromAnchor);
-    assert(residual, 'Residual order marked incorrectly');
+    const residual = result.ordersToPlace.find(o => o.isResidualFromSplitId);
+    assert(residual, 'Residual order should be marked as residual from split');
     console.log(`  ✓ Multi-partial consolidation (Split Branch) verified`);
 }
 

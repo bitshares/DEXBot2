@@ -16,7 +16,8 @@ const {
     getMinOrderSize,
     getAssetFees,
     floatToBlockchainInt,
-    blockchainToFloat
+    blockchainToFloat,
+    calculateRotationOrderSizes
 } = require('./utils');
 
 class StrategyEngine {
@@ -170,7 +171,7 @@ class StrategyEngine {
             const hasFullFills = filledCounts[ORDER_TYPES.BUY] > 0 || filledCounts[ORDER_TYPES.SELL] > 0;
             if (!hasFullFills && (partialFillCount[ORDER_TYPES.BUY] > 0 || partialFillCount[ORDER_TYPES.SELL] > 0)) {
                 mgr.logger.log(`Only partial fills detected (no rotations needed).`, 'info');
-                return { ordersToPlace: [], ordersToRotate: [], partialMoves: [] };
+                return { ordersToPlace: [], ordersToRotate: [], partialMoves: [], ordersToUpdate: [] };
             }
 
             if (!excludeOrderIds) excludeOrderIds = new Set();
@@ -210,6 +211,7 @@ class StrategyEngine {
         const ordersToPlace = [];
         const ordersToRotate = [];
         const partialMoves = [];
+        const ordersToUpdate = [];
 
         if (filledCounts[ORDER_TYPES.SELL] > 0) {
             const result = await this.rebalanceSideAfterFill(
@@ -219,6 +221,7 @@ class StrategyEngine {
             ordersToPlace.push(...result.ordersToPlace);
             ordersToRotate.push(...result.ordersToRotate);
             partialMoves.push(...result.partialMoves);
+            if (result.ordersToUpdate) ordersToUpdate.push(...result.ordersToUpdate);
         }
 
         if (filledCounts[ORDER_TYPES.BUY] > 0) {
@@ -229,9 +232,10 @@ class StrategyEngine {
             ordersToPlace.push(...result.ordersToPlace);
             ordersToRotate.push(...result.ordersToRotate);
             partialMoves.push(...result.partialMoves);
+            if (result.ordersToUpdate) ordersToUpdate.push(...result.ordersToUpdate);
         }
 
-        return { ordersToPlace, ordersToRotate, partialMoves };
+        return { ordersToPlace, ordersToRotate, partialMoves, ordersToUpdate };
     }
 
     /**
@@ -242,10 +246,13 @@ class StrategyEngine {
         const ordersToPlace = [];
         const ordersToRotate = [];
         const partialMoves = [];
+        const splitUpdatedOrderIds = new Set();  // Track orders being SPLIT updated
         const count = filledCount + extraOrderCount;
         const partialMoveSlots = filledCount;
         const side = oppositeType === ORDER_TYPES.BUY ? 'buy' : 'sell';
         const filledSide = filledType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+
+        mgr.logger.log(`[REBALANCE] Called for filledType=${filledType}, oppositeType=${oppositeType}, filledCount=${filledCount}`, 'info');
 
         // Check if we already have enough active orders on the filled side
         // (e.g. if spread correction already placed an order)
@@ -383,6 +390,10 @@ class StrategyEngine {
                     const isAnchorDecision = this.evaluatePartialOrderAnchor(p, moveInfo);
                     const idealSize = isAnchorDecision.idealSize;
 
+                    // Store the order list and index for potential reuse in merge calculations
+                    // (we'll reconstruct this if needed for accurate geometric calculations)
+                    moveInfo.anchorOrderType = oppositeType;
+
                     if (!isInnermost) {
                         // ====================================================================
                         // OUTER PARTIAL CLEANUP
@@ -407,67 +418,225 @@ class StrategyEngine {
                         // ====================================================================
                         // INNERMOST PARTIAL: MERGE vs SPLIT DECISION
                         // ====================================================================
-                        // The innermost (last) partial handles all accumulated residual capital
-                        // from the outer partials. It makes a critical decision:
+                        // Decision is based SOLELY on partial order size vs dust threshold.
+                        // idealSize is calculated from geometric grid distribution, NOT from
+                        // the partial's current size.
                         //
-                        // MERGE: If the residual would fit comfortably with the ideal size
-                        //        (merged <= ideal * 1.05), merge everything into one order.
-                        //        This becomes a "DoubleOrder" (marked for potential future rotation).
+                        // MERGE: partial_size < dust_threshold (5% of ideal)
+                        //        merged_size = partial_size + fundable_amount
+                        //        Constraint: merged_size <= ideal_size * 1.05
+                        //        Result: 1 order (partial updated to merged size)
                         //
-                        // SPLIT: If merged size would be too large, keep innermost at ideal and
-                        //        create a separate residual order at the market spread price.
-                        //        This prevents orders from growing too large relative to the grid.
+                        // SPLIT: partial_size >= dust_threshold
+                        //        Update partial to ideal_size
+                        //        Create residual order with original_partial_size (if > ideal)
+                        //        Result: 1 or 2 orders
                         //
-                        const totalResidualCapital = accumulatedResidualCapital + (isAnchorDecision.residualCapital || 0);
-                        const residualSize = totalResidualCapital / p.price;
-                        const mergedSize = idealSize + residualSize;
                         const dustThresholdPercent = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE;
-                        const maxMergedSize = idealSize * (1 + dustThresholdPercent / 100);
-                        const shouldMerge = isAnchorDecision.isDust && mergedSize <= maxMergedSize;
+                        const dustThreshold = idealSize * (dustThresholdPercent / 100);
 
-                        if (shouldMerge) {
-                            mgr.logger.log(`[MULTI-PARTIAL MERGE] Innermost Partial ${oppositeType} ${p.id}: size=${p.size.toFixed(8)} absorbing ${totalResidualCapital.toFixed(8)} residual. New size: ${mergedSize.toFixed(8)}.`, 'info');
-                            const dustRefillInfo = {
-                                ...moveInfo,
-                                partialOrder: {
-                                    ...moveInfo.partialOrder, size: mergedSize, isDustRefill: true,
-                                    isDoubleOrder: true, mergedDustSize: residualSize, filledSinceRefill: 0, pendingRotation: true
-                                },
-                                newSize: mergedSize, isDustRefill: true
-                            };
-                            partialMoves.push(dustRefillInfo);
+                        if (p.size < dustThreshold) {
+                            // ================================================================
+                            // MERGE: Combine partial dust with ideal size (using available funds)
+                            // ================================================================
+                            // Get available funds for the opposite side (including cacheFunds)
+                            const side = oppositeType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+                            const availableFunds = (mgr.funds?.available?.[side] || 0) + (mgr.funds?.cacheFunds?.[side] || 0);
+
+                            // Only proceed with consolidation if we have funds available
+                            if (availableFunds <= 0) {
+                                mgr.logger.log(`[MERGE SKIP] No available funds for consolidation of ${oppositeType} ${p.id} (available=${(mgr.funds?.available?.[side] || 0).toFixed(8)}, cache=${(mgr.funds?.cacheFunds?.[side] || 0).toFixed(8)})`, 'info');
+                                // Fall through to SPLIT behavior: restore to ideal without merging
+                                mgr.logger.log(`[DUST NO-FUND SPLIT] Dust partial ${p.type} ${p.id}: restoring to ideal=${idealSize.toFixed(8)} without merge.`, 'info');
+                                const orderUpdate = {
+                                    partialOrder: {
+                                        id: p.id,
+                                        orderId: p.orderId,
+                                        type: p.type,
+                                        price: p.price,
+                                        size: p.size
+                                    },
+                                    newPrice: moveInfo.newPrice,
+                                    newSize: idealSize,
+                                    isSplitUpdate: true,
+                                    newState: ORDER_STATES.ACTIVE
+                                };
+                                partialMoves.push(orderUpdate);
+                                splitUpdatedOrderIds.add(p.id);
+                                const updatedPartial = {
+                                    ...p,
+                                    size: idealSize,
+                                    state: ORDER_STATES.ACTIVE
+                                };
+                                mgr._updateOrder(updatedPartial);
+                            } else {
+                                // Calculate ideal size WITH available funds using same fund sources as grid update
+                                // Match: cache + grid + available (same as updateGridOrderSizes)
+                                // CRITICAL: Use the partial's own type, not the opposite type
+                                // We're resizing a SELL partial, so we need SELL order distribution
+                                const orderType = p.type;  // Use partial's type, not opposite
+                                const side = orderType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+                                const cache = mgr.funds?.cacheFunds?.[side] || 0;
+                                const grid = mgr.funds?.total?.grid?.[side] || 0;
+                                const available = mgr.funds?.available?.[side] || 0;
+                                const totalFunds = cache + grid + available;
+
+                                // Get ALL orders on this side (same as grid update does)
+                                // filterOrdersByType automatically excludes SPREAD since SPREAD is a separate type
+                                const allOrders = Array.from(mgr.orders.values());
+                                const gridOrdersOnSide = allOrders
+                                    .filter(o => o && o.type === orderType)
+                                    .sort((a, b) => orderType === ORDER_TYPES.SELL ? a.price - b.price : b.price - a.price);
+
+                                // Count orders by state for debugging
+                                const ordersByState = {
+                                    ACTIVE: gridOrdersOnSide.filter(o => o.state === ORDER_STATES.ACTIVE).length,
+                                    PARTIAL: gridOrdersOnSide.filter(o => o.state === ORDER_STATES.PARTIAL).length,
+                                    VIRTUAL: gridOrdersOnSide.filter(o => o.state === ORDER_STATES.VIRTUAL).length,
+                                    SPREAD: gridOrdersOnSide.filter(o => o.state === ORDER_STATES.SPREAD).length,
+                                    OTHER: gridOrdersOnSide.filter(o => !Object.values(ORDER_STATES).includes(o.state)).length
+                                };
+
+                                // Also calculate using evaluatePartialOrderAnchor's method for comparison
+                                const anchorOrdersOnSide = [
+                                    ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.ACTIVE),
+                                    ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.PARTIAL),
+                                    ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.VIRTUAL)
+                                ];
+
+                                // Calculate ideal sizes for all grid positions with new total funds
+                                const precision = getPrecisionForSide(mgr, orderType);
+                                const mergedIdealSizes = calculateRotationOrderSizes(
+                                    totalFunds,
+                                    0,
+                                    gridOrdersOnSide.length,
+                                    orderType,
+                                    mgr.config,
+                                    0,
+                                    precision
+                                );
+
+                                // Calculate sum of all ideal sizes to verify fund distribution
+                                const sumIdealSizes = mergedIdealSizes.reduce((sum, size) => sum + size, 0);
+
+                                // Debug: Log the order count and ideal sizes
+                                mgr.logger.log(`[DEBUG MERGE] filterByType=${gridOrdersOnSide.length} (A=${ordersByState.ACTIVE}, P=${ordersByState.PARTIAL}, V=${ordersByState.VIRTUAL}, S=${ordersByState.SPREAD}), anchorMethod=${anchorOrdersOnSide.length}, partial_pos=${gridOrdersOnSide.findIndex(o => o.id === p.id)}, first_5=[${mergedIdealSizes.slice(0, 5).map(s => s.toFixed(8)).join(', ')}]`, 'info');
+                                mgr.logger.log(`[DEBUG MERGE FUNDS] totalFunds=${totalFunds.toFixed(8)}, sumIdealSizes=${sumIdealSizes.toFixed(8)}, ratio=${(sumIdealSizes / totalFunds).toFixed(4)}`, 'info');
+
+                                // Find this partial's position in the grid
+                                const partialIndex = gridOrdersOnSide.findIndex(o => o.id === p.id);
+                                // For SELL side, geometric distribution is in reverse order
+                                // SELL orders sorted lowest->highest, but distribution is calculated highest->lowest
+                                const idealIndex = orderType === ORDER_TYPES.SELL
+                                    ? (gridOrdersOnSide.length - 1 - partialIndex)
+                                    : partialIndex;
+                                const newGeometricIdeal = (idealIndex >= 0 && idealIndex < mergedIdealSizes.length)
+                                    ? mergedIdealSizes[idealIndex]
+                                    : idealSize;
+                                // Merge = dust partial size + new ideal geometric size (using expanded funds)
+                                const mergedSize = p.size + newGeometricIdeal;
+
+                                // The merged size IS the calculated ideal with all available funds
+                                // It's the geometric distribution result, so always proceed with MERGE
+                                // (no constraint needed since it's the ideal for this position)
+                                mgr.logger.log(`[MULTI-PARTIAL MERGE] Innermost Partial ${oppositeType} ${p.id}: dust=${p.size.toFixed(8)}, ideal_without_avail=${idealSize.toFixed(8)}, available=${available.toFixed(8)}, total_funds=${totalFunds.toFixed(8)}, grid=${grid.toFixed(8)}, cache=${cache.toFixed(8)}, ideal_with_avail=${mergedSize.toFixed(8)}, calc_ratio=${(mergedSize / idealSize).toFixed(4)}x.`, 'info');
+                                const dustRefillInfo = {
+                                    ...moveInfo,
+                                    partialOrder: {
+                                        ...moveInfo.partialOrder,
+                                        size: mergedSize,
+                                        isDustRefill: true,
+                                        isDoubleOrder: true,
+                                        mergedDustSize: p.size,  // The dust portion that was merged
+                                        filledSinceRefill: 0,
+                                        pendingRotation: true
+                                    },
+                                    newSize: mergedSize,
+                                    isDustRefill: true
+                                };
+                                mgr.logger.log(`[DEBUG MERGE] Created dustRefillInfo: id=${dustRefillInfo.partialOrder.id}, orderId=${dustRefillInfo.partialOrder.orderId}, size=${dustRefillInfo.partialOrder.size.toFixed(8)}, isDoubleOrder=${dustRefillInfo.partialOrder.isDoubleOrder}`, 'info');
+                                partialMoves.push(dustRefillInfo);
+                                // Update manager's in-memory state immediately so the partial order becomes a double order
+                                // in its original grid position (no new order created)
+                                mgr._updateOrder(dustRefillInfo.partialOrder);
+                                const updatedInMgr = mgr.orders.get(p.id);
+                                mgr.logger.log(`[DEBUG MERGE] After _updateOrder: id=${p.id}, mgr has it: ${updatedInMgr ? 'YES' : 'NO'}, isDoubleOrder=${updatedInMgr?.isDoubleOrder}, size=${updatedInMgr?.size.toFixed(8)}`, 'info');
+
+                                // CRITICAL: Remove virtual orders that were calculated for this grid position
+                                // Since the merged double order is now filling this slot, we don't need the virtual placeholder
+                                // Look for virtual orders on the opposite side that match the grid position
+                                // BUT: Exclude the partial order's own ID (it's now a double order, not virtual)
+                                const mergedPrice = moveInfo.newPrice;
+
+                                // Find virtual orders at very close price (grid precision tolerance)
+                                const priceTolerance = moveInfo.incrementPrice || (mergedPrice * 0.001);  // 0.1% price tolerance
+
+                                const virtualAtSameGridPos = Array.from(mgr.orders.values()).filter(order =>
+                                    order.type === oppositeType &&
+                                    order.state === ORDER_STATES.VIRTUAL &&
+                                    order.id !== p.id &&  // CRITICAL: Don't remove the partial we just converted!
+                                    Math.abs(order.price - mergedPrice) <= priceTolerance
+                                );
+
+                                if (virtualAtSameGridPos.length > 0) {
+                                    mgr.logger.log(`[DEBUG MERGE] Found ${virtualAtSameGridPos.length} virtual ${oppositeType} order(s) near price ${mergedPrice.toFixed(8)} - removing to prevent duplicate placement`, 'debug');
+                                    virtualAtSameGridPos.forEach(vorder => {
+                                        mgr.orders.delete(vorder.id);
+                                        mgr.logger.log(`[DEBUG MERGE] Removed virtual ${vorder.id} at price ${vorder.price.toFixed(8)}, size ${vorder.size.toFixed(8)}`, 'debug');
+                                    });
+                                }
+                            }
                         } else {
-                            mgr.logger.log(`[MULTI-PARTIAL SPLIT] Innermost Partial ${oppositeType} ${p.id}: size=${p.size.toFixed(8)} -> upgrading to ideal=${idealSize.toFixed(8)}.`, 'info');
-                            const anchorMoveInfo = {
-                                ...moveInfo,
-                                partialOrder: { ...moveInfo.partialOrder, size: idealSize },
-                                newSize: idealSize
-                            };
-                            partialMoves.push(anchorMoveInfo);
+                            // ================================================================
+                            // SPLIT: Update partial order size in place, create residual at spread
+                            // ================================================================
+                            mgr.logger.log(`[MULTI-PARTIAL SPLIT] Innermost Partial ${p.type} ${p.id}: size=${p.size.toFixed(8)} -> ideal=${idealSize.toFixed(8)}.`, 'info');
 
+                            // Update the existing order in place with delta size
+                            // Keep same orderId, just change the size from p.size to idealSize
+                            // Updated PARTIAL order transitions back to ACTIVE
+                            // Structure it like a partial move so it gets processed correctly
+                            const orderUpdate = {
+                                partialOrder: {
+                                    id: p.id,
+                                    orderId: p.orderId,
+                                    type: p.type,
+                                    price: p.price,
+                                    size: p.size
+                                },
+                                newPrice: moveInfo.newPrice,  // Same price, same grid slot
+                                newSize: idealSize,            // Delta: p.size -> idealSize
+                                isSplitUpdate: true,
+                                newState: ORDER_STATES.ACTIVE  // Transition PARTIAL -> ACTIVE
+                            };
+                            partialMoves.push(orderUpdate);
+                            mgr.logger.log(`[SPLIT UPDATE] Updating ${p.type} ${p.id}: size ${p.size.toFixed(8)} -> ${idealSize.toFixed(8)}, state PARTIAL -> ACTIVE`, 'info');
+
+                            // Track this order as being SPLIT updated so we don't restore it
+                            splitUpdatedOrderIds.add(p.id);
+
+                            // Update manager's in-memory state to reflect the new size and state
+                            const updatedPartial = {
+                                ...p,
+                                size: idealSize,
+                                state: ORDER_STATES.ACTIVE
+                            };
+                            mgr._updateOrder(updatedPartial);
+
+                            // Create residual order at spread with ONLY the original partial size
+                            // This new order will be in PARTIAL state
                             const spreadOrders = Array.from(mgr.orders.values())
-                                .filter(o => o.type === oppositeType && o.state === ORDER_STATES.SPREAD);
+                                .filter(o => o.type === p.type && o.state === ORDER_STATES.SPREAD);
                             const spreadPrice = spreadOrders.length > 0
-                                ? (oppositeType === ORDER_TYPES.BUY ? Math.max(...spreadOrders.map(o => o.price)) : Math.min(...spreadOrders.map(o => o.price)))
+                                ? (p.type === ORDER_TYPES.BUY ? Math.max(...spreadOrders.map(o => o.price)) : Math.min(...spreadOrders.map(o => o.price)))
                                 : moveInfo.newPrice;
 
-                            const precision = getPrecisionForSide(mgr.assets, side);
-                            let residualOrderSize = 0;
-                            if (totalResidualCapital > 0) {
-                                residualOrderSize = blockchainToFloat(floatToBlockchainInt(totalResidualCapital / spreadPrice, precision), precision);
-                            } else {
-                                const cache = getCacheFundsValue(mgr.funds, side);
-                                residualOrderSize = blockchainToFloat(floatToBlockchainInt(cache / count, precision), precision);
-                            }
-
-                            if (residualOrderSize > 0) {
-                                const residualOrder = {
-                                    id: null, type: oppositeType, price: spreadPrice, size: residualOrderSize,
-                                    state: ORDER_STATES.VIRTUAL, isResidualFromAnchor: true, anchoredFromPartialId: p.id
-                                };
-                                ordersToPlace.push(residualOrder);
-                                mgr.logger.log(`[RESIDUAL ORDER] Created replacement ${oppositeType} order at spread price ${spreadPrice.toFixed(4)}, size ${residualOrderSize.toFixed(8)}`, 'info');
-                            }
+                            const residualOrder = {
+                                id: null, type: p.type, price: spreadPrice, size: p.size,
+                                state: ORDER_STATES.PARTIAL, isResidualFromSplitId: p.id
+                            };
+                            ordersToPlace.push(residualOrder);
+                            mgr.logger.log(`[SPLIT RESIDUAL] Created ${p.type} order at spread price ${spreadPrice.toFixed(4)}, size ${p.size.toFixed(8)}, state PARTIAL`, 'info');
                         }
                     }
                 }
@@ -480,8 +649,24 @@ class StrategyEngine {
                         if (originalPartialData.has(p.id)) {
                             const originalData = originalPartialData.get(p.id);
                             const currentOrder = mgr.orders.get(p.id);
+
+                            mgr.logger.log(`[DEBUG RESTORE] Checking ${p.id}: currentOrder exists=${!!currentOrder}, isDoubleOrder=${currentOrder?.isDoubleOrder}, isSplitUpdate=${splitUpdatedOrderIds.has(p.id)}, originalState=${originalData?.state}`, 'info');
+
+                            // Skip restoration if this order is now a double order (already updated above)
+                            if (currentOrder && currentOrder.isDoubleOrder) {
+                                mgr.logger.log(`[DEBUG RESTORE] Skipping ${p.id} - it's a double order`, 'info');
+                                continue;
+                            }
+
+                            // Skip restoration if this order was SPLIT updated (it's now ACTIVE, don't revert to PARTIAL)
+                            if (splitUpdatedOrderIds.has(p.id)) {
+                                mgr.logger.log(`[DEBUG RESTORE] Skipping ${p.id} - it's a SPLIT updated order`, 'info');
+                                continue;
+                            }
+
                             if (currentOrder && originalData && originalData.state !== undefined) {
                                 const restoredOrder = { ...currentOrder, state: originalData.state };
+                                mgr.logger.log(`[DEBUG RESTORE] Restoring ${p.id} from ${currentOrder.state} to ${originalData.state}`, 'info');
                                 mgr._updateOrder(restoredOrder);
                             }
                         }
@@ -493,20 +678,53 @@ class StrategyEngine {
         }
 
         const currentActiveCount = countOrdersByType(oppositeType, mgr.orders);
-        let targetCount = 1; 
+
+        // Include double orders (merged partials) in the active count since they're about to be on-chain
+        const doubleOrdersBeingMoved = partialMoves
+            .filter(m => m.partialOrder?.type === oppositeType && m.partialOrder?.isDoubleOrder)
+            .length;
+
+        // Also count new orders being placed that match oppositeType (including residuals from SPLIT)
+        const newOrdersBeingPlaced = ordersToPlace
+            .filter(o => o.type === oppositeType)
+            .length;
+
+        const effectiveActiveCount = currentActiveCount + doubleOrdersBeingMoved + newOrdersBeingPlaced;
+
+        mgr.logger.log(`[DEBUG COUNT] oppositeType=${oppositeType}, currentActive=${currentActiveCount}, doubleOrders=${doubleOrdersBeingMoved}, newOrders=${newOrdersBeingPlaced} (ordersToPlace.length=${ordersToPlace.length}), effectiveActive=${effectiveActiveCount}`, 'info');
+
+        let targetCount = 1;
         if (mgr.config.activeOrders && mgr.config.activeOrders[side] && Number.isFinite(mgr.config.activeOrders[side])) {
             targetCount = Math.max(1, mgr.config.activeOrders[side]);
         }
 
-        const belowTarget = currentActiveCount < targetCount;
+        const belowTarget = effectiveActiveCount < targetCount;
 
-        if (belowTarget) {
-            const shortage = targetCount - currentActiveCount;
+        // CRITICAL: If we have double orders being moved, skip rotations entirely
+        // Double orders movement IS the rebalancing - no additional rotations needed
+        const hasDoubleOrders = doubleOrdersBeingMoved > 0;
+
+        // CRITICAL: If we have SPLIT updates, skip rotations entirely
+        // SPLIT updates in-place with residuals at spread = complete rebalancing for this cycle
+        const hasSplitUpdates = splitUpdatedOrderIds.size > 0;
+
+        mgr.logger.log(`[DEBUG ROTATION CHECK] targetCount=${targetCount}, effectiveActive=${effectiveActiveCount}, belowTarget=${belowTarget}, hasDoubleOrders=${hasDoubleOrders}, hasSplitUpdates=${hasSplitUpdates}`, 'info');
+
+        if (belowTarget && !hasDoubleOrders && !hasSplitUpdates) {
+            mgr.logger.log(`[DEBUG ROTATION] ENTERING rotation block`, 'info');
+            const shortage = targetCount - effectiveActiveCount;
             const ordersToCreate = Math.min(shortage, count);
-            mgr.logger.log(`Active ${oppositeType} orders (${currentActiveCount}) below target (${targetCount}). Creating ${ordersToCreate} new orders.`, 'info');
+            const logMsg = (doubleOrdersBeingMoved > 0 || newOrdersBeingPlaced > 0)
+                ? `Active ${oppositeType} orders (${currentActiveCount} + ${doubleOrdersBeingMoved} double + ${newOrdersBeingPlaced} new = ${effectiveActiveCount}) below target (${targetCount}). Creating ${ordersToCreate} new orders.`
+                : `Active ${oppositeType} orders (${currentActiveCount}) below target (${targetCount}). Creating ${ordersToCreate} new orders.`;
+            mgr.logger.log(logMsg, 'info');
 
             const vacatedSlots = partialMoves
-                .filter(m => m.partialOrder.type === oppositeType && m.vacatedGridId)
+                .filter(m => {
+                    // Only process moves with partialOrder property (not SPLIT updates)
+                    if (!m.partialOrder) return false;
+                    return m.partialOrder.type === oppositeType && m.vacatedGridId;
+                })
                 .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }));
 
             let ordersCreated = 0;
@@ -524,10 +742,10 @@ class StrategyEngine {
                 const quantizedSize = blockchainToFloat(floatToBlockchainInt(sizePerOrder, precision), precision);
 
                 const newOrder = { ...gridOrder, type: oppositeType, size: quantizedSize, price: slot.price };
-                
+
                 // Consume from cacheFunds
                 mgr.funds.cacheFunds[side] = Math.max(0, (mgr.funds.cacheFunds[side] || 0) - quantizedSize);
-                
+
                 ordersToPlace.push(newOrder);
                 ordersCreated++;
                 mgr.logger.log(`Using vacated partial slot ${slot.id} for new ${oppositeType} at price ${slot.price.toFixed(4)}, size ${quantizedSize.toFixed(8)}`, 'info');
@@ -535,37 +753,142 @@ class StrategyEngine {
 
             if (ordersCreated < ordersToCreate) {
                 const remaining = ordersToCreate - ordersCreated;
-                const newOrders = await this.activateClosestVirtualOrdersForPlacement(oppositeType, remaining, excludeOrderIds);
+                // Exclude double orders (merged partials) from virtual activation to prevent duplicate orders at same price
+                const excludeDoubleOrderIds = new Set(excludeOrderIds || []);
+                for (const doubleOrderMove of partialMoves.filter(m => m.partialOrder?.isDoubleOrder)) {
+                    if (doubleOrderMove.partialOrder?.id) {
+                        excludeDoubleOrderIds.add(doubleOrderMove.partialOrder.id);
+                    }
+                    if (doubleOrderMove.partialOrder?.orderId) {
+                        excludeDoubleOrderIds.add(doubleOrderMove.partialOrder.orderId);
+                    }
+                }
+                const newOrders = await this.activateClosestVirtualOrdersForPlacement(oppositeType, remaining, excludeDoubleOrderIds);
                 ordersToPlace.push(...newOrders);
             }
-        } else {
+        } else if (!hasDoubleOrders && !hasSplitUpdates) {
+            // Only do rotations if we don't have double orders or SPLIT updates being moved
+            // SPLIT updates are already complete rebalancing, no rotation needed
+            // Also exclude double orders from rotation selection - they're already being handled by partial moves
+            const excludeForRotation = new Set(excludeOrderIds || []);
+            for (const doubleOrderMove of partialMoves.filter(m => m.partialOrder?.isDoubleOrder)) {
+                if (doubleOrderMove.partialOrder?.id) {
+                    excludeForRotation.add(doubleOrderMove.partialOrder.id);
+                }
+                if (doubleOrderMove.partialOrder?.orderId) {
+                    excludeForRotation.add(doubleOrderMove.partialOrder.orderId);
+                }
+            }
+
+            // Filter out vacated slots from double orders (they don't vacate, they just update in place)
+            // SPLIT updates don't have vacatedGridId since they update in place
+            const nonDoubleVacatedSlots = partialMoves
+                .filter(m => {
+                    // Only process moves with partialOrder property (not SPLIT updates)
+                    if (!m.partialOrder) return false;
+                    return m.partialOrder.type === oppositeType && m.vacatedGridId && !m.partialOrder?.isDoubleOrder;
+                })
+                .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }));
+
             const rotatedOrders = await this.prepareFurthestOrdersForRotation(
-                oppositeType, count, excludeOrderIds, filledCount,
+                oppositeType, count, excludeForRotation, filledCount,
                 {
-                    avoidPrices: partialMoves.map(m => m.newPrice),
-                    preferredSlots: partialMoves.filter(m => m.partialOrder.type === oppositeType).map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice })),
+                    avoidPrices: partialMoves.map(m => m.newPrice || m.price),  // SPLIT updates use price, moves use newPrice
+                    preferredSlots: nonDoubleVacatedSlots,
                     partialMoves: partialMoves
                 }
             );
+            mgr.logger.log(`[ROTATION] Adding ${rotatedOrders.length} rotated orders for ${oppositeType}`, 'info');
             ordersToRotate.push(...rotatedOrders);
+        } else if (hasDoubleOrders && belowTarget) {
+            // If we have double orders but still below target, we can activate virtuals
+            const shortage = targetCount - effectiveActiveCount;
+            const ordersToActivate = Math.min(shortage, count);
+            if (ordersToActivate > 0) {
+                const excludeDoubleOrderIds = new Set(excludeOrderIds || []);
+                for (const doubleOrderMove of partialMoves.filter(m => m.partialOrder?.isDoubleOrder)) {
+                    if (doubleOrderMove.partialOrder?.id) {
+                        excludeDoubleOrderIds.add(doubleOrderMove.partialOrder.id);
+                    }
+                    if (doubleOrderMove.partialOrder?.orderId) {
+                        excludeDoubleOrderIds.add(doubleOrderMove.partialOrder.orderId);
+                    }
+                }
+                const newOrders = await this.activateClosestVirtualOrdersForPlacement(oppositeType, ordersToActivate, excludeDoubleOrderIds);
+                ordersToPlace.push(...newOrders);
+                mgr.logger.log(`Active ${oppositeType} orders (${currentActiveCount} + ${doubleOrdersBeingMoved} double orders = ${effectiveActiveCount}) still below target (${targetCount}). Activated ${newOrders.length} virtual orders to reach target.`, 'info');
+            }
         }
 
-        return { ordersToPlace, ordersToRotate, partialMoves };
+        // Separate SPLIT updates from regular partial moves
+        const splitUpdates = partialMoves.filter(m => m.isSplitUpdate);
+        const regularPartialMoves = partialMoves.filter(m => !m.isSplitUpdate);
+
+        return { ordersToPlace, ordersToRotate, partialMoves: regularPartialMoves, ordersToUpdate: splitUpdates };
     }
 
     /**
      * Evaluate whether a partial order should be treated as "Dust" or "Substantial".
      * Uses blockchain integer arithmetic for precision consistency.
      */
-    evaluatePartialOrderAnchor(partialOrder, moveInfo) {
+    evaluatePartialOrderAnchor(partialOrder, moveInfo, includeAvailableFunds = false) {
         const mgr = this.manager;
         if (!moveInfo || !moveInfo.targetGridOrder) {
             return { isDust: true, idealSize: partialOrder.size || 0, percentOfIdeal: 0 };
         }
 
-        // The targetGridOrder should represent the geometric ideal for that slot.
-        const idealSize = moveInfo.targetGridOrder.size || partialOrder.size || 0;
+        // Calculate the TRUE geometric ideal for this slot based on grid configuration
+        // We cannot use targetGridOrder.size because when anchoring, that's the partial's
+        // current (reduced) size, not the geometric ideal.
         const partialSize = partialOrder.size || 0;
+        let idealSize = 0;
+
+        // Get all orders on this side to calculate geometric distribution
+        const orderType = partialOrder.type;
+        const allOrdersOnSide = [
+            ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.ACTIVE),
+            ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.PARTIAL),
+            ...mgr.getOrdersByTypeAndState(orderType, ORDER_STATES.VIRTUAL)
+        ].sort((a, b) => orderType === ORDER_TYPES.SELL ? a.price - b.price : b.price - a.price);
+
+        if (allOrdersOnSide.length > 0) {
+            // Calculate total funds committed to this side (optionally including available)
+            const side = orderType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+            const virtuel = mgr.funds?.virtuel?.[side] || 0;
+            const committed = mgr.funds?.committed?.[side] || 0;
+            let totalFunds = virtuel + committed;
+
+            // If requested, include available funds in the calculation
+            // This ensures the ideal reflects what the size should be with all available capital
+            if (includeAvailableFunds) {
+                const available = (mgr.funds?.available?.[side] || 0) + (mgr.funds?.cacheFunds?.[side] || 0);
+                totalFunds += available;
+            }
+
+            if (totalFunds > 0) {
+                const precision = getPrecisionForSide(mgr, orderType);
+                const idealSizes = calculateRotationOrderSizes(
+                    totalFunds,
+                    0,
+                    allOrdersOnSide.length,
+                    orderType,
+                    mgr.config,
+                    0,
+                    precision
+                );
+
+                // Find partial's position in the sorted order list
+                const partialIndex = allOrdersOnSide.findIndex(o => o.id === partialOrder.id);
+                if (partialIndex >= 0 && partialIndex < idealSizes.length) {
+                    idealSize = idealSizes[partialIndex];
+                }
+            }
+        }
+
+        // Fallback to targetGridOrder.size or partialOrder.size if calculation failed
+        if (idealSize <= 0) {
+            idealSize = moveInfo.targetGridOrder.size || partialOrder.size || 0;
+        }
 
         if (idealSize <= 0) {
             mgr.logger.log(`Cannot evaluate partial order ${partialOrder.id}: target grid slot has no ideal size`, 'warn');
@@ -811,7 +1134,7 @@ class StrategyEngine {
         }
 
         return {
-            partialOrder: { id: partialOrder.id, orderId: partialOrder.orderId, type: partialOrder.type, price: partialOrder.price, size: partialOrder.size },
+            partialOrder: { id: partialOrder.id, orderId: partialOrder.orderId, type: partialOrder.type, price: partialOrder.price, size: partialOrder.size, state: partialOrder.state },
             newGridId, newPrice, newMinToReceive, targetGridOrder,
             vacatedGridId: gridSlotsToMove > 0 ? partialOrder.id : null,
             vacatedPrice: gridSlotsToMove > 0 ? partialOrder.price : null

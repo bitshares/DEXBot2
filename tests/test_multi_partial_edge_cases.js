@@ -91,9 +91,12 @@ async function testSingleDustPartial() {
 
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    assert(result.partialMoves.length >= 1, 'Should have at least one partial move');
-    const move = result.partialMoves[0];
-    assert(move.partialOrder.size === 10, `Dust partial should upgrade to ideal 10, got ${move.partialOrder.size}`);
+    // Combine all moves for verification (SPLIT updates are in ordersToUpdate)
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    assert(allMoves.length >= 1, `Should have at least one partial move, got ${allMoves.length}`);
+    const move = allMoves[0];
+    const moveSize = move.newSize || move.partialOrder.size;
+    assert(moveSize === 10, `Dust partial should upgrade to ideal 10, got ${moveSize}`);
     assert(move.newPrice === 1.10, 'Should stay anchored at original price');
 
     console.log('✓ Single dust partial correctly restored to ideal size');
@@ -127,12 +130,15 @@ async function testMultipleDustPartials() {
 
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    console.log(`  Partial moves found: ${result.partialMoves.length}`);
-    assert(result.partialMoves.length === 3, `Should have 3 partial moves, got ${result.partialMoves.length}`);
+    // Combine all moves for verification
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    console.log(`  Partial moves found: ${allMoves.length}`);
+    assert(allMoves.length === 3, `Should have 3 partial moves, got ${allMoves.length}`);
 
     // Verify all moved to ideal size
-    for (const move of result.partialMoves) {
-        assert(move.partialOrder.size === 10, `All dust partials should restore to ideal 10, got ${move.partialOrder.size}`);
+    for (const move of allMoves) {
+        const moveSize = move.newSize || move.partialOrder.size;
+        assert(moveSize === 10, `All dust partials should restore to ideal 10, got ${moveSize}`);
     }
 
     console.log('✓ All dust partials correctly restored to ideal size');
@@ -171,16 +177,20 @@ async function testSubstantialPartialAsInnermost() {
 
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    assert(result.partialMoves.length === 2, `Should have 2 partial moves, got ${result.partialMoves.length}`);
+    // Combine all moves for verification
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    assert(allMoves.length === 2, `Should have 2 partial moves, got ${allMoves.length}`);
 
     // Sort by price to identify outer vs inner
-    const moves = result.partialMoves.sort((a, b) => a.newPrice - b.newPrice);
+    const moves = allMoves.sort((a, b) => a.newPrice - b.newPrice);
 
     // Outer (lower price) should restore to ideal
-    assert(moves[0].partialOrder.size === 10, `Outer dust should restore to 10, got ${moves[0].partialOrder.size}`);
+    const outerSize = moves[0].newSize || moves[0].partialOrder.size;
+    assert(outerSize === 10, `Outer dust should restore to 10, got ${outerSize}`);
 
     // Inner (higher price) should also restore to ideal (no merge in this case because substantial != dust)
-    assert(moves[1].partialOrder.size === 10, `Inner substantial should restore to 10, got ${moves[1].partialOrder.size}`);
+    const innerSize = moves[1].newSize || moves[1].partialOrder.size;
+    assert(innerSize === 10, `Inner substantial should restore to 10, got ${innerSize}`);
 
     console.log('✓ Substantial partial correctly handled as innermost');
 }
@@ -218,14 +228,17 @@ async function testLargeResidualSplit() {
 
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    assert(result.partialMoves.length >= 2, 'Should have at least 2 partial moves');
+    // Combine all moves for verification
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    assert(allMoves.length >= 2, `Should have at least 2 partial moves, got ${allMoves.length}`);
 
     // Inner partial should be at ideal size (not merged because residual is too large)
-    const innerMove = result.partialMoves.find(m => m.partialOrder.orderId === 'chain-inner');
-    assert(innerMove && innerMove.partialOrder.size === 10, `Inner should split and be at ideal 10, got ${innerMove?.partialOrder.size}`);
+    const innerMove = allMoves.find(m => m.partialOrder.orderId === 'chain-inner');
+    const innerSize = innerMove ? (innerMove.newSize || innerMove.partialOrder.size) : undefined;
+    assert(innerMove && innerSize === 10, `Inner should split and be at ideal 10, got ${innerSize}`);
 
-    // Should create a residual order for the excess
-    assert(result.ordersToPlace.some(o => o.isResidualFromAnchor), 'Should create residual order');
+    // Should create a residual order for the excess (from SPLIT)
+    assert(result.ordersToPlace.some(o => o.isResidualFromSplitId), 'Should create residual order from split');
 
     console.log('✓ Large residual correctly caused split behavior');
 }
@@ -279,12 +292,15 @@ async function testGhostVirtualizationIsolation() {
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
     // All 3 partials should be processed (ghost virtualization prevents blocking)
-    assert(result.partialMoves.length === 3, `Should process all 3 partials, got ${result.partialMoves.length}`);
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    assert(allMoves.length === 3, `Should process all 3 partials, got ${allMoves.length}`);
 
-    // After processing, all should be restored to their original states
-    assert(mgr.orders.get('sell-0').state === ORDER_STATES.PARTIAL || mgr.orders.get('sell-0').state === ORDER_STATES.VIRTUAL);
-    assert(mgr.orders.get('sell-2').state === ORDER_STATES.PARTIAL || mgr.orders.get('sell-2').state === ORDER_STATES.VIRTUAL);
-    assert(mgr.orders.get('sell-4').state === ORDER_STATES.PARTIAL || mgr.orders.get('sell-4').state === ORDER_STATES.VIRTUAL);
+    // After processing, outer partials should be restored, innermost SPLIT updates stay ACTIVE
+    // sell-0 is innermost, should be ACTIVE (SPLIT updated)
+    // sell-2 and sell-4 are outer, should be restored to PARTIAL
+    assert(mgr.orders.get('sell-0').state === ORDER_STATES.ACTIVE, `sell-0 should be ACTIVE after SPLIT, got ${mgr.orders.get('sell-0').state}`);
+    assert(mgr.orders.get('sell-2').state === ORDER_STATES.PARTIAL || mgr.orders.get('sell-2').state === ORDER_STATES.VIRTUAL, `sell-2 should be PARTIAL or VIRTUAL, got ${mgr.orders.get('sell-2').state}`);
+    assert(mgr.orders.get('sell-4').state === ORDER_STATES.PARTIAL || mgr.orders.get('sell-4').state === ORDER_STATES.VIRTUAL, `sell-4 should be PARTIAL or VIRTUAL, got ${mgr.orders.get('sell-4').state}`);
 
     console.log('✓ Ghost virtualization successfully prevented mutual blocking');
 }
@@ -335,14 +351,17 @@ async function testInnermostMergeWithAccumulatedResiduals() {
 
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
-    assert(result.partialMoves.length === 3, `Should have 3 partial moves, got ${result.partialMoves.length}`);
+    // Combine all moves for verification
+    const allMoves = [...result.partialMoves, ...(result.ordersToUpdate || [])];
+    assert(allMoves.length === 3, `Should have 3 partial moves, got ${allMoves.length}`);
 
-    // Inner should be marked as DoubleOrder if it merged
-    const innerMove = result.partialMoves.find(m => m.partialOrder.orderId === 'chain-inner');
+    // Inner should be marked as DoubleOrder if it merged, or be a SPLIT if residual too large
+    const innerMove = allMoves.find(m => m.partialOrder.orderId === 'chain-inner');
     assert(innerMove, 'Should find inner partial move');
 
     // The size should be > 10 (merged) or exactly 10 (split)
-    assert(innerMove.partialOrder.size >= 10, `Inner should be at least 10, got ${innerMove.partialOrder.size}`);
+    const innerSize = innerMove.newSize || innerMove.partialOrder.size;
+    assert(innerSize >= 10, `Inner should be at least 10, got ${innerSize}`);
 
     console.log('✓ Innermost partial correctly merged accumulated residuals');
 }
