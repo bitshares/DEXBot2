@@ -69,7 +69,7 @@ All notable changes to this project will be documented in this file.
   - Calculates: uptime and fund recalc frequency per minute
 
 ### Fixed
-- **Synchronized Rotation Accounting**: Fixed a critical synchronization issue where `accountTotals` (buyFree/sellFree and virtuel) were not updated when on-chain orders were cancelled during rotation, ensuring accurate fund tracking.
+- **Synchronized Rotation Accounting**: Fixed a critical synchronization issue where `accountTotals` (buyFree/sellFree and virtual) were not updated when on-chain orders were cancelled during rotation, ensuring accurate fund tracking.
 - **Atomic Spread Correction**: Simplified spread correction by moving fund deductions to the batch broadcast level, ensuring atomicity and preventing "phantom fund" leaks.
 - **Null Safety Hardening**: Improved null-safety in `DEXBot` batch operations and added strategic diagnostic hooks throughout the fill processing cycle.
 - **Syntax Fix in Logger**: Resolved a `SyntaxError` in `logFundsStatus` where the identifier `c` was declared multiple times.
@@ -93,7 +93,7 @@ All notable changes to this project will be documented in this file.
 
 - **Fund Formula Consistency**: Simplified available funds calculation
   - Single source of truth: `calculateAvailableFundsValue()` in utils.js
-  - Formula: `available = max(0, chainFree - virtuel - btsFeesOwed - btsFeesReservation)`
+  - Formula: `available = max(0, chainFree - virtual - btsFeesOwed - btsFeesReservation)`
   - cacheFunds intentionally kept separate (fill proceeds added back during rebalancing)
   - Removed dead functions: getTotalGridFundsAvailable, getAvailableFundsForPlacement
 
@@ -839,7 +839,7 @@ All notable changes to this project will be documented in this file.
 
 - **BTS Fee Formula Documentation**: Updated outdated comments and logged output to accurately reflect the complete fee calculation formula
   - Fixed `modules/order/grid.js`: Changed comment from "2x multiplier" to "4x multiplier" to match actual implementation
-  - Updated formula in 5 files to show complete formula: `available = max(0, chainFree - virtuel - cacheFunds - applicableBtsFeesOwed - btsFeesReservation)`
+  - Updated formula in 5 files to show complete formula: `available = max(0, chainFree - virtual - cacheFunds - applicableBtsFeesOwed - btsFeesReservation)`
   - Fixed `modules/order/logger.js`: Console output now displays full formula instead of simplified version
   - Updated `modules/order/manager.js`: Changed variable name references from ambiguous "4xReservation" to proper "btsFeesReservation"
   - Fixed `modules/account_bots.js`: Comment now correctly states default targetSpreadPercent is 4x not 3x
@@ -924,8 +924,8 @@ All notable changes to this project will be documented in this file.
 
 - **Fund Formula Updated**:
   ```
-  OLD: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed) + pendingProceeds
-  NEW: available = max(0, chainFree - virtuel - cacheFunds - btsFeesOwed)
+  OLD: available = max(0, chainFree - virtual - cacheFunds - btsFeesOwed) + pendingProceeds
+  NEW: available = max(0, chainFree - virtual - cacheFunds - btsFeesOwed)
   ```
 
 - **Grid Regeneration Threshold**: Now includes available funds

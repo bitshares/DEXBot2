@@ -238,7 +238,7 @@ async function testConditionalRotation() {
     // Initialize funds structure for Test 3
     mgr3.funds = {
         chainFree: { buy: 10000, sell: 10000 },
-        virtuel: 0,
+        virtual: 0,
         committed: { grid: 0, chain: 0 },
         cacheFunds: { buy: 0, sell: 0 },
         btsFeesOwed: 0,
@@ -330,7 +330,7 @@ async function testConditionalRotation() {
     // Initialize funds structure for Test 4
     mgr4.funds = {
         chainFree: { buy: 50000, sell: 50000 },
-        virtuel: 0,
+        virtual: 0,
         committed: { grid: 0, chain: 0 },
         cacheFunds: { buy: 0, sell: 0 },
         btsFeesOwed: 0,

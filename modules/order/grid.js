@@ -138,7 +138,7 @@ class Grid {
                 const { BitShares } = require('../bitshares_client');
                 const derived = await derivePrice(BitShares, manager.config.assetA, manager.config.assetB, manager.config.priceMode || 'auto');
                 if (derived) manager.config.startPrice = derived;
-            } catch (err) { }
+            } catch (err) { console.warn("[grid.js] silent catch:", err.message); }
         }
 
         const mp = Number(manager.config.startPrice);
@@ -153,7 +153,7 @@ class Grid {
             if (manager.accountId && !manager.accountTotals) {
                 await manager.waitForAccountTotals(TIMING.ACCOUNT_TOTALS_TIMEOUT_MS);
             }
-        } catch (e) { }
+        } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
 
         const { orders, initialSpreadCount } = Grid.createOrderGrid(manager.config);
         const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
@@ -181,7 +181,7 @@ class Grid {
         manager.resetFunds();
 
         sizedOrders.forEach(order => manager._updateOrder(order));
-        manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell;
+        manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell; manager.currentSpreadCount = manager.targetSpreadCount;
         
         manager.logger.log(`Initialized grid with ${orders.length} orders.`, 'info');
         manager.logger?.logFundsStatus?.(manager);
@@ -499,13 +499,13 @@ class Grid {
             manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
             manager.funds.cacheFunds[side] = 0;
             if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-        } catch (e) { }
+        } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
     }
 
     static async _persistCacheFunds(manager, side) {
         try {
             if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-        } catch (e) { }
+        } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
     }
 }
 

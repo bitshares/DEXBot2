@@ -7,7 +7,7 @@
  * - SPREAD: Placeholder orders in the spread zone around market price
  * 
  * ORDER_STATES: Lifecycle states for orders (affects fund tracking)
- * - VIRTUAL: Not yet on-chain, size contributes to funds.virtuel (reserved)
+ * - VIRTUAL: Not yet on-chain, size contributes to funds.virtual (reserved)
  *            Also used for filled orders that are converted to SPREAD placeholders
  * - ACTIVE: Placed on-chain, size contributes to funds.committed
  */
@@ -24,7 +24,7 @@ const ORDER_TYPES = Object.freeze({
 // Life-cycle states assigned to generated or active orders.
 // State transitions affect fund calculations in manager.recalculateFunds()
 const ORDER_STATES = Object.freeze({
-    VIRTUAL: 'virtual',   // Not on-chain, size in funds.virtuel; also used for fully filled orders converted to SPREAD
+    VIRTUAL: 'virtual',   // Not on-chain, size in funds.virtual; also used for fully filled orders converted to SPREAD
     ACTIVE: 'active',     // On-chain, size in funds.committed.grid (and .chain if has orderId)
     PARTIAL: 'partial'    // On-chain, partially filled order, size in funds.committed.grid (and .chain if has orderId)
 });

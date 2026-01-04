@@ -35,13 +35,13 @@ describe('Accountant - Fund Tracking', () => {
             expect(manager.funds).toBeDefined();
             expect(manager.funds.available).toEqual({ buy: 0, sell: 0 });
             expect(manager.funds.committed.chain).toEqual({ buy: 0, sell: 0 });
-            expect(manager.funds.virtuel).toEqual({ buy: 0, sell: 0 });
+            expect(manager.funds.virtual).toEqual({ buy: 0, sell: 0 });
             expect(manager.funds.cacheFunds).toEqual({ buy: 0, sell: 0 });
         });
 
         it('should create backwards-compatible reserved alias', () => {
             manager.resetFunds();
-            expect(manager.funds.reserved).toBe(manager.funds.virtuel);
+            expect(manager.funds.reserved).toBe(manager.funds.virtual);
         });
     });
 
@@ -56,7 +56,7 @@ describe('Accountant - Fund Tracking', () => {
             };
             manager._updateOrder(order);
 
-            expect(manager.funds.virtuel.buy).toBe(500);
+            expect(manager.funds.virtual.buy).toBe(500);
             expect(manager.funds.total.grid.buy).toBeGreaterThanOrEqual(500);
         });
 
@@ -116,7 +116,7 @@ describe('Accountant - Fund Tracking', () => {
             manager.resumeFundRecalc();
 
             // Virtual: 100 + 200 = 300
-            expect(manager.funds.virtuel.buy).toBe(300);
+            expect(manager.funds.virtual.buy).toBe(300);
             // Grid committed: 150
             expect(manager.funds.committed.grid.buy).toBe(150);
             // Total grid: 300 + 150 = 450
@@ -131,7 +131,7 @@ describe('Accountant - Fund Tracking', () => {
                 size: 0
             });
 
-            expect(manager.funds.virtuel.sell).toBe(0);
+            expect(manager.funds.virtual.sell).toBe(0);
             expect(manager.funds.committed.grid.sell).toBe(0);
         });
 
@@ -144,7 +144,7 @@ describe('Accountant - Fund Tracking', () => {
                 size: 100
             });
 
-            expect(manager.funds.virtuel.buy + manager.funds.virtuel.sell).toBe(0);
+            expect(manager.funds.virtual.buy + manager.funds.virtual.sell).toBe(0);
         });
 
         it('should detect fund invariant violations', () => {

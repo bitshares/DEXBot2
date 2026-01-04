@@ -34,7 +34,7 @@ function createMockManager(options = {}) {
         funds: options.funds || { 
             total: { grid: { buy: 100, sell: 100 } },
             cacheFunds: { buy: 0, sell: 0 },
-            virtuel: { buy: 100, sell: 100 }
+            virtual: { buy: 100, sell: 100 }
         },
         orders: new Map(),
         assets: options.assets || { 

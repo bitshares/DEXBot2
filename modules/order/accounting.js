@@ -43,14 +43,14 @@ class Accountant {
         mgr.funds = {
             available: { buy: 0, sell: 0 },
             total: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
-            virtuel: { buy: 0, sell: 0 },
+            virtual: { buy: 0, sell: 0 },
             reserved: { buy: 0, sell: 0 }, // backwards compat alias
             committed: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
             cacheFunds: { buy: 0, sell: 0 },       // Surplus from rotation + fill proceeds
             btsFeesOwed: 0                         // Unpaid BTS fees (deducted from cache)
         };
-        // Make reserved an alias for virtuel
-        mgr.funds.reserved = mgr.funds.virtuel;
+        // Make reserved an alias for virtual
+        mgr.funds.reserved = mgr.funds.virtual;
     }
 
     /**
@@ -73,11 +73,11 @@ class Accountant {
      *    - Includes both on-chain orders and pending placements
      *
      * 3. VIRTUAL FUNDS (in grid but not on-chain)
-     *    - virtuelBuy/virtuelSell: VIRTUAL orders (pure grid state, no blockchain)
+     *    - virtualBuy/virtualSell: VIRTUAL orders (pure grid state, no blockchain)
      *    - Also called "reserved" in old code (backwards compat alias)
      *
      * 4. AVAILABLE FUNDS (what we can spend right now)
-     *    - Calculated as: max(0, chainFree - virtuel - btsFeesOwed - btsFeesReservation)
+     *    - Calculated as: max(0, chainFree - virtual - btsFeesOwed - btsFeesReservation)
      *    - Excludes: VIRTUAL order reserves, pending BTS fees, fee buffers
      *    - Excludes: cacheFunds (kept separate, added back for rebalancing decisions)
      *    - Gates new orders from being placed if insufficient
@@ -107,7 +107,7 @@ class Accountant {
 
         let gridBuy = 0, gridSell = 0;
         let chainBuy = 0, chainSell = 0;
-        let virtuelBuy = 0, virtuelSell = 0;
+        let virtualBuy = 0, virtualSell = 0;
 
         // Use indices for faster iteration - only walk active/partial/virtual states
         const activePartialIds = [
@@ -140,9 +140,9 @@ class Accountant {
             if (size <= 0) continue;
 
             if (order.type === ORDER_TYPES.BUY) {
-                virtuelBuy += size;
+                virtualBuy += size;
             } else if (order.type === ORDER_TYPES.SELL) {
-                virtuelSell += size;
+                virtualSell += size;
             }
         }
 
@@ -154,9 +154,9 @@ class Accountant {
         mgr.funds.committed.grid = { buy: gridBuy, sell: gridSell };
         mgr.funds.committed.chain = { buy: chainBuy, sell: chainSell };
 
-        // Set virtuel/virtual (grid orders not on-chain yet)
-        mgr.funds.virtuel = { buy: virtuelBuy, sell: virtuelSell };
-        mgr.funds.reserved = mgr.funds.virtuel; // backwards compat alias
+        // Set virtual/virtual (grid orders not on-chain yet)
+        mgr.funds.virtual = { buy: virtualBuy, sell: virtualSell };
+        mgr.funds.reserved = mgr.funds.virtual; // backwards compat alias
 
         // Set totals based on accountable funds only (chainFree + chainCommitted from on-chain orders)
         // Do NOT use blockchain-reported totals as they may include vesting balances, call orders,
@@ -169,7 +169,7 @@ class Accountant {
             buy: chainTotalBuy,
             sell: chainTotalSell
         };
-        mgr.funds.total.grid = { buy: gridBuy + virtuelBuy, sell: gridSell + virtuelSell };
+        mgr.funds.total.grid = { buy: gridBuy + virtualBuy, sell: gridSell + virtualSell };
 
         // Set available (what we can spend right now)
         mgr.funds.available.buy = calculateAvailableFundsValue('buy', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);

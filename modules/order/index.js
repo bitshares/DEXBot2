@@ -11,10 +11,10 @@
  * - logger: Color-coded console output for debugging
  * 
  * Fund tracking model (see manager.js for details):
- * - available = max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation)
+ * - available = max(0, chainFree - virtual - applicableBtsFeesOwed - btsFeesReservation)
  * - cacheFunds = fill proceeds and rotation surplus (kept separate, added to available for rebalancing)
  * - total.chain = chainFree + committed.chain
- * - total.grid = committed.grid + virtuel
+ * - total.grid = committed.grid + virtual
  */
 const { OrderManager } = require('./manager');
 // Runner may contain I/O and larger logic; require lazily to avoid loading it

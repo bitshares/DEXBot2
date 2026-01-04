@@ -216,7 +216,7 @@ function computeChainFundTotals(accountTotals, committedChain) {
 /**
  * Calculates available funds for a specific side (buy/sell).
  *
- * FORMULA: available = max(0, chainFree - virtuel - btsFeesOwed - btsFeesReservation)
+ * FORMULA: available = max(0, chainFree - virtual - btsFeesOwed - btsFeesReservation)
  *
  * NOTE ON CACHEFUNDS:
  * cacheFunds (unspent fill proceeds and rotation surpluses) is intentionally NOT subtracted
@@ -227,7 +227,7 @@ function computeChainFundTotals(accountTotals, committedChain) {
  *
  * FUND COMPONENTS:
  * - chainFree: Unallocated funds on blockchain (free to use immediately)
- * - virtuel: Funds reserved for VIRTUAL grid orders (not yet on-chain)
+ * - virtual: Funds reserved for VIRTUAL grid orders (not yet on-chain)
  * - btsFeesOwed: Accumulated BTS fees waiting to be settled from cacheFunds
  * - btsFeesReservation: Buffer reserved for future order creation fees
  * - cacheFunds: Fill proceeds and rotation surplus (added to grid sizing separately)
@@ -244,7 +244,7 @@ function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB
     if (!side || (side !== 'buy' && side !== 'sell')) return 0;
 
     const chainFree = side === 'buy' ? (accountTotals?.buyFree || 0) : (accountTotals?.sellFree || 0);
-    const virtuel = side === 'buy' ? (funds.virtuel?.buy || 0) : (funds.virtuel?.sell || 0);
+    const virtual = side === 'buy' ? (funds.virtual?.buy || 0) : (funds.virtual?.sell || 0);
     const btsFeesOwed = funds.btsFeesOwed || 0;
 
     // Determine which side actually has BTS as the asset
@@ -271,7 +271,7 @@ function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB
     // Subtract btsFeesOwed from the side that holds BTS to prevent over-allocation
     const currentFeesOwed = (btsSide === side) ? btsFeesOwed : 0;
 
-    return Math.max(0, chainFree - virtuel - currentFeesOwed - btsFeesReservation);
+    return Math.max(0, chainFree - virtual - currentFeesOwed - btsFeesReservation);
 }
 
 /**
@@ -661,7 +661,7 @@ const lookupAsset = async (BitShares, s) => {
     let cached = null;
     try {
         cached = BitShares && BitShares.assets ? BitShares.assets[s.toLowerCase()] : null;
-    } catch (e) { }
+    } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
 
     // Only trust cached assets when they include precision; otherwise enrich via db.
     if (cached && cached.id && typeof cached.precision === 'number') return cached;
@@ -669,11 +669,11 @@ const lookupAsset = async (BitShares, s) => {
     try {
         const r = await BitShares.db.lookup_asset_symbols([s]);
         if (r && r[0] && r[0].id) return { ...(cached || {}), ...r[0] };
-    } catch (e) { }
+    } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
     try {
         const g = await BitShares.db.get_assets([s]);
         if (g && g[0] && g[0].id) return { ...(cached || {}), ...g[0] };
-    } catch (e) { }
+    } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
 
     if (cached && cached.id) return cached;
     return null;
@@ -694,7 +694,7 @@ const deriveMarketPrice = async (BitShares, symA, symB) => {
                 const bestAsk = ob.asks && ob.asks.length ? Number(ob.asks[0].price) : null;
                 if (bestBid !== null && bestAsk !== null) mid = (bestBid + bestAsk) / 2;
             }
-        } catch (e) { }
+        } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
 
         if (mid === null) {
             try {
@@ -703,7 +703,7 @@ const deriveMarketPrice = async (BitShares, symA, symB) => {
                     if (t && (t.latest || t.latest === 0)) mid = Number(t.latest);
                     if (!mid && t && t.latest_price) mid = Number(t.latest_price);
                 }
-            } catch (err) { }
+            } catch (err) { console.warn("[utils.js] silent catch:", err.message); }
         }
 
         if (mid !== null && Number.isFinite(mid) && mid !== 0) return 1 / mid;
@@ -726,7 +726,7 @@ const derivePoolPrice = async (BitShares, symA, symB) => {
             if (BitShares.db && typeof BitShares.db.get_liquidity_pool_by_asset_ids === 'function') {
                 chosen = await BitShares.db.get_liquidity_pool_by_asset_ids(aMeta.id, bMeta.id);
             }
-        } catch (e) { }
+        } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
 
         try {
             // Attempt to find pool by scanning list_liquidity_pools
@@ -812,7 +812,7 @@ const derivePoolPrice = async (BitShares, symA, symB) => {
                         }
                     }
                 }
-            } catch (e) { }
+            } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
         }
 
         if (!chosen) {
@@ -832,7 +832,7 @@ const derivePoolPrice = async (BitShares, symA, symB) => {
                     if (Array.isArray(objs) && objs[0]) {
                         chosen = { ...chosen, ...objs[0] };
                     }
-                } catch (e) { }
+                } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
             }
 
             // Prefer balance_a / balance_b from live object 1.19.x logic
@@ -903,7 +903,7 @@ const derivePrice = async (BitShares, symA, symB, mode) => {
             if (p && Number.isFinite(p) && p > 0) {
                 return p;
             }
-        } catch (e) { }
+        } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
     }
 
     // Historically, even explicit 'pool' mode falls back to market/orderbook if pool isn't available.
@@ -913,7 +913,7 @@ const derivePrice = async (BitShares, symA, symB, mode) => {
             if (m && Number.isFinite(m) && m > 0) {
                 return m;
             }
-        } catch (e) { }
+        } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
     }
 
     try {
@@ -960,7 +960,7 @@ const derivePrice = async (BitShares, symA, symB, mode) => {
         }
         if (!sumDen) return null;
         return sumNum / sumDen;
-    } catch (e) { }
+    } catch (e) { console.warn("[utils.js] silent catch:", e.message); }
 
     return null;
 

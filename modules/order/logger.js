@@ -9,11 +9,11 @@
  * - Fund status display (logFundsStatus)
  * 
  * Fund display (logFundsStatus) shows:
- * - available: max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation)
+ * - available: max(0, chainFree - virtual - applicableBtsFeesOwed - btsFeesReservation)
  * - cacheFunds: fill proceeds and rotation surplus (added to available for rebalancing decisions)
  * - total.chain: chainFree + committed.chain (on-chain balance)
- * - total.grid: committed.grid + virtuel (grid allocation)
- * - virtuel: VIRTUAL order sizes (reserved for future placement)
+ * - total.grid: committed.grid + virtual (grid allocation)
+ * - virtual: VIRTUAL order sizes (reserved for future placement)
  * - committed.grid: ACTIVE order sizes (internal tracking)
  * - committed.chain: ACTIVE orders with orderId (confirmed on-chain)
  * 
@@ -99,10 +99,10 @@ class Logger {
     /**
      * Print a summary of fund status for diagnostics with optional context.
      * Displays the complete fund structure from manager.funds:
-     * - available: Free funds for new orders (chainFree - virtuel - cacheFunds - btsFeesOwed)
+     * - available: Free funds for new orders (chainFree - virtual - cacheFunds - btsFeesOwed)
      * - total.chain: Total on-chain balance (chainFree + committed.chain)
-     * - total.grid: Total grid allocation (committed.grid + virtuel)
-     * - virtuel: VIRTUAL order sizes (reserved for future on-chain placement)
+     * - total.grid: Total grid allocation (committed.grid + virtual)
+     * - virtual: VIRTUAL order sizes (reserved for future on-chain placement)
      * - committed.grid: ACTIVE order sizes (internal grid tracking)
      * - committed.chain: ACTIVE orders with orderId (confirmed on blockchain)
      * - cacheFunds: Fill proceeds and rotation surplus
@@ -148,8 +148,8 @@ class Logger {
         // Grid allocations
         const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
         const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
-        const virtuelBuy = manager.funds?.virtuel?.buy ?? 0;
-        const virtuelSell = manager.funds?.virtuel?.sell ?? 0;
+        const virtualBuy = manager.funds?.virtual?.buy ?? 0;
+        const virtualSell = manager.funds?.virtual?.sell ?? 0;
 
         // Cache
         const cacheBuy = manager.funds?.cacheFunds?.buy ?? 0;
@@ -175,7 +175,7 @@ class Logger {
         console.log(`\n${debug}=== GRID ALLOCATIONS (locked in orders) ===${reset}`);
         console.log(`total.grid: ${buy}Buy ${totalGridBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${totalGridSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`committed.grid: ${buy}Buy ${committedGridBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${committedGridSell.toFixed(8)}${reset} ${sellName}`);
-        console.log(`virtuel (reserved): ${buy}Buy ${virtuelBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${virtuelSell.toFixed(8)}${reset} ${sellName}`);
+        console.log(`virtual (reserved): ${buy}Buy ${virtualBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${virtualSell.toFixed(8)}${reset} ${sellName}`);
 
         console.log(`\n${debug}=== COMMITTED ON-CHAIN ===${reset}`);
         console.log(`committed.chain: ${buy}Buy ${committedChainBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${committedChainSell.toFixed(8)}${reset} ${sellName}`);
@@ -186,7 +186,7 @@ class Logger {
 
         // Only show formula and notes in debug mode
         if (isDebugMode) {
-            console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation) ===${reset}`);
+            console.log(`\n${debug}=== FORMULA: available = max(0, chainFree - virtual - applicableBtsFeesOwed - btsFeesReservation) ===${reset}`);
             console.log(`${debug}Note: cacheFunds is kept separate and added to available for rebalancing decisions${reset}`);
         }
     }
@@ -210,8 +210,8 @@ class Logger {
         const totalChainSell = manager.funds?.total?.chain?.sell ?? 0;
         const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
         const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
-        const virtuelBuy = manager.funds?.virtuel?.buy ?? 0;
-        const virtuelSell = manager.funds?.virtuel?.sell ?? 0;
+        const virtualBuy = manager.funds?.virtual?.buy ?? 0;
+        const virtualSell = manager.funds?.virtual?.sell ?? 0;
         const cacheBuy = manager.funds?.cacheFunds?.buy ?? 0;
         const cacheSell = manager.funds?.cacheFunds?.sell ?? 0;
         const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
@@ -228,7 +228,7 @@ class Logger {
         console.log(`funds.available: ${buy}Buy ${gridBuy}${reset} ${buyName} | ${sell}Sell ${gridSell}${reset} ${sellName}`);
         console.log(`total.chain: ${buy}Buy ${totalChainBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${totalChainSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`total.grid: ${buy}Buy ${totalGridBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${totalGridSell.toFixed(8)}${reset} ${sellName}`);
-        console.log(`virtuel.grid: ${buy}Buy ${virtuelBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${virtuelSell.toFixed(8)}${reset} ${sellName}`);
+        console.log(`virtual.grid: ${buy}Buy ${virtualBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${virtualSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`cacheFunds: ${buy}Buy ${cacheBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${cacheSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`committed.grid: ${buy}Buy ${committedGridBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${committedGridSell.toFixed(8)}${reset} ${sellName}`);
         console.log(`committed.chain: ${buy}Buy ${committedChainBuy.toFixed(8)}${reset} ${buyName} | ${sell}Sell ${committedChainSell.toFixed(8)}${reset} ${sellName}`);

@@ -6,12 +6,12 @@
  * - Verifying configuration produces expected grid
  * - Testing price derivation from pool/market
  * - Debugging order sizing and fund allocation
- * - Validating fund calculations (available, virtuel, committed)
+ * - Validating fund calculations (available, virtual, committed)
  * 
  * Fund model overview (see manager.js for full details):
- * - available = max(0, chainFree - virtuel - applicableBtsFeesOwed - btsFeesReservation)
+ * - available = max(0, chainFree - virtual - applicableBtsFeesOwed - btsFeesReservation)
  * - cacheFunds = fill proceeds and rotation surplus (kept separate, added to available for rebalancing)
- * - virtuel = sum of VIRTUAL order sizes (reserved for placement)
+ * - virtual = sum of VIRTUAL order sizes (reserved for placement)
  * - committed.grid = sum of ACTIVE order sizes
  * - committed.chain = sum of ACTIVE orders with orderId on-chain
  * 

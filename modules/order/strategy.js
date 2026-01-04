@@ -5,13 +5,13 @@
  * Maintains side-pinned contiguous physical shifts with fixed grid integrity.
  */
 
-const { ORDER_TYPES, ORDER_STATES, GRID_LIMITS, FEE_PARAMETERS, PRECISION_DEFAULTS } = require('../constants');
+const { ORDER_TYPES, ORDER_STATES, GRID_LIMITS, FEE_PARAMETERS, PRECISION_DEFAULTS } = require("../constants");
 const {
     getPrecisionForSide,
     getAssetFees,
     allocateFundsByWeights,
     calculateOrderCreationFees
-} = require('./utils');
+} = require("./utils");
 
 class StrategyEngine {
     /**
@@ -32,43 +32,35 @@ class StrategyEngine {
      */
     async rebalance(fills = [], excludeIds = new Set()) {
         const mgr = this.manager;
-        mgr.logger.log(`[UNIFIED] Starting contiguous physical rail rebalance.`, 'info');
+        mgr.logger.log("[UNIFIED] Starting contiguous physical rail rebalance.", "info");
         
         const allOrders = Array.from(mgr.orders.values());
         
-        // 1. Partition Slots by Rail (Fixed ID Isolation with Type fallback for tests)
-        // BUY RAIL: Sorted Inward First (Highest Price @ Index 0)
-        const buySlots = allOrders.filter(o => (o.id && String(o.id).startsWith('buy-')) || o.type === ORDER_TYPES.BUY).sort((a, b) => b.price - a.price);
-        // SELL RAIL: Sorted Inward First (Lowest Price @ Index 0)
-        const sellSlots = allOrders.filter(o => (o.id && String(o.id).startsWith('sell-')) || o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price);
+        const buySlots = allOrders.filter(o => (o.id && String(o.id).startsWith("buy-")) || o.type === ORDER_TYPES.BUY).sort((a, b) => b.price - a.price);
+        const sellSlots = allOrders.filter(o => (o.id && String(o.id).startsWith("sell-")) || o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price);
 
-        // 2. Identify Fill Context
         const filledSide = (fills.length > 0) ? fills[0].type : null;
 
-        // 3. Identify Side Budgets (Ensure comprehensive context including committed grid)
         const snap = mgr.getChainFundsSnapshot ? mgr.getChainFundsSnapshot() : {};
         const budgetBuy = Math.max(snap.chainTotalBuy || 0, snap.allocatedBuy || 0, (mgr.funds?.total?.grid?.buy || 0));
         const budgetSell = Math.max(snap.chainTotalSell || 0, snap.allocatedSell || 0, (mgr.funds?.total?.grid?.sell || 0));
 
-        // FIX #4: Fund Budget Validation
-        // PROBLEM: Zero budgets on both sides resulted in silent no-op rebalancing (no visibility)
-        // IMPACT: Hard to diagnose under-capitalized scenarios; bot appears to run but takes no action
-        // SOLUTION: Log budget constraints explicitly with appropriate severity levels
-        // LOG LEVELS: WARN if both sides starved (critical); DEBUG for single side (informational)
         if (budgetBuy === 0 && budgetSell === 0) {
-            mgr.logger.log(`[UNIFIED] WARNING: No budget available for rebalancing (buy: 0, sell: 0)`, 'warn');
+            mgr.logger.log("[UNIFIED] WARNING: No budget available for rebalancing (buy: 0, sell: 0)", "warn");
         }
         if (budgetBuy === 0) {
-            mgr.logger.log(`[UNIFIED] INFO: Buy side has no budget`, 'debug');
+            mgr.logger.log("[UNIFIED] INFO: Buy side has no budget", "debug");
         }
         if (budgetSell === 0) {
-            mgr.logger.log(`[UNIFIED] INFO: Sell side has no budget`, 'debug');
+            mgr.logger.log("[UNIFIED] INFO: Sell side has no budget", "debug");
         }
 
-        // 4. Process Rails Independently
         const buyResult = await this.rebalanceSideLogic(ORDER_TYPES.BUY, buySlots, budgetBuy, excludeIds, filledSide === ORDER_TYPES.BUY, filledSide != null);
         const sellResult = await this.rebalanceSideLogic(ORDER_TYPES.SELL, sellSlots, budgetSell, excludeIds, filledSide === ORDER_TYPES.SELL, filledSide != null);
         
+        const allUpdates = [...buyResult.stateUpdates, ...sellResult.stateUpdates]; 
+        allUpdates.forEach(upd => mgr._updateOrder(upd)); 
+
         const result = {
             ordersToPlace: [...buyResult.ordersToPlace, ...sellResult.ordersToPlace],
             ordersToRotate: [...buyResult.ordersToRotate, ...sellResult.ordersToRotate],
@@ -78,11 +70,10 @@ class StrategyEngine {
             partialMoves: []
         };
         
-        mgr.logger.log(`[UNIFIED] Sequence complete: ${result.ordersToPlace.length} place, ${result.ordersToRotate.length} rotate, ${result.ordersToUpdate.length} update.`, 'info');
+        mgr.logger.log(`[UNIFIED] Sequence complete: ${result.ordersToPlace.length} place, ${result.ordersToRotate.length} rotate, ${result.ordersToUpdate.length} update.`, "info");
         
         return result;
     }
-
     /**
      * Contiguous Rail Maintenance Logic for a specific side.
      * Manages a sliding window of ACTIVE orders over the fixed physical grid.
@@ -97,13 +88,15 @@ class StrategyEngine {
      */
     async rebalanceSideLogic(type, slots, sideBudget, excludeIds, wasFilledSide, anyFillOccurred) {
         const mgr = this.manager;
-        const side = type === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        if (slots.length === 0) return { ordersToPlace: [], ordersToRotate: [], ordersToUpdate: [], ordersToCancel: [] };
+        const side = type === ORDER_TYPES.BUY ? "buy" : "sell";
+        if (slots.length === 0) return { ordersToPlace: [], ordersToRotate: [], ordersToUpdate: [], ordersToCancel: [], stateUpdates: [] };
+
+        const stateUpdates = [];
 
         // 1. Determine targetCount and geometric ideal sizing
-        const targetCount = Math.max(1, mgr.config.activeOrders[side]);
+        const targetCount = (mgr.config.activeOrders && Number.isFinite(mgr.config.activeOrders[side])) ? Math.max(1, mgr.config.activeOrders[side]) : 1;
         let btsFeesReservation = 0;
-        if ((mgr.config.assetA === 'BTS' && side === 'sell') || (mgr.config.assetB === 'BTS' && side === 'buy')) {
+        if ((mgr.config.assetA === "BTS" && side === "sell") || (mgr.config.assetB === "BTS" && side === "buy")) {
             btsFeesReservation = calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetCount, 5);
         }
         // Only deduct fees if budget is substantial (> 10x fees); otherwise preserve for tests
@@ -121,11 +114,6 @@ class StrategyEngine {
         let activeIndices = activeOnChain.map(o => slots.findIndex(s => s.id === o.id)).sort((a, b) => a - b);
 
         // 3. Sliding Window Transition
-        // FIX #1: Dynamic Window Fallback
-        // PROBLEM: Previously hardcoded fallback index (3) broke with variable grid sizes
-        // EXAMPLE: 3-slot grid with targetCount=3 would initialize window at [3,4,5] (out of bounds)
-        // SOLUTION: Calculate fallback dynamically to center window within grid bounds
-        // MATH: Center = (grid_start + grid_end) / 2 ≈ slots.length/2 - targetCount/2
         let nextIndices = [...activeIndices];
         if (activeIndices.length === 0) {
             // First run or recovery: find first non-spread slot
@@ -136,7 +124,7 @@ class StrategyEngine {
             if (wasFilledSide) {
                 // Fill Side: Expand window to maintain targetCount
                 // Try expanding outward first, then inward if at boundary
-                if (nextIndices.length < targetCount) {
+                if (nextIndices.length < targetCount && nextIndices.length > 0) {
                     const maxIdx = Math.max(...nextIndices);
                     const minIdx = Math.min(...nextIndices);
                     if (maxIdx + 1 < slots.length) {
@@ -148,9 +136,11 @@ class StrategyEngine {
             } else if (anyFillOccurred) {
                 // Opposite Side: Shift Inward (rotation)
                 // e.g. [3, 4, 5] -> shift in -> [2, 3, 4]
-                const innerEdge = Math.min(...nextIndices);
-                if (innerEdge > 0) {
-                    nextIndices = nextIndices.map(i => i - 1);
+                if (nextIndices.length > 0) {
+                    const innerEdge = Math.min(...nextIndices);
+                    if (innerEdge > 0) {
+                        nextIndices = nextIndices.map(i => i - 1);
+                    }
                 }
             }
         }
@@ -162,19 +152,15 @@ class StrategyEngine {
                 .filter(idx => idx >= 0 && idx < slots.length);
         }
 
-        // FIX #3: Contiguity and Bounds Validation
-        // PROBLEM: Window indices could exceed slots.length, causing out-of-bounds access
-        // RISK: Math.min(...empty_array) = Infinity, Math.max(...empty_array) = -Infinity (NaN in calculations)
-        // SOLUTION: Validate bounds and trim invalid indices; log boundary violations
-        // TOLERANCE: Gracefully reduce window size at boundaries (better than crash)
+        // HARDENING Math.min/max: Bounds Validation
         if (nextIndices.length > 0) {
             const max = Math.max(...nextIndices);
             if (max >= slots.length) {
-                mgr.logger.log(`[UNIFIED] WARN: Window exceeds slot bounds (${max} >= ${slots.length}), trimming indices`, 'warn');
+                mgr.logger.log(`[UNIFIED] WARN: Window exceeds slot bounds (${max} >= ${slots.length}), trimming indices`, "warn");
                 nextIndices = nextIndices.filter(idx => idx < slots.length);
             }
             if (nextIndices.length < targetCount && slots.length > 0) {
-                mgr.logger.log(`[UNIFIED] DEBUG: Window reduced from ${targetCount} to ${nextIndices.length} due to boundary constraints`, 'debug');
+                mgr.logger.log(`[UNIFIED] DEBUG: Window reduced from ${targetCount} to ${nextIndices.length} due to boundary constraints`, "debug");
             }
         }
 
@@ -206,9 +192,9 @@ class StrategyEngine {
                 newGridId: shortageSlot.id,
                 type: type
             });
-            mgr._updateOrder({ ...surplus, state: ORDER_STATES.VIRTUAL });
-            mgr._updateOrder({ ...shortageSlot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-            mgr.logger.log(`[UNIFIED] Rotation: Shifting furthest ${type} ${surplus.id} -> contiguous slot ${shortageSlot.id}.`, 'info');
+            stateUpdates.push({ ...surplus, state: ORDER_STATES.VIRTUAL });
+            stateUpdates.push({ ...shortageSlot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+            mgr.logger.log(`[UNIFIED] Rotation: Shifting furthest ${type} ${surplus.id} -> contiguous slot ${shortageSlot.id}.`, "info");
         }
 
         // New Placements (remaining shortages)
@@ -217,31 +203,28 @@ class StrategyEngine {
             const slot = slots[idx];
             const idealSize = idealSizes[idx];
             ordersToPlace.push({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-            mgr._updateOrder({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-            mgr.logger.log(`[UNIFIED] Expansion: Placing ${type} at fixed edge slot ${slot.id}.`, 'info');
+            stateUpdates.push({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+            mgr.logger.log(`[UNIFIED] Expansion: Placing ${type} at fixed edge slot ${slot.id}.`, "info");
         }
 
         // Surplus Cancellations (remaining surpluses)
         for (let i = pairCount; i < surpluses.length; i++) {
             const surplus = surpluses[i];
             ordersToCancel.push({ ...surplus });
-            mgr._updateOrder({ ...surplus, state: ORDER_STATES.VIRTUAL, orderId: null });
-            mgr.logger.log(`[UNIFIED] Surplus: Cancelling out-of-window ${type} order ${surplus.id}.`, 'info');
+            stateUpdates.push({ ...surplus, state: ORDER_STATES.VIRTUAL, orderId: null });
+            mgr.logger.log(`[UNIFIED] Surplus: Cancelling out-of-window ${type} order ${surplus.id}.`, "info");
         }
 
         // 5. In-Place Maintenance (Resize & Merge/Split Consolidation)
-        // Process ALL active/partial orders currently on-chain for this rail
         const allOnChain = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL));
         
         for (const slot of allOnChain) {
-            // Check if this slot was just used as a SOURCE for rotation (it's now VIRTUAL)
             const wasRotationSource = ordersToRotate.some(r => r.oldOrder.id === slot.id);
             if (wasRotationSource) continue;
 
             const slotIdx = slots.findIndex(s => s.id === slot.id);
             const idealSize = idealSizes[slotIdx];
 
-            // SKIP Maintenance for DoubleOrders (Delayed Rotation Period)
             if (slot.isDoubleOrder) continue;
 
             if (slot.state === ORDER_STATES.PARTIAL) {
@@ -249,14 +232,11 @@ class StrategyEngine {
                 const availableFunds = mgr.funds.available[side];
 
                 if (slot.size < dustThreshold) {
-                    // --- MERGE Consolidation ---
                     if (availableFunds > 0) {
                         const fundableIdealSize = Math.min(idealSize, availableFunds);
                         const mergedSize = slot.size + fundableIdealSize;
                         
-                        // Check 105% constraint
                         if (mergedSize <= idealSize * 1.05) {
-                            // If this order is being ROTATED, update the rotation target size instead of adding ordersToUpdate
                             const rotIdx = ordersToRotate.findIndex(r => r.oldOrder.orderId === slot.orderId);
                             if (rotIdx !== -1) {
                                 ordersToRotate[rotIdx].newSize = mergedSize;
@@ -269,7 +249,7 @@ class StrategyEngine {
                                 });
                             }
 
-                            mgr._updateOrder({ 
+                            stateUpdates.push({ 
                                 ...slot, 
                                 size: mergedSize, 
                                 state: ORDER_STATES.ACTIVE,
@@ -278,14 +258,12 @@ class StrategyEngine {
                                 filledSinceRefill: 0,
                                 pendingRotation: true
                             });
-                            mgr.logger.log(`[UNIFIED] MERGE: Dust partial ${slot.id} (${slot.size.toFixed(precision)}) absorbing ${fundableIdealSize.toFixed(precision)} funds.`, 'info');
+                            mgr.logger.log(`[UNIFIED] MERGE: Dust partial ${slot.id} (${slot.size.toFixed(precision)}) absorbing ${fundableIdealSize.toFixed(precision)} funds.`, "info");
                             continue;
                         }
                     }
                 }
                 
-                // --- SPLIT Consolidation (Anchor + Residual) ---
-                // 1. Update existing partial to ideal size (The Anchor)
                 const rotIdx = ordersToRotate.findIndex(r => r.oldOrder.orderId === slot.orderId);
                 if (rotIdx !== -1) {
                     ordersToRotate[rotIdx].newSize = idealSize;
@@ -297,17 +275,13 @@ class StrategyEngine {
                         newState: ORDER_STATES.ACTIVE 
                     });
                 }
-                mgr._updateOrder({ ...slot, size: idealSize, state: ORDER_STATES.ACTIVE });
-                mgr.logger.log(`[UNIFIED] SPLIT: Anchoring partial ${slot.id} to ideal size ${idealSize.toFixed(precision)}.`, 'info');
+                stateUpdates.push({ ...slot, size: idealSize, state: ORDER_STATES.ACTIVE });
+                mgr.logger.log(`[UNIFIED] SPLIT: Anchoring partial ${slot.id} to ideal size ${idealSize.toFixed(precision)}.`, "info");
                 
-                // 2. Create residual order at spread price (or outer edge) if substantial
                 if (slot.size >= dustThreshold) {
                     const minIdx = nextIndices.length > 0 ? Math.min(...nextIndices) : -1;
                     const maxIdx = nextIndices.length > 0 ? Math.max(...nextIndices) : -1;
                     
-                    // Try to find a nearby virtual slot for the residual
-                    // 1. Try innermost spread (minIdx - 1)
-                    // 2. Try outermost expansion edge (maxIdx + 1)
                     let targetIdx = -1;
                     if (minIdx > 0 && !slots[minIdx - 1].orderId) {
                         targetIdx = minIdx - 1;
@@ -326,19 +300,18 @@ class StrategyEngine {
                                 isResidualFromAnchor: true,
                                 anchoredFromPartialId: slot.id
                             });
-                            mgr._updateOrder({ 
+                            stateUpdates.push({ 
                                 ...targetSlot, 
                                 type: type, 
                                 size: slot.size, 
                                 state: ORDER_STATES.ACTIVE 
                             });
-                            mgr.logger.log(`[UNIFIED] SPLIT: Created residual order ${slot.size.toFixed(precision)} for ${slot.id} at slot ${targetSlot.id}.`, 'info');
+                            mgr.logger.log(`[UNIFIED] SPLIT: Created residual order ${slot.size.toFixed(precision)} for ${slot.id} at slot ${targetSlot.id}.`, "info");
                         }
                     }
                 }
                 continue;
             } else if (Math.abs(slot.size - idealSize) > 1e-8) {
-                // Standard in-place geometric resize
                 const rotIdx = ordersToRotate.findIndex(r => r.oldOrder.orderId === slot.orderId);
                 if (rotIdx !== -1) {
                     ordersToRotate[rotIdx].newSize = idealSize;
@@ -350,26 +323,19 @@ class StrategyEngine {
                         newState: ORDER_STATES.ACTIVE
                     });
                 }
-                mgr._updateOrder({ ...slot, size: idealSize });
-                mgr.logger.log(`[UNIFIED] Maintenance: Resizing active ${slot.id} to ${idealSize.toFixed(precision)}.`, 'info');
+                stateUpdates.push({ ...slot, size: idealSize });
+                mgr.logger.log(`[UNIFIED] Maintenance: Resizing active ${slot.id} to ${idealSize.toFixed(precision)}.`, "info");
             }
         }
 
-        // 6. Log Active Window Boundaries (without mutating slots)
-        // FIX #2: Removed State-Mutating Role Assignment
-        // PROBLEM: Previous code directly mutated slot.type for all slots based on window position
-        // CONSEQUENCE: Corrupted grid state for next rebalance cycle (roles changed unexpectedly)
-        // SOLUTION: Log window info only; never mutate slot properties (immutable by design)
-        // ARCHITECTURE: Manager updates order state via _updateOrder(), not mutation
         if (nextIndices.length > 0) {
             const minActiveIdx = Math.min(...nextIndices);
             const maxActiveIdx = Math.max(...nextIndices);
-            mgr.logger.log(`[UNIFIED] Active window: indices [${minActiveIdx}-${maxActiveIdx}], spread zone before ${minActiveIdx}`, 'debug');
+            mgr.logger.log(`[UNIFIED] Active window: indices [${minActiveIdx}-${maxActiveIdx}], spread zone before ${minActiveIdx}`, "debug");
         }
 
-        return { ordersToPlace, ordersToRotate, ordersToUpdate, ordersToCancel };
+        return { ordersToPlace, ordersToRotate, ordersToUpdate, ordersToCancel, stateUpdates };
     }
-
     /**
      * Complete an order rotation after blockchain confirmation.
      * Releases committed capital from the old slot and transitions it to VIRTUAL.
@@ -386,7 +352,7 @@ class StrategyEngine {
 
             const updatedOld = { ...oldGridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
             mgr._updateOrder(updatedOld);
-            mgr.logger.log(`Rotated order ${oldOrderInfo.id} -> VIRTUAL (capital preserved).`, 'info');
+            mgr.logger.log(`Rotated order ${oldOrderInfo.id} -> VIRTUAL (capital preserved).`, "info");
         }
     }
 
@@ -402,11 +368,11 @@ class StrategyEngine {
         const mgr = this.manager;
         if (!mgr || !Array.isArray(filledOrders)) return;
 
-        mgr.logger.log(`>>> processFilledOrders() with ${filledOrders.length} orders`, 'info');
+        mgr.logger.log(`>>> processFilledOrders() with ${filledOrders.length} orders`, "info");
         mgr.pauseFundRecalc();
 
         try {
-            const hasBtsPair = (mgr.config?.assetA === 'BTS' || mgr.config?.assetB === 'BTS');
+            const hasBtsPair = (mgr.config?.assetA === "BTS" || mgr.config?.assetB === "BTS");
             let fillsToSettle = 0;
 
             for (const filledOrder of filledOrders) {
@@ -428,7 +394,7 @@ class StrategyEngine {
             }
 
             if (hasBtsPair && fillsToSettle > 0) {
-                const btsFeeData = getAssetFees('BTS', 0);
+                const btsFeeData = getAssetFees("BTS", 0);
                 mgr.funds.btsFeesOwed += fillsToSettle * btsFeeData.total;
                 await mgr.accountant.deductBtsFees();
             }
@@ -439,7 +405,7 @@ class StrategyEngine {
             const result = await this.rebalance(filledOrders, excludeOrderIds);
 
             if (hasBtsPair && (result.ordersToRotate.length > 0 || result.ordersToUpdate.length > 0)) {
-                const btsFeeData = getAssetFees('BTS', 0);
+                const btsFeeData = getAssetFees("BTS", 0);
                 const updateCount = result.ordersToRotate.length + result.ordersToUpdate.length;
                 mgr.funds.btsFeesOwed += updateCount * btsFeeData.updateFee;
             }
@@ -548,7 +514,7 @@ class StrategyEngine {
             virtualOrders = virtualOrders.filter(o => !mgr.isOrderLocked(o.id) && !mgr.isOrderLocked(o.orderId));
         }
 
-        mgr.logger.log(`Found ${virtualOrders.length} VIRTUAL ${targetType} orders for activation`, 'debug');
+        mgr.logger.log(`Found ${virtualOrders.length} VIRTUAL ${targetType} orders for activation`, "debug");
 
         virtualOrders.sort((a, b) => targetType === ORDER_TYPES.BUY ? b.price - a.price : a.price - b.price);
 
@@ -563,11 +529,11 @@ class StrategyEngine {
             if (orderSize <= 0) continue;
 
             const activatedOrder = { ...order, type: targetType, size: orderSize, state: ORDER_STATES.VIRTUAL };
-            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation', 0);
+            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, "spread-activation", 0);
 
             mgr._updateOrder(activatedOrder);
             activated.push(activatedOrder);
-            mgr.logger.log(`Activated virtual ${targetType} at ${order.price.toFixed(4)} (Amount: ${orderSize.toFixed(8)})`, 'info');
+            mgr.logger.log(`Activated virtual ${targetType} at ${order.price.toFixed(4)} (Amount: ${orderSize.toFixed(8)})`, "info");
         }
         return activated;
     }
@@ -592,7 +558,7 @@ class StrategyEngine {
             );
 
         if (activeOrders.length === 0) {
-            mgr.logger.log(`No active ${targetType} orders available for rotation`, 'debug');
+            mgr.logger.log(`No active ${targetType} orders available for rotation`, "debug");
             return [];
         }
 
@@ -601,7 +567,7 @@ class StrategyEngine {
         const toRotate = activeOrders.slice(0, count);
         const rotated = [];
 
-        const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+        const side = targetType === ORDER_TYPES.BUY ? "buy" : "sell";
         const cache = Number(mgr.funds?.cacheFunds?.[side] || 0);
         const fundsPerOrder = toRotate.length > 0 ? cache / toRotate.length : 0;
 
@@ -609,7 +575,7 @@ class StrategyEngine {
             const allSpreadOrders = mgr.getOrdersByTypeAndState(ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL);
 
             if (allSpreadOrders.length === 0) {
-                mgr.logger.log(`No SPREAD slots available for ${targetType} rotation`, 'warn');
+                mgr.logger.log(`No SPREAD slots available for ${targetType} rotation`, "warn");
                 break;
             }
 
@@ -624,7 +590,7 @@ class StrategyEngine {
             );
 
             if (validSpreads.length === 0) {
-                mgr.logger.log(`No valid SPREAD slots in spread zone for ${targetType} rotation`, 'warn');
+                mgr.logger.log(`No valid SPREAD slots in spread zone for ${targetType} rotation`, "warn");
                 break;
             }
 
@@ -641,7 +607,7 @@ class StrategyEngine {
             };
 
             const virtualOrder = { ...targetSpreadSlot, type: targetType, size: fundsPerOrder, state: ORDER_STATES.VIRTUAL };
-            mgr.accountant.updateOptimisticFreeBalance(order, virtualOrder, 'rotation', 0);
+            mgr.accountant.updateOptimisticFreeBalance(order, virtualOrder, "rotation", 0);
             
             mgr.funds.cacheFunds[side] = Math.max(0, (mgr.funds.cacheFunds[side] || 0) - fundsPerOrder);
             
@@ -715,13 +681,13 @@ class StrategyEngine {
         const oldGridOrder = mgr.orders.get(partialOrder.id);
         if (oldGridOrder && (!oldGridOrder.orderId || oldGridOrder.orderId === partialOrder.orderId)) {
             const updatedOld = { ...oldGridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
-            mgr.accountant.updateOptimisticFreeBalance(oldGridOrder, updatedOld, 'move-vacate', 0);
+            mgr.accountant.updateOptimisticFreeBalance(oldGridOrder, updatedOld, "move-vacate", 0);
             mgr._updateOrder(updatedOld);
         }
 
         const targetGridOrder = mgr.orders.get(newGridId);
         if (targetGridOrder) {
-            const { floatToBlockchainInt } = require('./utils');
+            const { floatToBlockchainInt } = require("./utils");
             const precision = (partialOrder.type === ORDER_TYPES.SELL)
                 ? mgr.assets?.assetA?.precision || PRECISION_DEFAULTS.ASSET_FALLBACK
                 : mgr.assets?.assetB?.precision || PRECISION_DEFAULTS.ASSET_FALLBACK;
@@ -733,7 +699,7 @@ class StrategyEngine {
                 ...targetGridOrder, ...partialOrder, type: partialOrder.type,
                 state: newState, orderId: partialOrder.orderId, size: partialOrder.size, price: newPrice
             };
-            mgr.accountant.updateOptimisticFreeBalance(targetGridOrder, updatedNew, 'move-occupy', 0);
+            mgr.accountant.updateOptimisticFreeBalance(targetGridOrder, updatedNew, "move-occupy", 0);
             mgr._updateOrder(updatedNew);
         }
     }
@@ -761,8 +727,8 @@ class StrategyEngine {
             .filter(o => o.price > highestActiveBuy && o.price < lowestActiveSell)
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
-        const { calculateAvailableFundsValue, getMinOrderSize } = require('./utils');
-        const availableFunds = calculateAvailableFundsValue(targetType === ORDER_TYPES.BUY ? 'buy' : 'sell', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
+        const { calculateAvailableFundsValue, getMinOrderSize } = require("./utils");
+        const availableFunds = calculateAvailableFundsValue(targetType === ORDER_TYPES.BUY ? "buy" : "sell", mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
         if (availableFunds <= 0) return [];
 
         let desiredCount = Math.min(count, spreadOrders.length);
@@ -772,7 +738,7 @@ class StrategyEngine {
         const ordersToCreate = desiredCount;
 
         const activatedOrders = [];
-        const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+        const side = targetType === ORDER_TYPES.BUY ? "buy" : "sell";
 
         for (let i = 0; i < ordersToCreate && i < spreadOrders.length; i++) {
             const currentAvailable = calculateAvailableFundsValue(side, mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
@@ -783,14 +749,14 @@ class StrategyEngine {
 
             const order = spreadOrders[i];
             const activatedOrder = { ...order, type: targetType, size: fundsPerOrder, state: ORDER_STATES.ACTIVE };
-            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation', 0);
+            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, "spread-activation", 0);
             
             mgr.funds.cacheFunds[side] = Math.max(0, (mgr.funds.cacheFunds[side] || 0) - fundsPerOrder);
             
             mgr._updateOrder(activatedOrder);
             activatedOrders.push(activatedOrder);
             mgr.currentSpreadCount--;
-            mgr.logger.log(`Prepared ${targetType} order ${i + 1}/${ordersToCreate} at ${order.price.toFixed(2)} (Amount: ${fundsPerOrder.toFixed(8)})`, 'info');
+            mgr.logger.log(`Prepared ${targetType} order ${i + 1}/${ordersToCreate} at ${order.price.toFixed(2)} (Amount: ${fundsPerOrder.toFixed(8)})`, "info");
         }
 
         return activatedOrders;

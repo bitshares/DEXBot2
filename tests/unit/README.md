@@ -113,7 +113,7 @@ npm run test:unit -- tests/unit/sync_engine.test.js
 ```javascript
 // Create order and verify funds updated correctly
 manager._updateOrder(order);
-expect(manager.funds.virtuel.buy).toBe(expectedValue);
+expect(manager.funds.virtual.buy).toBe(expectedValue);
 ```
 
 ### 2. State Transition Tests
