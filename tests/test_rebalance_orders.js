@@ -8,7 +8,7 @@
 const assert = require('assert');
 const { OrderManager } = require('../modules/order/index.js');
 const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
-const { rebalanceOrders } = require('../modules/legacy-testing');
+const { rebalanceOrders } = require('../modules/order/legacy-testing');
 
 console.log('\n========== REBALANCE ORDERS TESTS ==========\n');
 

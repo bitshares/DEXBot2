@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor } = require('../modules/legacy-testing');
+const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor } = require('../modules/order/legacy-testing');
 console.log('Running rotation cacheFunds tests');
 
 const { OrderManager, grid: Grid, constants } = require('../modules/order/index.js');

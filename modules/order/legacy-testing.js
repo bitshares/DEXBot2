@@ -6,8 +6,8 @@
  * Do not use in production code - use the new processFilledOrders and related methods instead.
  */
 
-const { ORDER_TYPES, ORDER_STATES, GRID_LIMITS, PRECISION_DEFAULTS } = require('./constants');
-const { calculateAvailableFundsValue, getMinOrderSize, floatToBlockchainInt, blockchainToFloat } = require('./order/utils');
+const { ORDER_TYPES, ORDER_STATES, GRID_LIMITS, PRECISION_DEFAULTS } = require('../constants');
+const { calculateAvailableFundsValue, getMinOrderSize, floatToBlockchainInt, blockchainToFloat } = require('./utils');
 
 /**
  * @deprecated Use manager.processFilledOrders instead

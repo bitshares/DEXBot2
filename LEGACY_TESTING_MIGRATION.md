@@ -63,7 +63,7 @@ const decision = mgr._evaluatePartialOrderAnchor(partialOrder, moveInfo);
 
 ### After (Using Legacy Module)
 ```javascript
-const { rebalanceOrders, prepareFurthestOrdersForRotation, evaluatePartialOrderAnchor } = require('../modules/legacy-testing');
+const { rebalanceOrders, prepareFurthestOrdersForRotation, evaluatePartialOrderAnchor } = require('../modules/order/legacy-testing');
 
 const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 1 }, 0);
 const rotations = await prepareFurthestOrdersForRotation(mgr, ORDER_TYPES.BUY, 4);

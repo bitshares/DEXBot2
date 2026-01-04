@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor } = require('../modules/legacy-testing');
+const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor } = require('../modules/order/legacy-testing');
 const fs = require('fs');
 const path = require('path');
 const { OrderManager } = require('../modules/order/manager');

@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor, activateSpreadOrders } = require('../modules/legacy-testing');
+const { activateClosestVirtualOrdersForPlacement, prepareFurthestOrdersForRotation, rebalanceSideAfterFill, evaluatePartialOrderAnchor, activateSpreadOrders } = require('../modules/order/legacy-testing');
 console.log('Running manager tests');
 
 const { OrderManager, grid: Grid } = require('../modules/order/index.js');
