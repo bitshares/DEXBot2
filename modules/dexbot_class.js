@@ -1058,6 +1058,12 @@ class DEXBot {
             await Grid.loadGrid(this.manager, persistedGrid);
             const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
 
+            // Process fills discovered during startup sync (happened while bot was offline)
+            if (syncResult.filledOrders && syncResult.filledOrders.length > 0) {
+                this._log(`Startup sync: ${syncResult.filledOrders.length} grid order(s) found filled. Processing proceeds.`, 'info');
+                await this.manager.processFilledOrders(syncResult.filledOrders);
+            }
+
             // Reconcile existing on-chain orders to the configured target counts.
             // This ensures activeOrders changes in bots.json are applied on restart:
             // - If user increased activeOrders (e.g., 10→20), new virtual orders activate
@@ -1338,10 +1344,14 @@ class DEXBot {
                             chainOpenOrders = await chainOrders.readOpenOrders(this.accountId);
                             const syncResult = await this.manager.synchronizeWithChain(chainOpenOrders, 'periodicBlockchainFetch');
 
-                            // Log divergence summary
-                            if (syncResult.unmatchedGridOrders && syncResult.unmatchedGridOrders.length > 0) {
-                                this._log(`Periodic sync: ${syncResult.unmatchedGridOrders.length} grid order(s) not found on chain (treating as filled)`, 'warn');
+                            // Log and process fills discovered during periodic sync
+                            if (syncResult.filledOrders && syncResult.filledOrders.length > 0) {
+                                this._log(`Periodic sync: ${syncResult.filledOrders.length} grid order(s) found filled on-chain. Triggering rebalance.`, 'info');
+                                
+                                // Process these fills through the strategy to place replacement orders
+                                await this.manager.processFilledOrders(syncResult.filledOrders);
                             }
+                            
                             if (syncResult.unmatchedChainOrders && syncResult.unmatchedChainOrders.length > 0) {
                                 this._log(`Periodic sync: ${syncResult.unmatchedChainOrders.length} chain order(s) not in grid (surplus/divergence)`, 'warn');
                             }
