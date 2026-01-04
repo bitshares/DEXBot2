@@ -447,7 +447,7 @@ class Grid {
         if (!manager) return;
         const allOrders = Array.from(manager.orders.values());
         const sells = allOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price);
-        const buys = allOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => a.price - b.price);
+        const buys = allOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => b.price - a.price);
 
         const logViolations = (orders, label) => {
             let seenVirtual = false;
