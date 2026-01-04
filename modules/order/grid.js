@@ -7,7 +7,7 @@
  * - Monitors grid health and handles spread corrections
  */
 
-const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS, TIMING, INCREMENT_BOUNDS } = require('../constants');
+const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS, TIMING, INCREMENT_BOUNDS, FEE_PARAMETERS } = require('../constants');
 const { GRID_COMPARISON } = GRID_LIMITS;
 const {
     floatToBlockchainInt,
@@ -162,7 +162,7 @@ class Grid {
         if (manager.applyBotFundsAllocation) manager.applyBotFundsAllocation();
 
         const snapshot = manager.getChainFundsSnapshot();
-        const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, (manager.config.activeOrders.buy + manager.config.activeOrders.sell), 5);
+        const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, (manager.config.activeOrders.buy + manager.config.activeOrders.sell), FEE_PARAMETERS.BTS_RESERVATION_MULTIPLIER);
         const { buyFunds, sellFunds } = deductOrderFeesFromFunds(snapshot.allocatedBuy, snapshot.allocatedSell, btsFees, manager.config);
 
         const { A: precA, B: precB } = getPrecisionsForManager(manager.assets);
@@ -263,7 +263,7 @@ class Grid {
 
         if ((isBuy && manager.config.assetB === 'BTS') || (!isBuy && manager.config.assetA === 'BTS')) {
             const targetCount = Math.max(1, manager.config.activeOrders[sideName]);
-            const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, targetCount, 5);
+            const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, targetCount, FEE_PARAMETERS.BTS_RESERVATION_MULTIPLIER);
             fundsForSizing = Math.max(0, allocatedFunds - btsFees);
         }
 

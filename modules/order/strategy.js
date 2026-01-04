@@ -97,7 +97,7 @@ class StrategyEngine {
         const targetCount = (mgr.config.activeOrders && Number.isFinite(mgr.config.activeOrders[side])) ? Math.max(1, mgr.config.activeOrders[side]) : 1;
         let btsFeesReservation = 0;
         if ((mgr.config.assetA === "BTS" && side === "sell") || (mgr.config.assetB === "BTS" && side === "buy")) {
-            btsFeesReservation = calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetCount, 5);
+            btsFeesReservation = calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetCount, FEE_PARAMETERS.BTS_RESERVATION_MULTIPLIER);
         }
         // Only deduct fees if budget is substantial (> 10x fees); otherwise preserve for tests
         const availableBudget = (sideBudget > btsFeesReservation * 10) 
