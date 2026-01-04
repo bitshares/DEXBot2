@@ -31,7 +31,8 @@ const {
     calculateAvailableFundsValue,
     calculateSpreadFromOrders,
     countOrdersByType,
-    shouldFlagOutOfSpread
+    shouldFlagOutOfSpread,
+    derivePrice
 } = require('./utils');
 
 class Grid {
@@ -145,7 +146,6 @@ class Grid {
         if (!manager) throw new Error('initializeGrid requires a manager instance');
         await manager._initializeAssets();
         
-        const { derivePrice } = require('./utils');
         const mpRaw = manager.config.startPrice;
         
         // Auto-derive price if requested
@@ -228,8 +228,7 @@ class Grid {
         manager.resetFunds();
         manager.funds.cacheFunds = { buy: 0, sell: 0 };
 
-        await Grid._clearAndPersistCacheFunds(manager, 'buy');
-        await Grid._clearAndPersistCacheFunds(manager, 'sell');
+        await manager.persistGrid();
         await Grid.initializeGrid(manager);
 
         const { reconcileStartupOrders } = require('./startup_reconcile');
@@ -418,13 +417,13 @@ class Grid {
         const buyCount = countOrdersByType(ORDER_TYPES.BUY, manager.orders);
         const sellCount = countOrdersByType(ORDER_TYPES.SELL, manager.orders);
 
-        if (!shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount)) return { ordersPlaced: 0, partialsMoved: 0 };
+        manager.outOfSpread = shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount);
+        if (!manager.outOfSpread) return { ordersPlaced: 0, partialsMoved: 0 };
 
         manager.logger.log(`Spread too wide (${currentSpread.toFixed(2)}%), correcting...`, 'warn');
 
         let marketPrice = manager.config.startPrice;
         if (BitShares) {
-            const { derivePrice } = require('./utils');
             const derived = await derivePrice(BitShares, manager.assets.assetA.symbol, manager.assets.assetB.symbol, 'pool');
             if (derived) marketPrice = derived;
         }
@@ -540,24 +539,6 @@ class Grid {
     static _getFundSnapshot(manager) {
         const snap = manager.getChainFundsSnapshot();
         return { ...snap, gridBuy: Number(manager.funds?.total?.grid?.buy || 0), gridSell: Number(manager.funds?.total?.grid?.sell || 0), cacheBuy: Number(manager.funds?.cacheFunds?.buy || 0), cacheSell: Number(manager.funds?.cacheFunds?.sell || 0) };
-    }
-
-    static _logSizingInput(manager, snap) {
-        manager.logger.log(`DEBUG Grid Sizing Input: buyFunds=${snap.allocatedBuy.toFixed(8)}, sellFunds=${snap.allocatedSell.toFixed(8)}`, 'info');
-    }
-
-    static async _clearAndPersistCacheFunds(manager, side) {
-        try {
-            manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
-            manager.funds.cacheFunds[side] = 0;
-            if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-        } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
-    }
-
-    static async _persistCacheFunds(manager, side) {
-        try {
-            if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-        } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
     }
 }
 

@@ -737,12 +737,13 @@ class OrderManager {
         return false;
     }
 
-    async _persistCacheFunds() {
-        return await this._persistWithRetry(() => this.accountOrders.updateCacheFunds(this.config.botKey, this.funds.cacheFunds), `cacheFunds`, { ...this.funds.cacheFunds });
-    }
-
-    async _persistBtsFeesOwed() {
-        return await this._persistWithRetry(() => this.accountOrders.updateBtsFeesOwed(this.config.botKey, this.funds.btsFeesOwed), `BTS fees owed`, this.funds.btsFeesOwed);
+    /**
+     * Unified persistence for grid state and fund metadata.
+     * Delegates to OrderUtils.persistGridSnapshot for centralized handling.
+     */
+    async persistGrid() {
+        const { persistGridSnapshot } = require('./utils');
+        return await persistGridSnapshot(this, this.accountOrders, this.config.botKey);
     }
 }
 

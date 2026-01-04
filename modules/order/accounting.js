@@ -480,8 +480,7 @@ class Accountant {
             // Update total owed (now fully settled)
             mgr.funds.btsFeesOwed = 0;
 
-            await mgr._persistCacheFunds();
-            await mgr._persistBtsFeesOwed();
+            await mgr.persistGrid();
         }
     }
 

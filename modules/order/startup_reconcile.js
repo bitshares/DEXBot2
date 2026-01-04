@@ -70,15 +70,11 @@ function _isGridEdgeFullyActive(manager, orderType, updateCount) {
 async function _updateChainOrderToGrid({ chainOrders, account, privateKey, manager, chainOrderId, gridOrder, dryRun }) {
     if (dryRun) return;
 
-    const size = Number(gridOrder.size) || 0;
-    const price = Number(gridOrder.price) || 0;
-    const minToReceive = (gridOrder.type === ORDER_TYPES.SELL)
-        ? (size * price)
-        : (price > 0 ? (size / price) : 0);
+    const { amountToSell, minToReceive } = OrderUtils.buildCreateOrderArgs(gridOrder, manager.assets.assetA, manager.assets.assetB);
 
     await chainOrders.updateOrder(account, privateKey, chainOrderId, {
         newPrice: gridOrder.price,
-        amountToSell: gridOrder.size,
+        amountToSell,
         minToReceive,
         orderType: gridOrder.type,
     });
@@ -162,20 +158,11 @@ async function _cancelLargestOrder({ chainOrders, account, privateKey, manager, 
 async function _createOrderFromGrid({ chainOrders, account, privateKey, manager, gridOrder, dryRun }) {
     if (dryRun) return;
 
-    const { assetA, assetB } = manager.assets;
-    let amountToSell, sellAssetId, minToReceive, receiveAssetId;
-
-    if (gridOrder.type === ORDER_TYPES.SELL) {
-        amountToSell = gridOrder.size;
-        sellAssetId = assetA.id;
-        minToReceive = gridOrder.size * gridOrder.price;
-        receiveAssetId = assetB.id;
-    } else {
-        amountToSell = gridOrder.size;
-        sellAssetId = assetB.id;
-        minToReceive = gridOrder.size / gridOrder.price;
-        receiveAssetId = assetA.id;
-    }
+    const { amountToSell, sellAssetId, minToReceive, receiveAssetId } = OrderUtils.buildCreateOrderArgs(
+        gridOrder,
+        manager.assets.assetA,
+        manager.assets.assetB
+    );
 
     const result = await chainOrders.createOrder(
         account,

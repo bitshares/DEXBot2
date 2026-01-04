@@ -12,7 +12,9 @@ const {
     allocateFundsByWeights,
     calculateOrderCreationFees,
     floatToBlockchainInt,
-    blockchainToFloat
+    blockchainToFloat,
+    calculateAvailableFundsValue,
+    getMinOrderSize
 } = require("./utils");
 
 class StrategyEngine {
@@ -447,7 +449,7 @@ class StrategyEngine {
             }
 
             mgr.recalculateFunds();
-            await mgr._persistCacheFunds();
+            await mgr.persistGrid();
 
             const result = await this.rebalance(filledOrders, excludeOrderIds);
 
@@ -708,7 +710,6 @@ class StrategyEngine {
             .filter(o => o.price > highestActiveBuy && o.price < lowestActiveSell)
             .sort((a, b) => targetType === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
 
-        const { calculateAvailableFundsValue, getMinOrderSize } = require("./utils");
         const availableFunds = calculateAvailableFundsValue(targetType === ORDER_TYPES.BUY ? "buy" : "sell", mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, mgr.config.activeOrders);
         if (availableFunds <= 0) return [];
 
@@ -736,7 +737,6 @@ class StrategyEngine {
             
             mgr._updateOrder(activatedOrder);
             activatedOrders.push(activatedOrder);
-            mgr.currentSpreadCount--;
             mgr.logger.log(`Prepared ${targetType} order ${i + 1}/${ordersToCreate} at ${order.price.toFixed(2)} (Amount: ${fundsPerOrder.toFixed(8)})`, "info");
         }
 
