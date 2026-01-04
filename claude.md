@@ -8,9 +8,8 @@ See `docs/WORKFLOW.md` for detailed workflow.
 ## Current Status
 | Branch | Commit | Status |
 |--------|--------|--------|
-| test | 20c5837 | Synced with origin/test |
+| test | 9145601 | Synced with origin/test |
 | dev | 739e6d1 | Synced with origin/dev |
-| main | 739e6d1 | Local (origin/main at b3611f0) |
 
 ## Key Modules
 - `dexbot.js` - Entry point
