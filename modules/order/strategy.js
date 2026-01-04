@@ -49,7 +49,18 @@ class StrategyEngine {
         const snap = mgr.getChainFundsSnapshot ? mgr.getChainFundsSnapshot() : {};
         const budgetBuy = Math.max(snap.chainTotalBuy || 0, snap.allocatedBuy || 0, (mgr.funds?.total?.grid?.buy || 0));
         const budgetSell = Math.max(snap.chainTotalSell || 0, snap.allocatedSell || 0, (mgr.funds?.total?.grid?.sell || 0));
-        
+
+        // Validate that we have meaningful budgets
+        if (budgetBuy === 0 && budgetSell === 0) {
+            mgr.logger.log(`[UNIFIED] WARNING: No budget available for rebalancing (buy: 0, sell: 0)`, 'warn');
+        }
+        if (budgetBuy === 0) {
+            mgr.logger.log(`[UNIFIED] INFO: Buy side has no budget`, 'debug');
+        }
+        if (budgetSell === 0) {
+            mgr.logger.log(`[UNIFIED] INFO: Sell side has no budget`, 'debug');
+        }
+
         // 4. Process Rails Independently
         const buyResult = await this.rebalanceSideLogic(ORDER_TYPES.BUY, buySlots, budgetBuy, excludeIds, filledSide === ORDER_TYPES.BUY, filledSide != null);
         const sellResult = await this.rebalanceSideLogic(ORDER_TYPES.SELL, sellSlots, budgetSell, excludeIds, filledSide === ORDER_TYPES.SELL, filledSide != null);
@@ -110,7 +121,8 @@ class StrategyEngine {
         if (activeIndices.length === 0) {
             // First run or recovery: find first non-spread slot
             const start = Math.max(0, slots.findIndex(s => s.type !== ORDER_TYPES.SPREAD));
-            nextIndices = Array.from({length: targetCount}, (_, i) => (start !== -1 ? start : 3) + i);
+            const fallbackStart = Math.max(0, Math.floor(slots.length / 2) - Math.floor(targetCount / 2));
+            nextIndices = Array.from({length: targetCount}, (_, i) => (start !== -1 ? start : fallbackStart) + i);
         } else {
             if (wasFilledSide) {
                 // Fill Side: Expand window to maintain targetCount
@@ -139,6 +151,18 @@ class StrategyEngine {
             const min = Math.min(...nextIndices);
             nextIndices = Array.from({length: targetCount}, (_, i) => min + i)
                 .filter(idx => idx >= 0 && idx < slots.length);
+        }
+
+        // Validate contiguity and bounds
+        if (nextIndices.length > 0) {
+            const max = Math.max(...nextIndices);
+            if (max >= slots.length) {
+                mgr.logger.log(`[UNIFIED] WARN: Window exceeds slot bounds (${max} >= ${slots.length}), trimming indices`, 'warn');
+                nextIndices = nextIndices.filter(idx => idx < slots.length);
+            }
+            if (nextIndices.length < targetCount && slots.length > 0) {
+                mgr.logger.log(`[UNIFIED] DEBUG: Window reduced from ${targetCount} to ${nextIndices.length} due to boundary constraints`, 'debug');
+            }
         }
 
         const targetIndexSet = new Set(nextIndices);
@@ -318,15 +342,11 @@ class StrategyEngine {
             }
         }
 
-        // 6. Role Assignment: Ensure Spread Buffer is correctly labeled
-        const minActiveIdx = Math.min(...nextIndices);
-        for (let i = 0; i < slots.length; i++) {
-            const slot = slots[i];
-            if (i < minActiveIdx) {
-                slot.type = ORDER_TYPES.SPREAD; // Inward from window is the Spread Zone
-            } else {
-                slot.type = type; // Window and Outward are the Asset Rail
-            }
+        // 6. Log Active Window Boundaries (without mutating slots)
+        if (nextIndices.length > 0) {
+            const minActiveIdx = Math.min(...nextIndices);
+            const maxActiveIdx = Math.max(...nextIndices);
+            mgr.logger.log(`[UNIFIED] Active window: indices [${minActiveIdx}-${maxActiveIdx}], spread zone before ${minActiveIdx}`, 'debug');
         }
 
         return { ordersToPlace, ordersToRotate, ordersToUpdate, ordersToCancel };
