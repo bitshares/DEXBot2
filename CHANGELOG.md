@@ -4,9 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.6.0] - 2026-01-03 - Order Management Modularization, Fund Accounting Fixes, Robustness Improvements & Sequential Order Placement
+## [0.6.0] - 2026-01-04 - Physical Rail Strategy, Merge/Split Consolidation & Engine Modularization
 
 ### Added
+- **Contiguous Physical Rail Strategy**: A major architectural evolution where the grid is treated as a solid "rail" of orders.
+  - Ensures contiguous order placement without gaps.
+  - Moves the entire rail physically with market price changes.
+  - Significantly improves stability during high-volatility events.
+- **MERGE vs SPLIT Consolidation**: Advanced decision logic for handling partial orders:
+  - **MERGE (Dust)**: Tiny partials (< 5%) are absorbed and refilled with new capital to restore their full ideal size.
+  - **SPLIT (Substantial)**: Larger partials are cleanly split, keeping the filled portion active on-chain while managing the remainder as a new virtual order.
 - **Complete Constants Centralization**: Consolidated 60+ hardcoded magic numbers into a single source of truth
   - **New Constants Sections**:
     - `PRECISION_DEFAULTS`: Asset precision fallback (5), price tolerance (0.1%)
@@ -19,204 +26,61 @@ All notable changes to this project will be documented in this file.
     - `MIN_SPREAD_ORDERS`: Minimum number of spread orders (2)
     - `SPREAD_WIDENING_MULTIPLIER`: Buffer multiplier for spread condition threshold (1.5)
   - **Impact**: Eliminates scattered magic numbers across 10 files, improves maintainability and consistency
-  - **Lock Refresh**: Now correctly uses `LOCK_TIMEOUT_MS / 2` instead of hardcoded 5000
 
 - **Enhanced Settings Configuration**:
   - Split `TIMING` configuration menu into two clear sections:
     - **Timing (Core)**: Fetch interval, sync delay, lock timeout
     - **Timing (Fill)**: Dedup window, cleanup interval, record retention
   - `EXPERT` section support for advanced settings (accessible via JSON-only, not menu)
-  - Maintained backward compatibility with existing settings
-  - **Note**: New constants (PRECISION_DEFAULTS, INCREMENT_BOUNDS, FEE_PARAMETERS, API_LIMITS, FILL_PROCESSING, MAINTENANCE) are intentionally code-only (not exposed in general.settings.json) as they are stable defaults unlikely to need user tuning. Users can still modify constants.js directly if needed.
 
-- **Specialized Engine Architecture**: Modularized OrderManager into three focused engines for better maintainability
+- **Specialized Engine Architecture**: Modularized OrderManager into three focused engines
   - **Accountant Engine** (`accounting.js`): Fund tracking, invariant verification, fee management
-    - Fund recalculation with dynamic tolerance
-    - Atomic check-and-deduct pattern for race condition prevention
-    - Fund invariant verification with precision-based and percentage-based tolerance
-    - BTS fee settlement with immediate chainFree deduction
-  - **Strategy Engine** (`strategy.js`): Grid rebalancing, consolidation, and rotation strategies
-    - Anchor & Refill partial order consolidation
-    - Ghost virtualization mechanism for safe multi-partial handling
-    - Multi-partial cleanup with merge vs split decisions
-    - Rotation sorting by geometric closeness to market
+  - **Strategy Engine** (`strategy.js`): Now implements the **Physical Rail** and **Unified Rebalancing** logic.
   - **Sync Engine** (`sync_engine.js`): Blockchain reconciliation and fill processing
-    - Two-pass reconciliation for grid-to-chain synchronization
-    - Per-order locking with lock refresh mechanism
-    - Fill history processing with delayed rotation support
-    - Asset initialization and balance fetching
 
-- **Optimized Grid Diagnostics**: Added `logGridDiagnostics` to `Logger` providing a color-coded visualization of the grid (ACTIVE, SPREAD, PARTIAL, and VIRTUAL boundaries) for precise troubleshooting.
-- **Unit Test Expansion**: Added comprehensive unit tests for `OrderManager`, `Grid`, and `SyncEngine` components to ensure core logic stability.
-
-- **Fund Invariant Verification System**: Automatic detection of fund accounting leaks
-  - Three critical invariants verified after every fund recalculation:
-    1. `chainTotal = chainFree + chainCommitted` (±tolerance)
-    2. `available <= chainFree` (with slack)
-    3. `gridCommitted <= chainTotal` (±tolerance)
-  - Configurable tolerance: precision-based slack (2 units) + percentage-based (0.1%)
-  - Significantly reduces spurious warnings while catching real leaks
-
-- **Order Index Validation Method**: Defensive debugging utility
-  - `validateIndices()` method in OrderManager for index corruption detection
-  - Verifies all orders are properly indexed in _ordersByState and _ordersByType
-  - Returns true if indices consistent, false with error logging if corruption detected
-  - Useful for debugging if order lookup produces unexpected results
-
-- **Metrics Tracking System**: Enhanced observability for production monitoring
-  - `getMetrics()` returns detailed operational statistics
-  - Tracks: fund recalc count, invariant violations, lock acquisitions, state transitions
-  - Calculates: uptime and fund recalc frequency per minute
+- **Optimized Grid Diagnostics**: Added `logGridDiagnostics` to `Logger` providing a color-coded visualization of the grid.
+- **Fund Invariant Verification System**: Automatic detection of fund accounting leaks with configurable tolerance.
+- **Order Index Validation Method**: Defensive `validateIndices()` method for debugging index corruption.
+- **Metrics Tracking System**: Enhanced observability with `getMetrics()` for production monitoring.
 
 ### Fixed
-- **Synchronized Rotation Accounting**: Fixed a critical synchronization issue where `accountTotals` (buyFree/sellFree and virtual) were not updated when on-chain orders were cancelled during rotation, ensuring accurate fund tracking.
-- **Atomic Spread Correction**: Simplified spread correction by moving fund deductions to the batch broadcast level, ensuring atomicity and preventing "phantom fund" leaks.
-- **Null Safety Hardening**: Improved null-safety in `DEXBot` batch operations and added strategic diagnostic hooks throughout the fill processing cycle.
-- **Syntax Fix in Logger**: Resolved a `SyntaxError` in `logFundsStatus` where the identifier `c` was declared multiple times.
-
-- **Critical: Fund Accounting Leaks in Spread Correction**
-  - Spread correction orders now atomically deduct from chainFree BEFORE on-chain placement
-  - Uses `tryDeductFromChainFree()` pattern: check funds exist, then deduct atomically
-  - Prevents "phantom funds" where orders were deducted from internal tracking but blockchain couldn't place them
-  - Initial state set to VIRTUAL (not ACTIVE), allowing proper sync engine transition
-
-- **Critical: Excess Order Creation After Spread Correction**
-  - Rebalancing now compares current active count against configured target before activating new orders
-  - Prevents creating extra orders when spread correction already placed an order
-  - Example: If target=5 and spread correction added 1, don't activate new orders until at target
-
-- **Critical: BTS Fee Settlement Timing**
-  - BTS fees now physically deducted from chainFree immediately upon settlement
-  - Previously only deducted from internal fee tracker (btsFeesOwed) until 4-hour blockchain refresh
-  - Prevents discrepancies between internal accounting and blockchain between refresh cycles
-  - Improves fund accuracy for BTS-denominated pairs
-
-- **Fund Formula Consistency**: Simplified available funds calculation
-  - Single source of truth: `calculateAvailableFundsValue()` in utils.js
-  - Formula: `available = max(0, chainFree - virtual - btsFeesOwed - btsFeesReservation)`
-  - cacheFunds intentionally kept separate (fill proceeds added back during rebalancing)
-  - Removed dead functions: getTotalGridFundsAvailable, getAvailableFundsForPlacement
-
-- **SPREAD Order State Validation** (manager.js)
-  - Added explicit validation to ensure SPREAD type orders remain in VIRTUAL state
-  - Prevents invalid state transitions to ACTIVE/PARTIAL for placeholder orders
-  - Catches corrupted order states early
-
-- **Noop Method Removal** (accounting.js, utils.js)
-  - Removed empty `adjustFunds()` method that was intentionally disabled
-  - Removed call site in applyChainSizeToGridOrder()
-  - Eliminated source of confusion around fund adjustment logic
-
-- **Null Safety Hardening** (accounting.js, grid.js)
-  - Added optional chaining (`?.`) to all manager.logger.log() calls
-  - Protected manager._metrics access to prevent crashes if metrics uninitialized
-  - Prevents runtime errors in edge cases where logger or metrics are null
-
-- **Lock Atomicity Improvement** (grid.js)
-  - Refactored spread correction to acquire order locks BEFORE fund deduction
-  - Ensures lock is released via finally block even if fund deduction or update fails
-  - Prevents fund leaks in edge cases where _updateOrder throws after deduction
+- **Rounding Safety**: Enhanced protection against floating-point rounding errors in grid calculations and spread counting.
+- **Market Fee Logic**: Restored and corrected market fee deduction logic in the Strategy Engine to ensure fees are paid from the correct asset side.
+- **Dust Partial Fallback**: Added fallback "SPLIT" behavior for dust partials when insufficient funds exist to "MERGE" them, preventing stalled orders.
+- **Synchronized Rotation Accounting**: Fixed a critical synchronization issue where `accountTotals` were not updated when on-chain orders were cancelled.
+- **Atomic Spread Correction**: Spread correction orders now atomically deduct from chainFree BEFORE on-chain placement.
+- **Critical: Fund Accounting Leaks in Spread Correction**: Prevented "phantom funds" by ensuring atomic deduction.
+- **Critical: BTS Fee Settlement Timing**: BTS fees now physically deducted from chainFree immediately upon settlement.
+- **Fund Formula Consistency**: Simplified available funds calculation to a single source of truth in `utils.js`.
+- **SPREAD Order State Validation**: Added explicit validation to ensure SPREAD orders remain in VIRTUAL state.
 
 ### Changed
-- **Spread Zone Boundaries**: Implemented strict price boundaries for rotations and activations. Orders now only target slots strictly between the highest active buy and lowest active sell (`highestActiveBuy < price < lowestActiveSell`), preventing geometric congestion.
-- **Rotation Selection Priority**: Refined selection logic to prioritize the lowest SPREAD slot for BUY rotations and the highest SPREAD for SELL rotations, optimizing market proximity.
-- **Log Verbosity Control**:
-  - Silenced `logFundsStatus` detailed output in standard `info` mode; now shows a single summary line unless `debug` level is enabled.
-  - Removed high-frequency `logGridDiagnostics` calls from the main fill processing loop to reduce console noise.
-- **VIRTUAL State Preservation**: Rotated orders now return to a `VIRTUAL` state with their original type and size preserved, maintaining grid integrity instead of forcing them to `SPREAD`.
-- **Functional Code Organization**: Refactored `grid.js` and `utils.js` into clearly defined functional sections for improved maintainability.
-
-- **Architecture**: Refactored OrderManager to delegate to specialized engines
-  - Manager now coordinates three engines instead of implementing all logic
-  - Delegation methods maintain backward compatibility
-  - Cleaner separation of concerns improves maintainability
-
-- **Fund Calculation Flow**:
-  - Walk active/partial orders (not all orders) for better performance
-  - Indices (_ordersByState, _ordersByType) used for faster iteration
-  - Dynamic precision-based slack for rounding tolerance
-
-- **State Transition Validation**: Enhanced state machine enforcement
-  - State transitions now logged and tracked for metrics
-  - Input validation prevents invalid order states from corrupting grid
-  - Proper handling of undefined intermediate states
-
-- **Batch Fund Recalculation**: Pause/resume mechanism for multi-order operations
-  - `pauseFundRecalc()` / `resumeFundRecalc()` with depth counter
-  - Supports safe nesting for complex operations
-  - Avoids redundant recalculations during batch updates
+- **Unified Rebalancing**: Replaced fragmented rebalancing logic with a unified "Physical Shift" model that explicitly manages grid surpluses and deficits.
+- **Spread Zone Boundaries**: Implemented strict price boundaries (`highestActiveBuy < price < lowestActiveSell`) for rotations.
+- **Rotation Selection Priority**: Refined selection logic to prioritize the lowest SPREAD slot for BUY rotations and highest for SELL.
+- **Log Verbosity Control**: Silenced high-frequency logs in standard `info` mode.
+- **Architecture**: Refactored OrderManager to delegate to specialized engines (Accountant, Strategy, Sync).
+- **Fund Calculation Flow**: Optimized to walk active/partial orders using indices for performance.
 
 ### Technical Details
-- **Ghost Virtualization**: Safely process multiple partials without blocking each other
-  - Temporarily mark partials as VIRTUAL during consolidation
-  - Enables accurate target slot calculations
-  - Automatic restoration with batch fund recalc to keep indices in sync
-  - Error safety: try/catch ensures partial rollback on failure
-
-- **Atomic Fund Operations**: Prevention of TOCTOU race conditions
-  - `tryDeductFromChainFree()`: Atomic check-and-deduct pattern
-  - Guards against race where multiple operations check same balance
-  - Returns false if insufficient funds, preventing negative balances
-
-- **Fund Invariant Tolerance**: Dual-mode tolerance for rounding noise
-  - **Precision Slack**: 2 × 10^(-precision) units (e.g., 0.00000002 for 8-decimal assets)
-  - **Percentage Tolerance**: 0.1% of chain total (default, configurable)
-  - Uses maximum of both tolerances for flexibility
+- **Physical Rail Logic**: The strategy now calculates a "rail" of ideal prices and maps existing orders to these physical slots, ensuring continuity.
+- **Ghost Virtualization**: Safely processes multiple partials by temporarily marking them as VIRTUAL during consolidation.
+- **Atomic Fund Operations**: Uses `tryDeductFromChainFree()` pattern to prevent TOCTOU race conditions.
+- **Fund Invariant Tolerance**: Dual-mode tolerance (Precision Slack + Percentage) for robust invariant checking.
 
 ### Performance Impact
-- **Faster Fund Calculation**: Uses indices instead of walking all orders (~3-10× faster for large grids)
-- **Batch Operations**: Pause/resume eliminates redundant recalculations
-- **Lock Refresh**: Prevents timeout during long reconciliation (~5 second refresh cycles)
-
-- **Refactored Spread Activation with Sequential Placement**: Simplified order creation logic for improved code clarity and natural fund handling
-  - Removed pre-calculation of order count based on available funds (maxByFunds scaling)
-  - Kept desiredCount and use sequential placement with per-iteration fund recalculation
-  - Each order sized based on current available funds: `fundsPerOrder = currentAvailable / remainingOrders`
-  - Naturally handles insufficient funds without artificial count scaling
-  - Geometric sizing emerges naturally from sequential capital depletion, no divergence issues
-  - **Benefits**: Cleaner code, true geometric distribution, natural fund exhaustion, no grid divergence
-  - **Technical**: Sequential loop replaces pre-calculation, per-iteration `calculateAvailableFundsValue()`, graceful break at minSize
+- **Faster Fund Calculation**: Uses indices instead of walking all orders.
+- **Batch Operations**: Pause/resume mechanism eliminates redundant recalculations.
+- **Lock Refresh**: Prevents timeout during long reconciliation cycles.
 
 ### Testing
-- All 14 core tests passing (100%)
-- Comprehensive coverage of multi-partial consolidation
-- Engine integration tests verify all three engines work together
-- Edge cases: ghost virtualization, dust handling, state transitions
+- All core tests passing.
+- New coverage for sliding window transitions and physical rail logic.
+- Comprehensive engine integration tests.
 
 ### Migration
-- **No Breaking Changes**: Fully backward compatible with existing bots
-- **Automatic Initialization**: Legacy bots automatically migrate to new architecture
-- **Configuration**: No new configuration required; uses existing constants
-
-### Files Modified
-**New Files**:
-- `modules/order/accounting.js` (465 lines): Accountant engine for fund tracking
-- `modules/order/strategy.js` (851 lines): StrategyEngine for rebalancing
-- `modules/order/sync_engine.js` (598 lines): SyncEngine for blockchain sync
-
-**Major Updates (Constants Centralization)**:
-- `modules/constants.js`: Added 8 new constant sections (PRECISION_DEFAULTS, INCREMENT_BOUNDS, FEE_PARAMETERS, API_LIMITS, FILL_PROCESSING, MAINTENANCE + 2 grid constants), added EXPERT section loader for advanced settings
-- `modules/order/sync_engine.js`: Replaced 4 precision fallback occurrences, changed lock refresh from hardcoded 5000 to LOCK_TIMEOUT_MS/2
-- `modules/order/strategy.js`: Replaced 8 precision fallback occurrences, replaced BTS fee parameters with constants
-- `modules/order/utils.js`: Replaced precision tolerance (0.001), API limits (batch sizes, orderbook depth, pool batches), increment bounds validation, fee parameters with centralized constants
-- `modules/order/accounting.js`: Replaced 2 precision fallback occurrences with PRECISION_DEFAULTS
-- `modules/order/grid.js`: Replaced MIN_SPREAD_ORDERS (2), SPREAD_WIDENING_MULTIPLIER (1.5), account totals timeout (10000), increment bounds validation with constants
-- `modules/chain_orders.js`: Replaced fill processing mode ('history') and operation type (4) with FILL_PROCESSING constants
-- `modules/dexbot_class.js`: Replaced cleanup probability (0.1) with MAINTENANCE.CLEANUP_PROBABILITY
-- `modules/order/manager.js`: Replaced 2 precision fallback occurrences and timeout cap (10000) with centralized constants
-- `modules/account_bots.js`: Split TIMING menu into "Timing (Core)" and "Timing (Fill)" options (from earlier in session)
-
-**Other Modified Files**:
-- `modules/order/manager.js`: Refactored to coordinate engines, added validateIndices(), added SPREAD order state validation
-- `modules/order/grid.js`: Updated spread correction to use atomic fund deduction, added order locking for atomicity, added null-safe logger calls
-
-### Code Statistics
-- Lines added: ~2,095 (accounting.js + strategy.js + sync_engine.js + constants centralization)
-- Lines removed: ~1,150 (manager.js consolidation, dead functions removed, scattered magic numbers consolidated)
-- Net change: +945 lines with improved clarity, separation of concerns, and maintainability
-- Cyclomatic complexity: Reduced by distributing logic across three engines and centralizing constants
-- **Constants Consolidation**: 60+ magic numbers centralized → 1 source of truth (modules/constants.js)
-- **Files Updated for Centralization**: 10 files (sync_engine, strategy, utils, accounting, grid, chain_orders, dexbot_class, manager, account_bots, constants)
+- **No Breaking Changes**: Fully backward compatible with existing bots.
+- **Automatic Initialization**: Legacy bots automatically migrate to new architecture.
 
 ---
 
