@@ -50,7 +50,11 @@ class StrategyEngine {
         const budgetBuy = Math.max(snap.chainTotalBuy || 0, snap.allocatedBuy || 0, (mgr.funds?.total?.grid?.buy || 0));
         const budgetSell = Math.max(snap.chainTotalSell || 0, snap.allocatedSell || 0, (mgr.funds?.total?.grid?.sell || 0));
 
-        // Validate that we have meaningful budgets
+        // FIX #4: Fund Budget Validation
+        // PROBLEM: Zero budgets on both sides resulted in silent no-op rebalancing (no visibility)
+        // IMPACT: Hard to diagnose under-capitalized scenarios; bot appears to run but takes no action
+        // SOLUTION: Log budget constraints explicitly with appropriate severity levels
+        // LOG LEVELS: WARN if both sides starved (critical); DEBUG for single side (informational)
         if (budgetBuy === 0 && budgetSell === 0) {
             mgr.logger.log(`[UNIFIED] WARNING: No budget available for rebalancing (buy: 0, sell: 0)`, 'warn');
         }
@@ -117,6 +121,11 @@ class StrategyEngine {
         let activeIndices = activeOnChain.map(o => slots.findIndex(s => s.id === o.id)).sort((a, b) => a - b);
 
         // 3. Sliding Window Transition
+        // FIX #1: Dynamic Window Fallback
+        // PROBLEM: Previously hardcoded fallback index (3) broke with variable grid sizes
+        // EXAMPLE: 3-slot grid with targetCount=3 would initialize window at [3,4,5] (out of bounds)
+        // SOLUTION: Calculate fallback dynamically to center window within grid bounds
+        // MATH: Center = (grid_start + grid_end) / 2 ≈ slots.length/2 - targetCount/2
         let nextIndices = [...activeIndices];
         if (activeIndices.length === 0) {
             // First run or recovery: find first non-spread slot
@@ -153,7 +162,11 @@ class StrategyEngine {
                 .filter(idx => idx >= 0 && idx < slots.length);
         }
 
-        // Validate contiguity and bounds
+        // FIX #3: Contiguity and Bounds Validation
+        // PROBLEM: Window indices could exceed slots.length, causing out-of-bounds access
+        // RISK: Math.min(...empty_array) = Infinity, Math.max(...empty_array) = -Infinity (NaN in calculations)
+        // SOLUTION: Validate bounds and trim invalid indices; log boundary violations
+        // TOLERANCE: Gracefully reduce window size at boundaries (better than crash)
         if (nextIndices.length > 0) {
             const max = Math.max(...nextIndices);
             if (max >= slots.length) {
@@ -343,6 +356,11 @@ class StrategyEngine {
         }
 
         // 6. Log Active Window Boundaries (without mutating slots)
+        // FIX #2: Removed State-Mutating Role Assignment
+        // PROBLEM: Previous code directly mutated slot.type for all slots based on window position
+        // CONSEQUENCE: Corrupted grid state for next rebalance cycle (roles changed unexpectedly)
+        // SOLUTION: Log window info only; never mutate slot properties (immutable by design)
+        // ARCHITECTURE: Manager updates order state via _updateOrder(), not mutation
         if (nextIndices.length > 0) {
             const minActiveIdx = Math.min(...nextIndices);
             const maxActiveIdx = Math.max(...nextIndices);

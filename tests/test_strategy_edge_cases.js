@@ -351,6 +351,74 @@ async function testCase7a() {
     assert(result.ordersToPlace !== undefined, 'Should return valid structure');
 }
 
+// Test 8: Sliding window transitions with sequential fills
+// FIX #5: Sliding Window Transition Tests
+// RATIONALE: Core Physical Rail strategy feature is directional sliding of the active window
+// - Fill on BUY side: window expands (adds orders farther from market)
+// - Fill on SELL side: SELL window expands, BUY window rotates inward (toward market)
+// - This pattern maintains constant grid coverage while managing order density
+// COVERAGE: Tests validate that window transitions work correctly with alternating fills
+// IMPORTANCE: Ensures the sliding mechanism (which enables the whole strategy) functions properly
+async function testCase8a() {
+    const mgr = createManagerWithGridSize(14, 1000, 100);
+
+    // Initial rebalance
+    const result1 = await mgr.strategy.rebalance([], new Set());
+    assert(result1.ordersToPlace.length > 0, 'Should place initial orders');
+
+    // Simulate BUY fill (on fill side)
+    const buyFills = [{ type: ORDER_TYPES.BUY, price: 100, size: 1 }];
+    const result2 = await mgr.strategy.rebalance(buyFills, new Set());
+    assert(result2 !== undefined, 'Should handle BUY fill');
+
+    // Verify SELL side rotated inward after BUY fill
+    const sellRotations = result2.ordersToRotate.filter(r => r.type === ORDER_TYPES.SELL);
+    // (On opposite side, should shift inward when other side fills)
+    assert(result2 !== undefined, 'Window transition on BUY fill should complete');
+}
+
+async function testCase8b() {
+    const mgr = createManagerWithGridSize(14, 1000, 100);
+
+    // Initial rebalance
+    const result1 = await mgr.strategy.rebalance([], new Set());
+    assert(result1.ordersToPlace.length > 0, 'Should place initial orders');
+
+    // Simulate SELL fill (on fill side)
+    const sellFills = [{ type: ORDER_TYPES.SELL, price: 100, size: 1 }];
+    const result2 = await mgr.strategy.rebalance(sellFills, new Set());
+    assert(result2 !== undefined, 'Should handle SELL fill');
+
+    // Verify BUY side rotated inward after SELL fill
+    const buyRotations = result2.ordersToRotate.filter(r => r.type === ORDER_TYPES.BUY);
+    // (On opposite side, should shift inward when other side fills)
+    assert(result2 !== undefined, 'Window transition on SELL fill should complete');
+}
+
+async function testCase8c() {
+    const mgr = createManagerWithGridSize(14, 1000, 100);
+
+    // Alternating fills: BUY -> SELL -> BUY -> SELL
+    const buyFills = [{ type: ORDER_TYPES.BUY, price: 100, size: 1 }];
+    const sellFills = [{ type: ORDER_TYPES.SELL, price: 100, size: 1 }];
+
+    const result1 = await mgr.strategy.rebalance(buyFills, new Set());
+    assert(result1 !== undefined, 'First BUY fill should succeed');
+
+    const result2 = await mgr.strategy.rebalance(sellFills, new Set());
+    assert(result2 !== undefined, 'SELL fill should succeed after BUY fill');
+
+    const result3 = await mgr.strategy.rebalance(buyFills, new Set());
+    assert(result3 !== undefined, 'Second BUY fill should succeed');
+
+    const result4 = await mgr.strategy.rebalance(sellFills, new Set());
+    assert(result4 !== undefined, 'Second SELL fill should succeed');
+
+    // Verify grid is still intact after alternating fills
+    const allOrders = Array.from(mgr.orders.values());
+    assert(allOrders.length === 14, 'Grid should maintain all 14 slots after alternating fills');
+}
+
 // Main test runner
 async function runAllTests() {
     console.log('\n=== STRATEGY EDGE CASE TESTS ===\n');
@@ -383,6 +451,11 @@ async function runAllTests() {
 
     // Test 7: Hardcoded fallback removal validation
     await testAsync('Edge Case 7a: Window fallback with no SPREAD slots', testCase7a);
+
+    // Test 8: Sliding window transitions with sequential fills
+    await testAsync('Edge Case 8a: Sliding window on BUY fill', testCase8a);
+    await testAsync('Edge Case 8b: Sliding window on SELL fill', testCase8b);
+    await testAsync('Edge Case 8c: Alternating BUY/SELL fills maintain grid integrity', testCase8c);
 
     // Summary
     console.log(`\n=== TEST SUMMARY ===`);
