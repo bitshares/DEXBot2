@@ -137,15 +137,21 @@ class OrderManager {
     async deductBtsFees(side) { return await this.accountant.deductBtsFees(side); }
 
     // --- Strategy Delegation ---
+    /** @deprecated Use processFilledOrders */
     async rebalanceOrders(fCounts, extra, excl) { return await this.strategy.rebalanceOrders(fCounts, extra, excl); }
+    /** @deprecated Use processFilledOrders */
     async _rebalanceSideAfterFill(fType, oType, fCount, extra, excl) { return await this.strategy.rebalanceSideAfterFill(fType, oType, fCount, extra, excl); }
     async processFilledOrders(orders, excl) { return await this.strategy.processFilledOrders(orders, excl); }
+    /** @deprecated */
     async activateClosestVirtualOrdersForPlacement(type, count, excl) { return await this.strategy.activateClosestVirtualOrdersForPlacement(type, count, excl); }
+    /** @deprecated */
     async prepareFurthestOrdersForRotation(type, count, excl, fCount, opt) { return await this.strategy.prepareFurthestOrdersForRotation(type, count, excl, fCount, opt); }
     completeOrderRotation(oldInfo) { return this.strategy.completeOrderRotation(oldInfo); }
+    /** @deprecated */
     _evaluatePartialOrderAnchor(p, move) { return this.strategy.evaluatePartialOrderAnchor(p, move); }
     preparePartialOrderMove(p, dist, excl) { return this.strategy.preparePartialOrderMove(p, dist, excl); }
     completePartialOrderMove(move) { return this.strategy.completePartialOrderMove(move); }
+    /** @deprecated */
     async activateSpreadOrders(type, count) { return await this.strategy.activateSpreadOrders(type, count); }
 
     // --- Sync Delegation ---

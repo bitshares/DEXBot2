@@ -468,6 +468,7 @@ class StrategyEngine {
         }
     }
 
+    /** @deprecated Use processFilledOrders */
     async rebalanceOrders(filledCounts, extraTarget = 0, excludeOrderIds = new Set()) {
         const dummyFills = [];
         if (filledCounts) {
@@ -487,30 +488,13 @@ class StrategyEngine {
         return await this.rebalance(dummyFills, excludeOrderIds);
     }
 
+    /** @deprecated Use processFilledOrders */
     async rebalanceSideAfterFill(filledType, oppositeType, filledCount, extraTarget = 0, excludeOrderIds = new Set()) {
         const dummyFills = [{ type: filledType, price: this.manager.config.startPrice }];
         return await this.rebalance(dummyFills, excludeOrderIds);
     }
 
-    evaluatePartialOrderAnchor(partialOrder, moveInfo) {
-        const idealSize = moveInfo.targetGridOrder.size;
-        const percentOfIdeal = partialOrder.size / idealSize;
-        const dustThreshold = (GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE / 100);
-        
-        const isDust = percentOfIdeal < dustThreshold;
-        
-        let residualCapital = 0;
-        if (partialOrder.size > idealSize) {
-            if (partialOrder.type === ORDER_TYPES.SELL) {
-                residualCapital = (partialOrder.size - idealSize) * moveInfo.newPrice;
-            } else {
-                residualCapital = (partialOrder.size - idealSize) / moveInfo.newPrice;
-            }
-        }
-        
-        return { isDust, percentOfIdeal, mergedDustSize: isDust ? partialOrder.size : 0, newSize: idealSize, residualCapital };
-    }
-
+    /** @deprecated */
     async activateClosestVirtualOrdersForPlacement(targetType, count, excludeOrderIds = new Set()) {
         const mgr = this.manager;
         if (count <= 0) return [];
@@ -547,6 +531,7 @@ class StrategyEngine {
         return activated;
     }
 
+    /** @deprecated */
     async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), filledCount = 0, options = {}) {
         const mgr = this.manager;
         if (count <= 0) return [];
@@ -618,6 +603,25 @@ class StrategyEngine {
             mgr.shadowOrderIds.set(order.orderId, Date.now());
         }
         return rotated;
+    }
+
+    evaluatePartialOrderAnchor(partialOrder, moveInfo) {
+        const idealSize = moveInfo.targetGridOrder.size;
+        const percentOfIdeal = partialOrder.size / idealSize;
+        const dustThreshold = (GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE / 100);
+        
+        const isDust = percentOfIdeal < dustThreshold;
+        
+        let residualCapital = 0;
+        if (partialOrder.size > idealSize) {
+            if (partialOrder.type === ORDER_TYPES.SELL) {
+                residualCapital = (partialOrder.size - idealSize) * moveInfo.newPrice;
+            } else {
+                residualCapital = (partialOrder.size - idealSize) / moveInfo.newPrice;
+            }
+        }
+        
+        return { isDust, percentOfIdeal, mergedDustSize: isDust ? partialOrder.size : 0, newSize: idealSize, residualCapital };
     }
 
     preparePartialOrderMove(partialOrder, gridSlotsToMove, reservedGridIds = new Set()) {
@@ -694,6 +698,7 @@ class StrategyEngine {
         }
     }
 
+    /** @deprecated */
     async activateSpreadOrders(targetType, count) {
         const mgr = this.manager;
         if (count <= 0) return [];
