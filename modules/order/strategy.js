@@ -353,22 +353,6 @@ class StrategyEngine {
                     }
                 }
                 continue;
-            } else if (Math.abs(slot.size - idealSize) > 1e-8) {
-                // ACTIVE ORDER RESIZING: Adjust active orders to match ideal grid distribution
-                // This maintains consistent fund allocation across the active window
-                const rotIdx = ordersToRotate.findIndex(r => r.oldOrder.orderId === slot.orderId);
-                if (rotIdx !== -1) {
-                    ordersToRotate[rotIdx].newSize = idealSize;
-                } else {
-                    ordersToUpdate.push({
-                        partialOrder: { ...slot },
-                        newSize: idealSize,
-                        isSplitUpdate: true,
-                        newState: ORDER_STATES.ACTIVE
-                    });
-                }
-                stateUpdates.push({ ...slot, size: idealSize });
-                mgr.logger.log(`[UNIFIED] Maintenance: Resizing active ${slot.id} to ${idealSize.toFixed(precision)}.`, "info");
             }
         }
 
