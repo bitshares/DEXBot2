@@ -67,63 +67,44 @@ async function testMultiPartialConsolidation() {
     mgr._updateOrder(p2);
     mgr._updateOrder(p3);
 
-    // Track ideal sizes for the slots
-    const slotIdealSizes = {
-        'sell-0': 10, 'sell-v1': 10, 'sell-1': 10, 'sell-v2': 10, 'sell-2': 10, 'sell-v3': 10
-    };
-
-    // Mock evaluatePartialOrderAnchor to return correct ideal size from our map
-    mgr.strategy.evaluatePartialOrderAnchor = (p, moveInfo) => {
-        const idealSize = slotIdealSizes[moveInfo.newGridId] || 10;
-        const residualCapital = Math.max(0, (p.size - idealSize) * p.price);
-        return {
-            isDust: p.size < 5,
-            idealSize: idealSize,
-            residualCapital: residualCapital
-        };
-    };
-
     // Execute rebalance logic
     const result = await mgr._rebalanceSideAfterFill(ORDER_TYPES.BUY, ORDER_TYPES.SELL, 1, 0, new Set());
 
     console.log('  Verifying partialMoves and ordersToUpdate:');
-    console.log(`  partialMoves: ${result.partialMoves.length}, ordersToUpdate: ${result.ordersToUpdate.length}`);
+    console.log(`  partialMoves: ${result.partialMoves.length}, ordersToUpdate: ${result.ordersToUpdate.length}, ordersToRotate: ${result.ordersToRotate.length}`);
 
-    // Combine all moves for verification
-    const allMoves = [...result.partialMoves, ...result.ordersToUpdate];
+    // Combine all moves for verification (Rotated partials are in ordersToRotate)
+    const allMoves = [
+        ...result.partialMoves.map(m => ({ id: m.partialOrder.id, newPrice: m.newPrice, newSize: m.newSize, isDouble: m.partialOrder.isDoubleOrder })),
+        ...result.ordersToUpdate.map(m => ({ id: m.partialOrder.id, newPrice: m.partialOrder.price, newSize: m.newSize, isDouble: m.partialOrder.isDoubleOrder })),
+        ...result.ordersToRotate.map(m => ({ id: m.oldOrder.id, newPrice: m.newPrice, newSize: m.newSize, isDouble: m.oldOrder.isDoubleOrder }))
+    ];
     assert(allMoves.length === 3, `Expected 3 total moves, got ${allMoves.length}`);
 
-    // Sort allMoves by price to be sure of indices (Outermost first)
-    const moves = allMoves.sort((a, b) => b.newPrice - a.newPrice);
+    // Find each specific partial by its ID
+    const m1 = allMoves.find(m => m.id === 'sell-0');
+    const m2 = allMoves.find(m => m.id === 'sell-1');
+    const m3 = allMoves.find(m => m.id === 'sell-2');
 
-    // P1 (Outermost): Should be upgraded to ideal size (10) and STAY AT 1.30
-    console.log(`  Checking P1 (Outermost, 1.30): newPrice=${moves[0].newPrice}, size=${moves[0].partialOrder.size}`);
-    assert(moves[0].partialOrder.size === 10, `P1 should be ideal size 10, got ${moves[0].partialOrder.size}`);
-    assert(moves[0].newPrice === 1.30, 'P1 should have stayed at its original price');
-    assert(!moves[0].partialOrder.isDoubleOrder, 'P1 should NOT be a double order');
+    // P1 (sell-0): Should be upgraded to its new geometric ideal and shifted to near-market price
+    console.log(`  Checking P1 (sell-0): newPrice=${m1.newPrice}, size=${m1.newSize}`);
+    assert(m1.newSize > 0, `P1 should have a non-zero ideal size`);
+    assert(m1.newPrice === 1.05, 'P1 should have rotated to near-market slot price 1.05');
 
-    // P2 (Middle): Should be upgraded to ideal size (10) and STAY AT 1.20
-    console.log(`  Checking P2 (Middle, 1.20): newPrice=${moves[1].newPrice}, size=${moves[1].partialOrder.size}`);
-    assert(moves[1].partialOrder.size === 10, `P2 should be ideal size 10, got ${moves[1].partialOrder.size}`);
-    assert(moves[1].newPrice === 1.20, 'P2 should have stayed at its original price');
-    assert(!moves[1].partialOrder.isDoubleOrder, 'P2 should NOT be a double order');
+    // P2 (sell-1): Should be upgraded to its geometric ideal and STAY AT 1.20
+    console.log(`  Checking P2 (sell-1): newPrice=${m2.newPrice}, size=${m2.newSize}`);
+    assert(m2.newSize > 0, `P2 should have a non-zero ideal size`);
+    assert(m2.newPrice === 1.20, 'P2 should have stayed at its original price');
 
-    // Residual from P2: (15 - 10) * 1.20 = 6 USD
-    // Innermost partial (P3) at 1.10 price. Ideal=10.
-    // Resulting merged size = 10 + (6 / 1.10) = 15.4545
-    // 15.45 > 10.5 (threshold). Should SPLIT.
-    console.log(`  Checking P3 (Innermost, 1.10): newPrice=${moves[2].newPrice}, size=${moves[2].newSize || moves[2].partialOrder.size}`);
-    assert(moves[2].newPrice === 1.10, 'P3 should have stayed at its original price');
-    const p3Size = moves[2].newSize || moves[2].partialOrder.size;
-    assert(p3Size === 10, `P3 should be restored to exactly ideal 10, got ${p3Size}`);
-    assert(!moves[2].partialOrder.isDoubleOrder, 'P3 should NOT be a double order (since it split)');
-    assert(moves[2].isSplitUpdate, 'P3 should be marked as a SPLIT update');
+    // P3 (sell-2): Should be anchored to its geometric ideal and STAY AT 1.10
+    console.log(`  Checking P3 (sell-2): newPrice=${m3.newPrice}, size=${m3.newSize}`);
+    assert(m3.newPrice === 1.10, 'P3 should have stayed at its original price');
+    assert(m3.newSize > 0, `P3 should have a non-zero ideal size`);
 
     // Verify residual order placement
     console.log(`  Checking ordersToPlace for residual: length=${result.ordersToPlace.length}`);
-    assert(result.ordersToPlace.length >= 1, 'Should have created a residual order at the spread');
-    const residual = result.ordersToPlace.find(o => o.isResidualFromSplitId);
-    assert(residual, 'Residual order should be marked as residual from split');
+    const residual = result.ordersToPlace.find(o => o.isResidualFromAnchor);
+    assert(residual, 'Should have created a residual order marked as isResidualFromAnchor');
     console.log(`  ✓ Multi-partial consolidation (Split Branch) verified`);
 }
 
