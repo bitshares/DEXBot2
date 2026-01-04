@@ -10,7 +10,9 @@ const {
     getPrecisionForSide,
     getAssetFees,
     allocateFundsByWeights,
-    calculateOrderCreationFees
+    calculateOrderCreationFees,
+    floatToBlockchainInt,
+    blockchainToFloat
 } = require("./utils");
 
 class StrategyEngine {
@@ -74,6 +76,7 @@ class StrategyEngine {
         
         return result;
     }
+
     /**
      * Contiguous Rail Maintenance Logic for a specific side.
      * Manages a sliding window of ACTIVE orders over the fixed physical grid.
@@ -93,13 +96,11 @@ class StrategyEngine {
 
         const stateUpdates = [];
 
-        // 1. Determine targetCount and geometric ideal sizing
         const targetCount = (mgr.config.activeOrders && Number.isFinite(mgr.config.activeOrders[side])) ? Math.max(1, mgr.config.activeOrders[side]) : 1;
         let btsFeesReservation = 0;
         if ((mgr.config.assetA === "BTS" && side === "sell") || (mgr.config.assetB === "BTS" && side === "buy")) {
             btsFeesReservation = calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetCount, FEE_PARAMETERS.BTS_RESERVATION_MULTIPLIER);
         }
-        // Only deduct fees if budget is substantial (> 10x fees); otherwise preserve for tests
         const availableBudget = (sideBudget > btsFeesReservation * 10) 
             ? Math.max(0, sideBudget - btsFeesReservation)
             : sideBudget;
@@ -108,22 +109,16 @@ class StrategyEngine {
         const weight = mgr.config.weightDistribution[side];
         const idealSizes = allocateFundsByWeights(availableBudget, slots.length, weight, mgr.config.incrementPercent / 100, false, 0, precision);
 
-        // 2. Identify current physical active indices (Inward-First sorting)
-        // Indices are 0 (closest to market) to N (furthest from market)
         let activeOnChain = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && !excludeIds.has(s.id));
         let activeIndices = activeOnChain.map(o => slots.findIndex(s => s.id === o.id)).sort((a, b) => a - b);
 
-        // 3. Sliding Window Transition
         let nextIndices = [...activeIndices];
         if (activeIndices.length === 0) {
-            // First run or recovery: find first non-spread slot
             const start = Math.max(0, slots.findIndex(s => s.type !== ORDER_TYPES.SPREAD));
             const fallbackStart = Math.max(0, Math.floor(slots.length / 2) - Math.floor(targetCount / 2));
             nextIndices = Array.from({length: targetCount}, (_, i) => (start !== -1 ? start : fallbackStart) + i);
         } else {
             if (wasFilledSide) {
-                // Fill Side: Expand window to maintain targetCount
-                // Try expanding outward first, then inward if at boundary
                 if (nextIndices.length < targetCount && nextIndices.length > 0) {
                     const maxIdx = Math.max(...nextIndices);
                     const minIdx = Math.min(...nextIndices);
@@ -134,8 +129,6 @@ class StrategyEngine {
                     }
                 }
             } else if (anyFillOccurred) {
-                // Opposite Side: Shift Inward (rotation)
-                // e.g. [3, 4, 5] -> shift in -> [2, 3, 4]
                 if (nextIndices.length > 0) {
                     const innerEdge = Math.min(...nextIndices);
                     if (innerEdge > 0) {
@@ -145,14 +138,12 @@ class StrategyEngine {
             }
         }
 
-        // Force exactly targetCount and contiguity within rail bounds
         if (nextIndices.length > 0) {
             const min = Math.min(...nextIndices);
             nextIndices = Array.from({length: targetCount}, (_, i) => min + i)
                 .filter(idx => idx >= 0 && idx < slots.length);
         }
 
-        // HARDENING Math.min/max: Bounds Validation
         if (nextIndices.length > 0) {
             const max = Math.max(...nextIndices);
             if (max >= slots.length) {
@@ -164,19 +155,29 @@ class StrategyEngine {
             }
         }
 
+        // ROLE ASSIGNMENT: Ensure spread zone roles are assigned transactionally
+        if (nextIndices.length > 0) {
+            const minActiveIdx = Math.min(...nextIndices);
+            for (let i = 0; i < slots.length; i++) {
+                const slot = slots[i];
+                const expectedType = (i < minActiveIdx) ? ORDER_TYPES.SPREAD : type;
+                if (slot.type !== expectedType) {
+                    stateUpdates.push({ ...slot, type: expectedType });
+                }
+            }
+        }
+
         const targetIndexSet = new Set(nextIndices);
         const ordersToPlace = [];
         const ordersToRotate = [];
         const ordersToUpdate = [];
         const ordersToCancel = [];
 
-        // 4. Resolve Shortages and Surpluses
         const shortages = nextIndices.filter(idx => slots[idx] && (!slots[idx].orderId || excludeIds.has(slots[idx].id)));
         const surpluses = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && !targetIndexSet.has(slots.findIndex(o => o.id === s.id)));
 
-        // Pair Rotations: Furthest Surplus to Nearest Shortage
-        surpluses.sort((a, b) => b.price - a.price); // FURTHEST
-        shortages.sort((a, b) => a - b); // NEAREST (indices are inward-first)
+        surpluses.sort((a, b) => b.price - a.price);
+        shortages.sort((a, b) => a - b);
 
         const pairCount = Math.min(surpluses.length, shortages.length);
         for (let i = 0; i < pairCount; i++) {
@@ -187,7 +188,7 @@ class StrategyEngine {
 
             ordersToRotate.push({
                 oldOrder: { ...surplus },
-                newPrice: shortageSlot.price, // FIXED Grid Price
+                newPrice: shortageSlot.price,
                 newSize: idealSize,
                 newGridId: shortageSlot.id,
                 type: type
@@ -197,7 +198,6 @@ class StrategyEngine {
             mgr.logger.log(`[UNIFIED] Rotation: Shifting furthest ${type} ${surplus.id} -> contiguous slot ${shortageSlot.id}.`, "info");
         }
 
-        // New Placements (remaining shortages)
         for (let i = pairCount; i < shortages.length; i++) {
             const idx = shortages[i];
             const slot = slots[idx];
@@ -207,7 +207,6 @@ class StrategyEngine {
             mgr.logger.log(`[UNIFIED] Expansion: Placing ${type} at fixed edge slot ${slot.id}.`, "info");
         }
 
-        // Surplus Cancellations (remaining surpluses)
         for (let i = pairCount; i < surpluses.length; i++) {
             const surplus = surpluses[i];
             ordersToCancel.push({ ...surplus });
@@ -215,7 +214,6 @@ class StrategyEngine {
             mgr.logger.log(`[UNIFIED] Surplus: Cancelling out-of-window ${type} order ${surplus.id}.`, "info");
         }
 
-        // 5. In-Place Maintenance (Resize & Merge/Split Consolidation)
         const allOnChain = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL));
         
         for (const slot of allOnChain) {
@@ -336,12 +334,7 @@ class StrategyEngine {
 
         return { ordersToPlace, ordersToRotate, ordersToUpdate, ordersToCancel, stateUpdates };
     }
-    /**
-     * Complete an order rotation after blockchain confirmation.
-     * Releases committed capital from the old slot and transitions it to VIRTUAL.
-     *
-     * @param {Object} oldOrderInfo - Metadata of the rotated-away order
-     */
+
     completeOrderRotation(oldOrderInfo) {
         const mgr = this.manager;
         const oldGridOrder = mgr.orders.get(oldOrderInfo.id);
@@ -356,14 +349,6 @@ class StrategyEngine {
         }
     }
 
-    /**
-     * Process filled orders and trigger rebalance.
-     * Standardizes capital proceeds accounting before executing unified rebalancing.
-     *
-     * @param {Array} filledOrders - Orders detected as filled on-chain
-     * @param {Set} excludeOrderIds - IDs to ignore during processing
-     * @returns {Object} Batch result containing planned operations
-     */
     async processFilledOrders(filledOrders, excludeOrderIds = new Set()) {
         const mgr = this.manager;
         if (!mgr || !Array.isArray(filledOrders)) return;
@@ -381,15 +366,33 @@ class StrategyEngine {
                 const isPartial = filledOrder.isPartial === true;
                 if (!isPartial || filledOrder.isDelayedRotationTrigger) {
                     fillsToSettle++;
-                    // Release capital immediately
                     mgr._updateOrder({ ...filledOrder, state: ORDER_STATES.VIRTUAL, orderId: null });
                 }
 
-                // Balance Accounting
+                // Balance Accounting with Market Fee deduction
+                let rawProceeds = 0;
+                let assetForFee = null;
                 if (filledOrder.type === ORDER_TYPES.SELL) {
-                    mgr.funds.cacheFunds.buy = (mgr.funds.cacheFunds.buy || 0) + (filledOrder.size * filledOrder.price);
+                    rawProceeds = filledOrder.size * filledOrder.price;
+                    assetForFee = mgr.config.assetB;
                 } else {
-                    mgr.funds.cacheFunds.sell = (mgr.funds.cacheFunds.sell || 0) + (filledOrder.size / filledOrder.price);
+                    rawProceeds = filledOrder.size / filledOrder.price;
+                    assetForFee = mgr.config.assetA;
+                }
+
+                let netProceeds = rawProceeds;
+                if (assetForFee !== "BTS") {
+                    try {
+                        netProceeds = getAssetFees(assetForFee, rawProceeds);
+                    } catch (e) {
+                        mgr.logger.log(`Warning: Could not calculate market fees for ${assetForFee}: ${e.message}`, "warn");
+                    }
+                }
+
+                if (filledOrder.type === ORDER_TYPES.SELL) {
+                    mgr.funds.cacheFunds.buy = (mgr.funds.cacheFunds.buy || 0) + netProceeds;
+                } else {
+                    mgr.funds.cacheFunds.sell = (mgr.funds.cacheFunds.sell || 0) + netProceeds;
                 }
             }
 
@@ -419,23 +422,13 @@ class StrategyEngine {
         }
     }
 
-    /**
-     * Compatibility method for rebalanceOrders.
-     * Delegates to the unified rebalance flow with simulated fill state transitions.
-     *
-     * @param {Object} filledCounts - Counts of fills per side
-     * @param {number} extraTarget - Bonus orders to place
-     * @param {Set} excludeOrderIds - IDs to skip
-     * @returns {Object} Rebalance result
-     */
     async rebalanceOrders(filledCounts, extraTarget = 0, excludeOrderIds = new Set()) {
         const dummyFills = [];
         if (filledCounts) {
             for (const [type, count] of Object.entries(filledCounts)) {
-                // Simulate fill state transition for the specified number of orders
                 const activeOnSide = Array.from(this.manager.orders.values())
                     .filter(o => o.type === type && (o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL))
-                    .sort((a, b) => type === ORDER_TYPES.BUY ? b.price - a.price : a.price - b.price); // Closest to market
+                    .sort((a, b) => type === ORDER_TYPES.BUY ? b.price - a.price : a.price - b.price);
                 
                 for (let i = 0; i < count; i++) {
                     dummyFills.push({ type, price: this.manager.config.startPrice });
@@ -448,27 +441,11 @@ class StrategyEngine {
         return await this.rebalance(dummyFills, excludeOrderIds);
     }
 
-    /**
-     * Compatibility method for rebalanceSideAfterFill.
-     * Delegates to the unified rebalance flow with fill side context.
-     *
-     * @param {string} filledType - Side that filled
-     * @param {string} oppositeType - Rail to maintain
-     * @param {number} filledCount - Number of fills
-     */
     async rebalanceSideAfterFill(filledType, oppositeType, filledCount, extraTarget = 0, excludeOrderIds = new Set()) {
-        // Create a dummy fill object to provide context to the unified rebalance
         const dummyFills = [{ type: filledType, price: this.manager.config.startPrice }];
         return await this.rebalance(dummyFills, excludeOrderIds);
     }
 
-    /**
-     * Evaluate whether a partial order should be anchored or merged based on its size relative to ideal.
-     *
-     * @param {Object} partialOrder - The partial order to evaluate
-     * @param {Object} moveInfo - Context containing targetGridOrder and newPrice
-     * @returns {Object} Decision containing isDust and target sizes
-     */
     evaluatePartialOrderAnchor(partialOrder, moveInfo) {
         const idealSize = moveInfo.targetGridOrder.size;
         const percentOfIdeal = partialOrder.size / idealSize;
@@ -476,7 +453,6 @@ class StrategyEngine {
         
         const isDust = percentOfIdeal < dustThreshold;
         
-        // Calculate residual capital if the partial is larger than the ideal size
         let residualCapital = 0;
         if (partialOrder.size > idealSize) {
             if (partialOrder.type === ORDER_TYPES.SELL) {
@@ -486,22 +462,9 @@ class StrategyEngine {
             }
         }
         
-        return {
-            isDust,
-            percentOfIdeal,
-            mergedDustSize: isDust ? partialOrder.size : 0,
-            newSize: idealSize,
-            residualCapital
-        };
+        return { isDust, percentOfIdeal, mergedDustSize: isDust ? partialOrder.size : 0, newSize: idealSize, residualCapital };
     }
 
-    /**
-     * Activate the closest VIRTUAL orders for on-chain placement.
-     * Used for initial grid placement or filling gaps outside of standard rebalancing.
-     *
-     * @param {string} targetType - Side to activate
-     * @param {number} count - Target activations
-     */
     async activateClosestVirtualOrdersForPlacement(targetType, count, excludeOrderIds = new Set()) {
         const mgr = this.manager;
         if (count <= 0) return [];
@@ -538,13 +501,6 @@ class StrategyEngine {
         return activated;
     }
 
-    /**
-     * Prepare the furthest ACTIVE orders for rotation to new prices.
-     * Consumes cache funds to create virtual orders in spread zone.
-     *
-     * @param {string} targetType - Side to rotate
-     * @param {number} count - Number of rotations
-     */
     async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), filledCount = 0, options = {}) {
         const mgr = this.manager;
         if (count <= 0) return [];
@@ -618,13 +574,6 @@ class StrategyEngine {
         return rotated;
     }
 
-    /**
-     * Prepare a partial order to move toward market/spread.
-     * Calculates new price and minToReceive for the target grid slot.
-     *
-     * @param {Object} partialOrder - The order to move
-     * @param {number} gridSlotsToMove - Physical distance to shift
-     */
     preparePartialOrderMove(partialOrder, gridSlotsToMove, reservedGridIds = new Set()) {
         const mgr = this.manager;
         if (!partialOrder || gridSlotsToMove < 0) return null;
@@ -650,16 +599,16 @@ class StrategyEngine {
 
         const newPrice = targetGridOrder.price;
         let newMinToReceive;
+        
+        // STANDARD QUANTIZATION for minToReceive
         if (partialOrder.type === ORDER_TYPES.SELL) {
-            newMinToReceive = partialOrder.size * newPrice;
-            const precision = mgr.assets?.assetB?.precision || 8;
-            const scale = Math.pow(10, precision);
-            newMinToReceive = Math.round(newMinToReceive * scale) / scale;
+            const rawMin = partialOrder.size * newPrice;
+            const prec = mgr.assets?.assetB?.precision || 8;
+            newMinToReceive = blockchainToFloat(floatToBlockchainInt(rawMin, prec), prec);
         } else {
-            newMinToReceive = partialOrder.size / newPrice;
-            const precision = mgr.assets?.assetA?.precision || 8;
-            const scale = Math.pow(10, precision);
-            newMinToReceive = Math.round(newMinToReceive * scale) / scale;
+            const rawMin = partialOrder.size / newPrice;
+            const prec = mgr.assets?.assetA?.precision || 8;
+            newMinToReceive = blockchainToFloat(floatToBlockchainInt(rawMin, prec), prec);
         }
 
         return {
@@ -670,10 +619,6 @@ class StrategyEngine {
         };
     }
 
-    /**
-     * Complete the partial order move after blockchain confirmation.
-     * Transfers the orderId and state to the new physical slot ID.
-     */
     completePartialOrderMove(moveInfo) {
         const mgr = this.manager;
         const { partialOrder, newGridId, newPrice } = moveInfo;
@@ -687,7 +632,6 @@ class StrategyEngine {
 
         const targetGridOrder = mgr.orders.get(newGridId);
         if (targetGridOrder) {
-            const { floatToBlockchainInt } = require("./utils");
             const precision = (partialOrder.type === ORDER_TYPES.SELL)
                 ? mgr.assets?.assetA?.precision || PRECISION_DEFAULTS.ASSET_FALLBACK
                 : mgr.assets?.assetB?.precision || PRECISION_DEFAULTS.ASSET_FALLBACK;
@@ -704,13 +648,6 @@ class StrategyEngine {
         }
     }
 
-    /**
-     * Activate spread placeholder orders as buy/sell orders.
-     * Consumes unallocated available funds to fill the gap near spread.
-     *
-     * @param {string} targetType - Side to activate
-     * @param {number} count - Target number of orders to place
-     */
     async activateSpreadOrders(targetType, count) {
         const mgr = this.manager;
         if (count <= 0) return [];
