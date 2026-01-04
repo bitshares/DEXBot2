@@ -229,8 +229,8 @@ function calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB
     let btsFeesReservation = 0;
     if (btsSide === side && activeOrders) {
         try {
-            const targetBuy = Math.max(0, toFiniteNumber(activeOrders.buy, 1));
-            const targetSell = Math.max(0, toFiniteNumber(activeOrders.sell, 1));
+            const targetBuy = Math.max(0, toFiniteNumber(activeOrders?.buy, 1));
+            const targetSell = Math.max(0, toFiniteNumber(activeOrders?.sell, 1));
             const totalTargetOrders = targetBuy + targetSell;
 
             if (totalTargetOrders > 0) {
@@ -299,11 +299,17 @@ function resolveConfigValue(value, total) {
 // Handle blockchain integer/float conversions and precision calculations
 
 function blockchainToFloat(intValue, precision) {
-    return toFiniteNumber(intValue) / Math.pow(10, toFiniteNumber(precision));
+    if (!isValidNumber(precision)) {
+        throw new Error(`Invalid precision for blockchainToFloat: ${precision}`);
+    }
+    return toFiniteNumber(intValue) / Math.pow(10, Number(precision));
 }
 
 function floatToBlockchainInt(floatValue, precision) {
-    const p = toFiniteNumber(precision);
+    if (!isValidNumber(precision)) {
+        throw new Error(`Invalid precision for floatToBlockchainInt: ${precision}`);
+    }
+    const p = Number(precision);
     const scaled = Math.round(toFiniteNumber(floatValue) * Math.pow(10, p));
 
     // 64-bit signed integer limits: -(2^63) to (2^63 - 1)
@@ -328,8 +334,12 @@ function calculatePriceTolerance(gridPrice, orderSize, orderType, assets = null)
         return gridPrice ? gridPrice * PRECISION_DEFAULTS.PRICE_TOLERANCE : 0;
     }
 
-    const precisionA = assets.assetA?.precision ?? 8;
-    const precisionB = assets.assetB?.precision ?? 8;
+    const precisionA = assets.assetA?.precision;
+    const precisionB = assets.assetB?.precision;
+
+    if (!isValidNumber(precisionA) || !isValidNumber(precisionB)) {
+        throw new Error(`Missing or invalid asset precision in calculatePriceTolerance: A=${precisionA}, B=${precisionB}`);
+    }
 
     let orderSizeA, orderSizeB;
     if (orderType === 'sell' || orderType === 'SELL' || orderType === 'Sell') {
@@ -1052,18 +1062,12 @@ async function _fetchBlockchainFees(BitShares) {
  */
 async function _fetchAssetMarketFees(assetSymbol, BitShares) {
     try {
-        const assetData = await BitShares.db.lookupAssetSymbols([assetSymbol]);
-        if (!assetData || !assetData[0]) {
-            throw new Error(`Asset ${assetSymbol} not found`);
+        const fullAsset = await lookupAsset(BitShares, assetSymbol);
+        if (!fullAsset || !fullAsset.id) {
+            throw new Error(`Asset ${assetSymbol} not found or could not fetch full data`);
         }
 
-        const assetId = assetData[0].id;
-        const fullAssets = await BitShares.db.getAssets([assetId]);
-        if (!fullAssets || !fullAssets[0]) {
-            throw new Error(`Could not fetch full data for ${assetSymbol}`);
-        }
-
-        const fullAsset = fullAssets[0];
+        const assetId = fullAsset.id;
         const options = fullAsset.options || {};
 
         const marketFeeBasisPoints = options.market_fee_percent || 0;
