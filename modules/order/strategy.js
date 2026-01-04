@@ -1,8 +1,8 @@
 /**
  * modules/order/strategy.js
  *
- * Specialized engine for grid rebalancing and rotation strategies.
- * Implements Unified Rebalancing with explicit Physical Shift and Surplus Management.
+ * Physical Rail Maintenance Strategy (Contiguous Window Version)
+ * Maintains side-pinned contiguous physical shifts with fixed grid integrity.
  */
 
 const { ORDER_TYPES, ORDER_STATES, GRID_LIMITS, FEE_PARAMETERS, PRECISION_DEFAULTS } = require('../constants');
@@ -20,21 +20,19 @@ class StrategyEngine {
 
     /**
      * Unified rebalancing entry point.
-     * FORMULA: Side Budget = chainTotal (Allocated Total)
+     * Maintains contiguous physical rails for BUY and SELL sides.
      */
     async rebalance(fills = [], excludeIds = new Set()) {
         const mgr = this.manager;
-        mgr.logger.log(`[UNIFIED] Starting rebalance sequence.`, 'info');
+        mgr.logger.log(`[UNIFIED] Starting contiguous physical rail rebalance.`, 'info');
         
         const allOrders = Array.from(mgr.orders.values());
         
-        // 1. Partition Slots by fixed ID prefixes (Physical Side Isolation)
-        // BUY: Inward (Market-facing) first = Highest Price first
-        const buySlots = allOrders.filter(o => o.id && String(o.id).startsWith('buy-')).sort((a, b) => b.price - a.price);
-        // SELL: Inward (Market-facing) first = Lowest Price first
-        const sellSlots = allOrders.filter(o => o.id && String(o.id).startsWith('sell-')).sort((a, b) => a.price - b.price);
-        // SPREAD: Intermediate placeholders (Sorted Highest Price First)
-        const spreadSlots = allOrders.filter(o => o.id && (String(o.id).startsWith('spread-') || o.type === ORDER_TYPES.SPREAD)).sort((a, b) => b.price - a.price);
+        // 1. Partition Slots by Rail (Fixed ID Isolation)
+        // BUY RAIL: Sorted Inward First (Highest Price @ Index 0)
+        const buySlots = allOrders.filter(o => o.id.startsWith('buy-')).sort((a, b) => b.price - a.price);
+        // SELL RAIL: Sorted Inward First (Lowest Price @ Index 0)
+        const sellSlots = allOrders.filter(o => o.id.startsWith('sell-')).sort((a, b) => a.price - b.price);
 
         // 2. Identify Fill Context
         const filledSide = (fills.length > 0) ? fills[0].type : null;
@@ -42,9 +40,9 @@ class StrategyEngine {
         // 3. Identify Side Budgets
         const snap = mgr.getChainFundsSnapshot ? mgr.getChainFundsSnapshot() : {};
         
-        // 4. Process Sides
-        const buyResult = await this.rebalanceSideLogic(ORDER_TYPES.BUY, buySlots, spreadSlots, snap.chainTotalBuy, excludeIds, filledSide === ORDER_TYPES.BUY, filledSide != null);
-        const sellResult = await this.rebalanceSideLogic(ORDER_TYPES.SELL, sellSlots, spreadSlots, snap.chainTotalSell, excludeIds, filledSide === ORDER_TYPES.SELL, filledSide != null);
+        // 4. Process Rails Independently
+        const buyResult = await this.rebalanceSideLogic(ORDER_TYPES.BUY, buySlots, snap.chainTotalBuy, excludeIds, filledSide === ORDER_TYPES.BUY, filledSide != null);
+        const sellResult = await this.rebalanceSideLogic(ORDER_TYPES.SELL, sellSlots, snap.chainTotalSell, excludeIds, filledSide === ORDER_TYPES.SELL, filledSide != null);
         
         const result = {
             ordersToPlace: [...buyResult.ordersToPlace, ...sellResult.ordersToPlace],
@@ -55,121 +53,121 @@ class StrategyEngine {
             partialMoves: []
         };
         
-        mgr.logger.log(`[UNIFIED] Sequence complete: ${result.ordersToPlace.length} place, ${result.ordersToRotate.length} rotate, ${result.ordersToUpdate.length} update, ${result.ordersToCancel.length} cancel.`, 'info');
+        mgr.logger.log(`[UNIFIED] Sequence complete: ${result.ordersToPlace.length} place, ${result.ordersToRotate.length} rotate, ${result.ordersToUpdate.length} update.`, 'info');
         
         return result;
     }
 
     /**
-     * Side-specific rebalancing logic.
-     * Implements explicit Physical Shift: Expansion on fill-side, Rotation on opposite-side.
+     * Contiguous Rail Maintenance Logic.
+     * Manages a sliding window of ACTIVE orders over the fixed rail.
      */
-    async rebalanceSideLogic(type, slots, spreadSlots, sideBudget, excludeIds, wasFilledSide, anyFillOccurred) {
+    async rebalanceSideLogic(type, slots, sideBudget, excludeIds, wasFilledSide, anyFillOccurred) {
         const mgr = this.manager;
         const side = type === ORDER_TYPES.BUY ? 'buy' : 'sell';
-        
         if (slots.length === 0) return { ordersToPlace: [], ordersToRotate: [], ordersToUpdate: [], ordersToCancel: [] };
 
-        // 1. Budget & Geometric Scale
-        let btsFeesReservation = 0;
-        if ((mgr.config.assetA === 'BTS' && side === 'sell') || (mgr.config.assetB === 'BTS' && side === 'buy')) {
-            const targetOrders = Math.max(1, mgr.config.activeOrders?.[side] || 1);
-            btsFeesReservation = calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetOrders, 5);
-        }
-        const availableBudget = Math.max(0, sideBudget - btsFeesReservation);
-
+        // 1. Determine targetCount and geometric ideal sizing
+        const targetCount = Math.max(1, mgr.config.activeOrders[side]);
+        const btsFees = ((mgr.config.assetA === 'BTS' && side === 'sell') || (mgr.config.assetB === 'BTS' && side === 'buy'))
+            ? calculateOrderCreationFees(mgr.config.assetA, mgr.config.assetB, targetCount, 5) : 0;
+        const availableBudget = Math.max(0, sideBudget - btsFees);
         const precision = getPrecisionForSide(mgr.assets, side);
         const weight = mgr.config.weightDistribution[side];
-        const idealSizes = allocateFundsByWeights(
-            availableBudget,
-            slots.length,
-            weight,
-            mgr.config.incrementPercent / 100,
-            false, // Market-facing index 0
-            0,
-            precision
-        );
+        const idealSizes = allocateFundsByWeights(availableBudget, slots.length, weight, mgr.config.incrementPercent / 100, false, 0, precision);
 
+        // 2. Identify current physical active indices (Inward-First sorting)
+        // Indices are 0 (closest to market) to N (furthest from market)
+        let activeOnChain = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && !excludeIds.has(s.id));
+        let activeIndices = activeOnChain.map(o => slots.findIndex(s => s.id === o.id)).sort((a, b) => a - b);
+
+        // 3. Sliding Window Transition
+        let nextIndices = [...activeIndices];
+        if (activeIndices.length === 0) {
+            // First run or recovery: find first non-spread slot
+            const start = Math.max(0, slots.findIndex(s => s.type !== ORDER_TYPES.SPREAD));
+            nextIndices = Array.from({length: targetCount}, (_, i) => (start !== -1 ? start : 3) + i);
+        } else {
+            if (wasFilledSide) {
+                // Fill Side: Expand Outward (maintain count)
+                // e.g. [3, 4, 5] -> 3 filled -> [4, 5] -> add 6 -> [4, 5, 6]
+                if (nextIndices.length < targetCount) {
+                    nextIndices.push(Math.max(...nextIndices) + 1);
+                }
+            } else if (anyFillOccurred) {
+                // Opposite Side: Shift Inward (rotation)
+                // e.g. [3, 4, 5] -> shift in -> [2, 3, 4]
+                const innerEdge = Math.min(...nextIndices);
+                if (innerEdge > 0) {
+                    nextIndices = nextIndices.map(i => i - 1);
+                }
+            }
+        }
+
+        // Force exactly targetCount and contiguity
+        if (nextIndices.length > 0) {
+            const min = Math.min(...nextIndices);
+            nextIndices = Array.from({length: targetCount}, (_, i) => Math.max(0, min + i));
+        }
+
+        const targetIndexSet = new Set(nextIndices);
         const ordersToPlace = [];
         const ordersToRotate = [];
         const ordersToUpdate = [];
         const ordersToCancel = [];
 
-        // 2. State Analysis
-        const targetCount = Math.max(1, mgr.config.activeOrders?.[side] || 1);
-        const activeOrders = slots.filter(s => (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && s.orderId && !excludeIds.has(s.id));
-        const currentActiveCount = activeOrders.length;
+        // 4. Resolve Shortages and Surpluses
+        const shortages = nextIndices.filter(idx => !slots[idx].orderId || excludeIds.has(slots[idx].id));
+        const surpluses = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && !targetIndexSet.has(slots.findIndex(o => o.id === s.id)));
 
-        // 3. Maintenance Policy: Expand, Rotate, or Surplus Cleanup
-        if (wasFilledSide) {
-            // Side that filled: Expansion (New Placement)
-            if (currentActiveCount < targetCount) {
-                // Find physical edge: last active slot index + 1
-                const allActiveIndices = slots.map((s, i) => (s.orderId || s.state === ORDER_STATES.PARTIAL) ? i : -1).filter(i => i !== -1);
-                const edgeIdx = allActiveIndices.length > 0 ? Math.max(...allActiveIndices) : -1;
-                const idxToActivate = edgeIdx + 1;
-                const slotToActivate = slots[idxToActivate];
+        // Pair Rotations: Furthest Surplus to Nearest Shortage
+        surpluses.sort((a, b) => b.price - a.price); // FURTHEST
+        shortages.sort((a, b) => a - b); // NEAREST (indices are inward-first)
 
-                if (slotToActivate && slotToActivate.state === ORDER_STATES.VIRTUAL) {
-                    const idealSize = idealSizes[idxToActivate];
-                    ordersToPlace.push({ ...slotToActivate, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-                    mgr._updateOrder({ ...slotToActivate, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-                    mgr.logger.log(`[UNIFIED] Expansion: Placing ${type} order at edge index ${idxToActivate} (${slotToActivate.id}).`, 'info');
-                }
-            }
-        } else if (anyFillOccurred && activeOrders.length > 0) {
-            // Opposite side or general maintenance: Physical Rotation
-            // We rotate the furthest order to the spread center to follow the market move.
-            const sortedActive = activeOrders.sort((a, b) => b.price - a.price); // FURTHEST first (Highest price for both sides)
-            const furthestActive = sortedActive[0];
-            const nearPrice = spreadSlots.length > 0 ? spreadSlots[0].price : null;
+        const pairCount = Math.min(surpluses.length, shortages.length);
+        for (let i = 0; i < pairCount; i++) {
+            const surplus = surpluses[i];
+            const shortageIdx = shortages[i];
+            const shortageSlot = slots[shortageIdx];
+            const idealSize = idealSizes[shortageIdx];
 
-            if (furthestActive && nearPrice) {
-                const nearSlot = slots.find(s => s.state === ORDER_STATES.VIRTUAL && !s.orderId && !excludeIds.has(s.id));
-                if (nearSlot) {
-                    const idx = slots.findIndex(s => s.id === nearSlot.id);
-                    const idealSize = idealSizes[idx];
-
-                    ordersToRotate.push({
-                        oldOrder: { ...furthestActive },
-                        newPrice: nearPrice,
-                        newSize: idealSize,
-                        newGridId: nearSlot.id,
-                        type: type
-                    });
-                    mgr._updateOrder({ ...furthestActive, state: ORDER_STATES.VIRTUAL });
-                    mgr._updateOrder({ ...nearSlot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE, price: nearPrice });
-                    mgr.logger.log(`[UNIFIED] Rotation: Shifting furthest ${type} ${furthestActive.id} -> near price ${nearPrice.toFixed(4)}.`, 'info');
-                }
-            }
+            ordersToRotate.push({
+                oldOrder: { ...surplus },
+                newPrice: shortageSlot.price, // FIXED Grid Price
+                newSize: idealSize,
+                newGridId: shortageSlot.id,
+                type: type
+            });
+            mgr._updateOrder({ ...surplus, state: ORDER_STATES.VIRTUAL });
+            mgr._updateOrder({ ...shortageSlot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+            mgr.logger.log(`[UNIFIED] Rotation: Shifting furthest ${type} ${surplus.id} -> contiguous slot ${shortageSlot.id}.`, 'info');
         }
 
-        // 4. Surplus Management (Count Correction)
-        // If still over target (e.g. after multiple fills), cancel furthest.
-        const updatedActiveCount = slots.filter(s => (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL) && s.orderId).length;
-        if (updatedActiveCount > targetCount) {
-            const surplusCount = updatedActiveCount - targetCount;
-            // FURTHEST from spread: BUY = lowest price (sort a-b), SELL = highest price (sort b-a)
-            const toCancelCandidates = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL));
-            const sortedForSurplus = toCancelCandidates.sort((a, b) => type === ORDER_TYPES.BUY ? a.price - b.price : b.price - a.price);
-            const toCancel = sortedForSurplus.slice(0, surplusCount);
-
-            for (const order of toCancel) {
-                if (ordersToRotate.some(r => r.oldOrder.id === order.id)) continue; // Don't cancel what we're rotating
-                ordersToCancel.push({ ...order });
-                mgr._updateOrder({ ...order, state: ORDER_STATES.VIRTUAL, orderId: null });
-                mgr.logger.log(`[UNIFIED] Surplus: Cancelling furthest ${type} order ${order.id} to restore target count.`, 'info');
-            }
-        }
-
-        // 5. Standardization (Resize & Merge)
-        const currentOnChain = slots.filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL));
-        for (const slot of currentOnChain) {
-            if (ordersToRotate.some(r => r.oldOrder.id === slot.id) || ordersToCancel.some(c => c.id === slot.id)) continue;
-            
-            const idx = slots.findIndex(s => s.id === slot.id);
+        // New Placements (remaining shortages)
+        for (let i = pairCount; i < shortages.length; i++) {
+            const idx = shortages[i];
+            const slot = slots[idx];
             const idealSize = idealSizes[idx];
+            ordersToPlace.push({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+            mgr._updateOrder({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+            mgr.logger.log(`[UNIFIED] Expansion: Placing ${type} at fixed edge slot ${slot.id}.`, 'info');
+        }
 
+        // Surplus Cancellations (remaining surpluses)
+        for (let i = pairCount; i < surpluses.length; i++) {
+            const surplus = surpluses[i];
+            ordersToCancel.push({ ...surplus });
+            mgr._updateOrder({ ...surplus, state: ORDER_STATES.VIRTUAL, orderId: null });
+            mgr.logger.log(`[UNIFIED] Surplus: Cancelling out-of-window ${type} order ${surplus.id}.`, 'info');
+        }
+
+        // 5. In-Place Maintenance (Resize & Merge)
+        for (const idx of nextIndices) {
+            const slot = slots[idx];
+            if (!slot.orderId || excludeIds.has(slot.id)) continue;
+            if (ordersToRotate.some(r => r.oldOrder.id === slot.id)) continue;
+            
+            const idealSize = idealSizes[idx];
             if (slot.state === ORDER_STATES.PARTIAL) {
                 const dustThreshold = idealSize * (GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE / 100);
                 if (slot.size < dustThreshold) {
@@ -185,7 +183,18 @@ class StrategyEngine {
             } else if (Math.abs(slot.size - idealSize) > 1e-8) {
                 ordersToUpdate.push({ partialOrder: { ...slot }, newSize: idealSize, isSplitUpdate: true, newState: ORDER_STATES.ACTIVE });
                 mgr._updateOrder({ ...slot, size: idealSize });
-                mgr.logger.log(`[UNIFIED] Resize: Standardizing active ${slot.id} to ${idealSize.toFixed(precision)}.`, 'info');
+                mgr.logger.log(`[UNIFIED] Maintenance: Resizing active ${slot.id} to ${idealSize.toFixed(precision)}.`, 'info');
+            }
+        }
+
+        // 6. Role Assignment: Ensure Spread Buffer is correctly labeled
+        const minActiveIdx = Math.min(...nextIndices);
+        for (let i = 0; i < slots.length; i++) {
+            const slot = slots[i];
+            if (i < minActiveIdx) {
+                slot.type = ORDER_TYPES.SPREAD; // Inward from window is the Spread Zone
+            } else {
+                slot.type = type; // Window and Outward are the Asset Rail
             }
         }
 
