@@ -610,6 +610,13 @@ class DEXBot {
                         const { partialOrder, newSize } = updateInfo;
                         if (!partialOrder.orderId) continue;
 
+                        // Check if order still exists on-chain before building op
+                        const onChain = await chainOrders.readOrder(partialOrder.orderId);
+                        if (!onChain) {
+                            this.manager.logger.log(`[SPLIT UPDATE] Skipping size update: Order ${partialOrder.orderId} no longer exists on-chain`, 'warn');
+                            continue;
+                        }
+
                         this.manager.logger.log(
                             `[SPLIT UPDATE] Building size update: ${partialOrder.orderId} (${partialOrder.type}) ${partialOrder.size.toFixed(8)} -> ${newSize.toFixed(8)}`,
                             'info'
@@ -689,6 +696,13 @@ class DEXBot {
                     try {
                         const { oldOrder, newPrice, newSize, type } = rotation;
                         if (!oldOrder.orderId) continue;
+
+                        // Check if order still exists on-chain before building op
+                        const onChain = await chainOrders.readOrder(oldOrder.orderId);
+                        if (!onChain) {
+                            this.manager.logger.log(`Skipping rotation: Order ${oldOrder.orderId} no longer exists on-chain`, 'warn');
+                            continue;
+                        }
 
                         let newAmountToSell, newMinToReceive;
                         if (type === 'sell') {

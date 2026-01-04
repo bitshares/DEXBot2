@@ -4,140 +4,74 @@
  * This module manages the complete lifecycle of the order grid:
  * - Creates geometric price grids with configurable spacing
  * - Synchronizes grid state with blockchain and fund changes
- * - Compares calculated vs persisted grids for consistency
  * - Monitors grid health and handles spread corrections
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- * TABLE OF CONTENTS
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * SECTION 1: GRID CREATION & INITIALIZATION (lines 82-454)
- *   - createOrderGrid()           Create initial order grid from config
- *   - loadGrid()                  Load persisted grid from state
- *   - initializeGrid()            Initialize grid with blockchain prices
- *
- * SECTION 2: GRID SYNCHRONIZATION (lines 466-824)
- *   - recalculateGrid()                           Full grid recalculation after fills
- *   - checkAndUpdateGridIfNeeded()                Check if grid needs updating
- *   - _recalculateGridOrderSizesFromBlockchain()  Get current on-chain sizes
- *   - updateGridFromBlockchainSnapshot()          Update from blockchain state
- *   - updateGridOrderSizes()                      Update sizes from funds
- *
- * SECTION 3: GRID COMPARISON & PERSISTENCE (lines 962-1134)
- *   - compareGrids()              Compare calculated vs persisted grids
- *   - _clearAndPersistCacheFunds() Persist cache funds to disk
- *   - _persistCacheFunds()        Persist individual cache side
- *
- * SECTION 4: INTERNAL UTILITIES (lines 1159-1305)
- *   - _updateOrdersForSide()      Update orders for one side
- *   - _getFundSnapshot()          Get current fund snapshot
- *   - _logSizingInput()           Log sizing inputs
- *   - calculateCurrentSpread()    Calculate current spread %
- *   - checkSpreadCondition()      Check if spread is valid
- *
- * SECTION 5: GRID HEALTH & CORRECTIONS (lines 1438-1819)
- *   - checkGridHealth()           Check grid health status
- *   - determineOrderSideByFunds() Determine which side has funds
- *   - calculateGeometricSizeForSpreadCorrection() Calculate correction sizes
- *   - prepareSpreadCorrectionOrders()             Prepare correction orders
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * Grid structure:
- * - SELL orders: above market price (size in base asset / assetA)
- * - BUY orders: below market price (size in quote asset / assetB)
- * - SPREAD orders: zone closest to market price (placeholders)
- *
- * Fund interaction:
- * - Grid creation: All orders start as VIRTUAL, sizes added to funds.virtuel
- * - Grid loading (loadGrid): ACTIVE orders increment funds.committed
- * - Order activation: funds.virtuel decreases, funds.committed increases
  */
+
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS, TIMING, INCREMENT_BOUNDS } = require('../constants');
 const { GRID_COMPARISON } = GRID_LIMITS;
-const { floatToBlockchainInt, blockchainToFloat, resolveRelativePrice, filterOrdersByType, filterOrdersByTypeAndState, sumOrderSizes, mapOrderSizes, getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager, checkSizesBeforeMinimum, checkSizesNearMinimum, calculateOrderCreationFees, deductOrderFeesFromFunds, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, derivePoolPrice, deriveMarketPrice, derivePrice, getMinOrderSize, calculateAvailableFundsValue, calculateSpreadFromOrders, countOrdersByType, shouldFlagOutOfSpread } = require('./utils');
+const {
+    floatToBlockchainInt,
+    blockchainToFloat,
+    filterOrdersByType,
+    filterOrdersByTypeAndState,
+    sumOrderSizes,
+    mapOrderSizes,
+    getPrecisionByOrderType,
+    getPrecisionForSide,
+    getPrecisionsForManager,
+    checkSizesBeforeMinimum,
+    checkSizesNearMinimum,
+    calculateOrderCreationFees,
+    deductOrderFeesFromFunds,
+    calculateOrderSizes,
+    calculateRotationOrderSizes,
+    calculateGridSideDivergenceMetric,
+    resolveConfiguredPriceBound,
+    getMinOrderSize,
+    calculateAvailableFundsValue,
+    calculateSpreadFromOrders,
+    countOrdersByType,
+    shouldFlagOutOfSpread
+} = require('./utils');
 
-// Grid sizing limits are centralized in modules/constants.js -> GRID_LIMITS
-
-/**
- * Grid - Static class for grid creation and sizing
- *
- * Grid creation algorithm:
- * 1. Calculate price levels from startPrice to maxPrice (sells) and minPrice (buys)
- * 2. Use incrementPercent for geometric spacing (1% -> 1.01x per level)
- * 3. Assign SPREAD type to orders closest to market price
- * 4. Calculate order sizes based on funds and weight distribution
- *
- * @class
- */
 class Grid {
-    // ════════════════════════════════════════════════════════════════════════════════
-    // SECTION 1: GRID CREATION & INITIALIZATION
-    // ════════════════════════════════════════════════════════════════════════════════
-    // Build initial order grid structure from configuration and blockchain prices
     /**
-     * Create the order grid structure.
-     * Generates sell orders from market to max, buy orders from market to min.
-     * Orders within targetSpreadPercent of market are marked as SPREAD.
+     * Create the initial order grid structure based on configuration.
+     * Generates physical price levels and identifies the spread zone.
      * 
      * @param {Object} config - Grid configuration
-     * @param {number} config.startPrice - Center price for the grid
-     * @param {number} config.minPrice - Lower price bound
-     * @param {number} config.maxPrice - Upper price bound
-     * @param {number} config.incrementPercent - Price step (e.g., 1 for 1%)
-     * @param {number} config.targetSpreadPercent - Spread zone width
      * @returns {Object} { orders: Array, initialSpreadCount: { buy, sell } }
      */
     static createOrderGrid(config) {
-        // Compute helper arrays of buy/sell price levels relative to the market price.
         const { startPrice, minPrice, maxPrice, incrementPercent } = config;
 
-        // CRITICAL: Validate increment bounds before using in calculations
-        // Prevents division by zero (line 75: Math.log(stepUp)) and invalid prices
         if (incrementPercent <= 0 || incrementPercent >= 100) {
-            throw new Error(`Invalid incrementPercent: ${incrementPercent}. Must be between ${INCREMENT_BOUNDS.MIN_PERCENT} and ${INCREMENT_BOUNDS.MAX_PERCENT} (exclusive of 0 and 100).`);
+            throw new Error(`Invalid incrementPercent: ${incrementPercent}. Must be between ${INCREMENT_BOUNDS.MIN_PERCENT} and ${INCREMENT_BOUNDS.MAX_PERCENT}.`);
         }
 
-        // Use explicit step multipliers for clarity:
-        const stepUp = 1 + (incrementPercent / 100);    // e.g. 1.02 for +2%
-        const stepDown = 1 - (incrementPercent / 100);  // e.g. 0.98 for -2%
+        const stepUp = 1 + (incrementPercent / 100);
+        const stepDown = 1 - (incrementPercent / 100);
 
-        // Ensure targetSpreadPercent is at least `minSpreadFactor * incrementPercent` to guarantee spread orders.
-        // This implementation uses the constant GRID_LIMITS.MIN_SPREAD_FACTOR.
-        const spreadFactor = Number(GRID_LIMITS.MIN_SPREAD_FACTOR);
-        const minSpreadPercent = incrementPercent * spreadFactor;
+        const minSpreadPercent = incrementPercent * Number(GRID_LIMITS.MIN_SPREAD_FACTOR);
         const targetSpreadPercent = Math.max(config.targetSpreadPercent, minSpreadPercent);
-        if (config.targetSpreadPercent < minSpreadPercent) {
-            console.log(`[WARN] targetSpreadPercent (${config.targetSpreadPercent}%) is less than ${spreadFactor}*incrementPercent (${minSpreadPercent.toFixed(2)}%). ` +
-                `Auto-adjusting to ${minSpreadPercent.toFixed(2)}% to ensure spread orders are created.`);
-        }
 
-        // Calculate number of spread orders based on target spread vs increment
-        // Ensure at least GRID_LIMITS.MIN_SPREAD_ORDERS spread orders (1 buy, 1 sell) to maintain a proper spread zone
-        // Number of increments needed to cover the target spread using stepUp^n >= (1 + targetSpread)
         const calculatedNOrders = Math.ceil(Math.log(1 + (targetSpreadPercent / 100)) / Math.log(stepUp));
-        const nOrders = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS, calculatedNOrders); // Minimum spread orders
+        const nOrders = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS, calculatedNOrders);
 
-        // Generate Sells detected OUTWARDS from market (Price increasing)
-        // Start at a half-step up to center the market price in the first gap
         const sellLevels = [];
         let currentSell = startPrice * Math.sqrt(stepUp);
         while (currentSell <= maxPrice) {
             sellLevels.push(currentSell);
             currentSell *= stepUp;
         }
-        // Reverse so sellLevels are Max -> Min (closest to market is at end)
         sellLevels.reverse();
 
-        // Generate Buys detected OUTWARDS from market (Price decreasing)
-        // Start at a half-step down to center the market price
         const buyLevels = [];
         let currentBuy = startPrice * Math.sqrt(stepDown);
         while (currentBuy >= minPrice) {
             buyLevels.push(currentBuy);
             currentBuy *= stepDown;
         }
-        // buyLevels are already High -> Low (closest to market is at start)
 
         const buySpread = Math.floor(nOrders / 2);
         const sellSpread = nOrders - buySpread;
@@ -147,7 +81,7 @@ class Grid {
             price,
             type: i >= sellLevels.length - sellSpread ? (initialSpreadCount.sell++, ORDER_TYPES.SPREAD) : ORDER_TYPES.SELL,
             id: `sell-${i}`,
-            state: 'virtual',
+            state: ORDER_STATES.VIRTUAL,
             size: 0
         }));
 
@@ -155,7 +89,7 @@ class Grid {
             price,
             type: i < buySpread ? (initialSpreadCount.buy++, ORDER_TYPES.SPREAD) : ORDER_TYPES.BUY,
             id: `buy-${i}`,
-            state: 'virtual',
+            state: ORDER_STATES.VIRTUAL,
             size: 0
         }));
 
@@ -164,1142 +98,241 @@ class Grid {
 
     /**
      * Restore a persisted grid snapshot onto a manager instance.
-     * Usage: Grid.loadGrid(manager, gridArray)
      */
     static async loadGrid(manager, grid) {
         if (!Array.isArray(grid)) return;
+        try { await manager._initializeAssets(); } catch (e) { }
 
-        // Ensure assets are initialized so that subsequent sync operations (which rely on precision) work correctly
-        try {
-            await manager._initializeAssets();
-        } catch (e) {
-            manager.logger?.log?.(`Warning: Failed to initialize assets during loadGrid: ${e.message}`, 'warn');
-        }
-
-        // Clear manager state and indices then load the grid entries
         manager.orders.clear();
         Object.values(manager._ordersByState).forEach(set => set.clear());
         Object.values(manager._ordersByType).forEach(set => set.clear());
 
-        // CRITICAL: Preserve persistent funds before reset
-        // cacheFunds: accumulated surplus from rotation sizing (persists across sessions)
-        // btsFeesOwed: accumulated blockchain fees
-        // Note: legacy `pendingProceeds` is deprecated. If present in-memory,
-        // merge it into `cacheFunds` so proceeds are not lost during reset.
         const savedCacheFunds = { ...manager.funds.cacheFunds };
-        const savedPendingProceeds = manager.funds.pendingProceeds ? { ...manager.funds.pendingProceeds } : { buy: 0, sell: 0 };
         const savedBtsFeesOwed = manager.funds.btsFeesOwed;
 
         manager.resetFunds();
-
-        // Merge any legacy pendingProceeds into cacheFunds and restore fees
-        manager.funds.cacheFunds = {
-            buy: (savedCacheFunds.buy || 0) + (savedPendingProceeds.buy || 0),
-            sell: (savedCacheFunds.sell || 0) + (savedPendingProceeds.sell || 0)
-        };
+        manager.funds.cacheFunds = savedCacheFunds;
         manager.funds.btsFeesOwed = savedBtsFeesOwed;
 
-        grid.forEach(order => {
-            manager._updateOrder(order);
-            // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
-        });
-        manager.logger.log(`Loaded ${manager.orders.size} orders from persisted grid state.`, 'info');
-        manager.logger?.logFundsStatus?.(manager);
+        grid.forEach(order => manager._updateOrder(order));
+        manager.logger.log(`Loaded ${manager.orders.size} orders from persisted grid.`, 'info');
     }
 
     /**
-     * Distribute funds across grid orders using weighted allocation.
-     * 
-     * Weight distribution algorithm:
-     * - Uses geometric weighting based on incrementPercent
-     * - Can favor orders closer to or further from market price
-     * - Respects minimum size constraints
-     * 
-     * @param {Array} orders - Array of order objects from createOrderGrid
-     * @param {Object} config - Grid configuration with weightDistribution
-     * @param {number} sellFunds - Available funds for sell orders (in base asset)
-     * @param {number} buyFunds - Available funds for buy orders (in quote asset)
-     * @param {number} minSellSize - Minimum size for sell orders (0 to disable)
-     * @param {number} minBuySize - Minimum size for buy orders (0 to disable)
-     * @returns {Array} Orders with size property added
-     */
-    // Accept optional precision parameters for both sides so size-vs-min
-    // comparisons can be performed exactly at blockchain integer granularity.
-    /**
-     * Initialize the virtual order grid and assign sizes on the provided manager.
-     * This function was moved from OrderManager.initializeOrderGrid so the grid
-     * generation and sizing logic can be reused and tested independently.
-     *
-     * @param {Object} manager - OrderManager instance (will be mutated)
+     * Initialize the order grid with blockchain-aware sizing.
      */
     static async initializeGrid(manager) {
         if (!manager) throw new Error('initializeGrid requires a manager instance');
         await manager._initializeAssets();
+        
+        const { derivePrice } = require('./utils');
         const mpRaw = manager.config.startPrice;
-        const mpIsPool = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'pool';
-        const mpIsMarket = typeof mpRaw === 'string' && mpRaw.trim().toLowerCase() === 'market';
-
-        if (!Number.isFinite(Number(mpRaw)) || mpIsPool || mpIsMarket) {
+        
+        // Auto-derive price if requested
+        if (!Number.isFinite(Number(mpRaw)) || typeof mpRaw === 'string') {
             try {
                 const { BitShares } = require('../bitshares_client');
-                const symA = manager.config.assetA;
-                const symB = manager.config.assetB;
-
-                if ((mpIsPool || manager.config.pool) && symA && symB) {
-                    try {
-                        const p = await derivePrice(BitShares, symA, symB, 'pool');
-                        if (p !== null) manager.config.startPrice = p;
-                    } catch (e) { manager.logger?.log?.(`Pool price lookup failed: ${e?.message || e}`, 'warn'); }
-                } else if ((mpIsMarket || manager.config.market) && symA && symB) {
-                    try {
-                        const m = await derivePrice(BitShares, symA, symB, 'market');
-                        if (m !== null) manager.config.startPrice = m;
-                    } catch (e) { manager.logger?.log?.(`Market price lookup failed: ${e?.message || e}`, 'warn'); }
-                }
-
-                try {
-                    if (!Number.isFinite(Number(manager.config.startPrice))) {
-                        const modePref = (manager.config && manager.config.priceMode) ? String(manager.config.priceMode).toLowerCase() : (process && process.env && process.env.PRICE_MODE ? String(process.env.PRICE_MODE).toLowerCase() : 'auto');
-                        const tryP = await derivePrice(BitShares, symA, symB, modePref);
-                        if (tryP !== null) {
-                            manager.config.startPrice = tryP;
-                            console.log('Derived startPrice from on-chain (derivePrice)', manager.config.assetA + '/' + manager.config.assetB, tryP);
-                        }
-                    }
-                } catch (e) { manager.logger?.log?.(`auto-derive startPrice failed: ${e?.message || e}`, 'warn'); }
-            } catch (err) {
-                manager.logger?.log?.(`auto-derive startPrice failed: ${err?.message || err}`, 'warn');
-            }
+                const derived = await derivePrice(BitShares, manager.config.assetA, manager.config.assetB, manager.config.priceMode || 'auto');
+                if (derived) manager.config.startPrice = derived;
+            } catch (err) { }
         }
 
-        // =====================================================================
-        // PRICE BOUNDS RESOLUTION - Supports Mixed Absolute & Relative Formats
-        // =====================================================================
-        //
-        // minPrice and maxPrice can be configured in two formats:
-        //
-        // 1. ABSOLUTE prices (numeric): "0.55" or 0.55
-        //    - Fixed price bound regardless of market price
-        //    - Example: minPrice = 0.55 always means 0.55
-        //
-        // 2. RELATIVE multipliers (with 'x' suffix): "15x" or "4x"
-        //    - Dynamic bound based on current market price
-        //    - For minPrice: resolves as startPrice / multiplier
-        //    - For maxPrice: resolves as startPrice * multiplier
-        //    - Example: maxPrice = "15x" at market price 0.64 = 0.64 * 15 = 9.6
-        //
-        // MIXED FORMAT EXAMPLE:
-        //   minPrice: "0.55" (absolute - keeps minimum bound fixed)
-        //   maxPrice: "15x" (relative - scales with market price)
-        //
-        // IMPORTANT: When mixing formats, ensure bounds don't create
-        // unrealistic price ranges that could cause extreme order sizes
-        // and overflow the 64-bit blockchain limits.
-        //
-        // Resolution order (for each bound):
-        // 1. Try to parse as relative multiplier (e.g., "5x")
-        // 2. If that fails, try to parse as numeric absolute price
-        // 3. If that fails, use fallback from DEFAULT_CONFIG
-        //
         const mp = Number(manager.config.startPrice);
-        const fallbackMin = Number(DEFAULT_CONFIG.minPrice);
-        const fallbackMax = Number(DEFAULT_CONFIG.maxPrice);
-        const rawMin = manager.config.minPrice !== undefined ? manager.config.minPrice : DEFAULT_CONFIG.minPrice;
-        const rawMax = manager.config.maxPrice !== undefined ? manager.config.maxPrice : DEFAULT_CONFIG.maxPrice;
-        const minP = resolveConfiguredPriceBound(rawMin, fallbackMin, mp, 'min');
-        const maxP = resolveConfiguredPriceBound(rawMax, fallbackMax, mp, 'max');
+        const minP = resolveConfiguredPriceBound(manager.config.minPrice, DEFAULT_CONFIG.minPrice, mp, 'min');
+        const maxP = resolveConfiguredPriceBound(manager.config.maxPrice, DEFAULT_CONFIG.maxPrice, mp, 'max');
+        
         manager.config.minPrice = minP;
         manager.config.maxPrice = maxP;
-        if (!Number.isFinite(mp)) { throw new Error('Cannot initialize order grid: startPrice is not a valid number'); }
-        if (mp < minP || mp > maxP) { throw new Error(`Refusing to initialize order grid because startPrice ${mp} is outside configured bounds [${minP}, ${maxP}]`); }
 
+        // Ensure percentage-based funds are resolved before sizing
         try {
-            const botFunds = manager.config && manager.config.botFunds ? manager.config.botFunds : {};
-            const needsPercent = (v) => typeof v === 'string' && v.includes('%');
-            if ((needsPercent(botFunds.buy) || needsPercent(botFunds.sell)) && (manager.accountId || manager.account)) {
-                const haveBuy = manager.accountTotals && manager.accountTotals.buy !== null && manager.accountTotals.buy !== undefined && Number.isFinite(Number(manager.accountTotals.buy));
-                const haveSell = manager.accountTotals && manager.accountTotals.sell !== null && manager.accountTotals.sell !== undefined && Number.isFinite(Number(manager.accountTotals.sell));
-                if (haveBuy && haveSell) {
-                    manager.logger?.log?.('Account totals already available; skipping blocking fetch.', 'debug');
-                } else {
-                    const timeoutMs = Number.isFinite(Number(manager.config.waitForAccountTotalsMs)) ? Number(manager.config.waitForAccountTotalsMs) : TIMING.ACCOUNT_TOTALS_TIMEOUT_MS;
-                    manager.logger?.log?.(`Waiting up to ${timeoutMs}ms for on-chain account totals to resolve percentage-based botFunds...`, 'info');
-                    try {
-                        if (!manager._isFetchingTotals) { manager._isFetchingTotals = true; manager._fetchAccountBalancesAndSetTotals().finally(() => { manager._isFetchingTotals = false; }); }
-                        await manager.waitForAccountTotals(timeoutMs);
-                        manager.logger?.log?.('Account totals fetch completed (or timed out).', 'info');
-                    } catch (err) {
-                        manager.logger?.log?.(`Account totals fetch failed: ${err?.message || err}`, 'warn');
-                    }
-                }
+            if (manager.accountId && !manager.accountTotals) {
+                await manager.waitForAccountTotals(TIMING.ACCOUNT_TOTALS_TIMEOUT_MS);
             }
-        } catch (err) { /* don't let failures block grid creation */ }
+        } catch (e) { }
 
         const { orders, initialSpreadCount } = Grid.createOrderGrid(manager.config);
         const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
         const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
 
-        // Apply botFunds percentage allocation constraints for multi-bot account sharing
-        // This ensures each bot respects its allocated percentage of chainFree (what's actually free on-chain)
-        if (manager.applyBotFundsAllocation && typeof manager.applyBotFundsAllocation === 'function') {
-            manager.applyBotFundsAllocation();
-        }
+        if (manager.applyBotFundsAllocation) manager.applyBotFundsAllocation();
 
-        const diagMsg = `Allocating sizes: sellFunds=${String(calculateAvailableFundsValue('sell', manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders))}, buyFunds=${String(calculateAvailableFundsValue('buy', manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders))}, ` +
-            `minSellSize=${String(minSellSize)}, minBuySize=${String(minBuySize)}`;
-        manager.logger?.log?.(diagMsg, 'debug');
+        const snapshot = manager.getChainFundsSnapshot();
+        const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, (manager.config.activeOrders.buy + manager.config.activeOrders.sell), 5);
+        const { buyFunds, sellFunds } = deductOrderFeesFromFunds(snapshot.allocatedBuy, snapshot.allocatedSell, btsFees, manager.config);
 
         const { A: precA, B: precB } = getPrecisionsForManager(manager.assets);
+        let sizedOrders = calculateOrderSizes(orders, manager.config, sellFunds, buyFunds, minSellSize, minBuySize, precA, precB);
 
-        // Determine total funds on-chain for sizing.
-        // Centralized in OrderManager to avoid duplicating chainFree/free+locked/chainTotal logic.
-        if (!manager.getChainFundsSnapshot || typeof manager.getChainFundsSnapshot !== 'function') {
-            throw new Error('Grid.initializeGrid requires manager.getChainFundsSnapshot()');
-        }
-        const snapshot = manager.getChainFundsSnapshot();
-
-        const chainFreeBuy = snapshot.chainFreeBuy;
-        const chainFreeSell = snapshot.chainFreeSell;
-        const chainTotalBuy = snapshot.chainTotalBuy;
-        const chainTotalSell = snapshot.chainTotalSell;
-        const allocatedBuy = snapshot.allocatedBuy;
-        const allocatedSell = snapshot.allocatedSell;
-
-        const inputFundsBuy = allocatedBuy;
-        const inputFundsSell = allocatedSell;
-
-        const sizingSnap = Grid._getFundSnapshot(manager);
-        Grid._logSizingInput(manager, sizingSnap);
-
-        // Deduct BTS fees for orders: 5x multiplier accounts for creation and rotation buffer
-        // This keeps grid initialization in sync with calculateAvailableFundsValue fee reservation
-        const targetBuy = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.buy)) ? Number(manager.config.activeOrders.buy) : 1);
-        const targetSell = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.sell)) ? Number(manager.config.activeOrders.sell) : 1);
-
-        const btsFeesForCreation = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, targetBuy + targetSell, 5);
-        const { buyFunds: finalInputFundsBuy, sellFunds: finalInputFundsSell } = deductOrderFeesFromFunds(inputFundsBuy, inputFundsSell, btsFeesForCreation, manager.config, manager.logger);
-
-        if (btsFeesForCreation > 0) {
-            manager.logger.log(
-                `BTS fee reservation: ${targetBuy + targetSell} orders × 5x (creation + rotation buffer) = ${btsFeesForCreation.toFixed(8)} BTS`,
-                'info'
-            );
-        }
-
-        let sizedOrders = calculateOrderSizes(
-            orders, manager.config, finalInputFundsSell, finalInputFundsBuy, minSellSize, minBuySize, precA, precB
-        );
-
-        // Calculate total allocated by the sizing algorithm
-        const sizedAllocatedBuy = sumOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.BUY));
-        const sizedAllocatedSell = sumOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.SELL));
-        manager.logger.log(`DEBUG Grid Sizing Output: allocatedBuy=${sizedAllocatedBuy.toFixed(8)}, allocatedSell=${sizedAllocatedSell.toFixed(8)}`, 'info');
-        manager.logger.log(`DEBUG Grid Sizing Discrepancy: buy=${(finalInputFundsBuy - sizedAllocatedBuy).toFixed(8)}, sell=${(finalInputFundsSell - sizedAllocatedSell).toFixed(8)}`, 'info');
-
-        try {
-            const sellsAfter = mapOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.SELL));
-            const buysAfter = mapOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.BUY));
-
-            const anySellBelow = checkSizesBeforeMinimum(sellsAfter, minSellSize, precA);
-            const anyBuyBelow = checkSizesBeforeMinimum(buysAfter, minBuySize, precB);
-
-            if (anySellBelow || anyBuyBelow) {
-                const parts = [];
-                if (anySellBelow) parts.push(`sell.min=${String(minSellSize)}`);
-                if (anyBuyBelow) parts.push(`buy.min=${String(minBuySize)}`);
-                const msg = `Order grid contains orders below minimum size (${parts.join(', ')}). Aborting startup to avoid placing undersized orders.`;
-                manager.logger?.log?.(msg, 'error');
-                throw new Error(msg);
-            }
-
-            // Check for warning if orders are near minimal size
-            const warningSellSize = minSellSize > 0 ? getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0;
-            const warningBuySize = minBuySize > 0 ? getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0;
-            const anySellNearMin = checkSizesNearMinimum(sellsAfter, warningSellSize, precA);
-            const anyBuyNearMin = checkSizesNearMinimum(buysAfter, warningBuySize, precB);
-
-            if (anySellNearMin || anyBuyNearMin) {
-                const parts = [];
-                if (anySellNearMin) parts.push('sells near min');
-                if (anyBuyNearMin) parts.push('buys near min');
-                manager.logger.log(`WARNING: Order grid contains orders near minimum size (${parts.join(', ')}). To ensure the bot runs properly, consider increasing the funds of your bot.`, 'warn');
-            }
-        } catch (e) {
-            throw e;
+        // Verification of sizes
+        const sells = mapOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.SELL));
+        const buys = mapOrderSizes(filterOrdersByType(sizedOrders, ORDER_TYPES.BUY));
+        if (checkSizesBeforeMinimum(sells, minSellSize, precA) || checkSizesBeforeMinimum(buys, minBuySize, precB)) {
+            throw new Error('Calculated orders fall below minimum allowable size.');
         }
 
         manager.orders.clear();
         Object.values(manager._ordersByState).forEach(set => set.clear());
         Object.values(manager._ordersByType).forEach(set => set.clear());
-
-        // NOTE: pendingProceeds are RESET during grid initialization (full regeneration)
-        // They will be restored from persistence if needed during bot startup
         manager.resetFunds();
-        // Do NOT preserve pendingProceeds here - grid regeneration clears all state
 
-        sizedOrders.forEach(order => {
-            manager._updateOrder(order);
-            // Note: recalculateFunds() is called by _updateOrder, so funds are auto-updated
-        });
-
-        manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell; manager.currentSpreadCount = manager.targetSpreadCount;
-        manager.config.activeOrders = manager.config.activeOrders || { buy: 1, sell: 1 };
-        manager.config.activeOrders.buy = Number.isFinite(Number(manager.config.activeOrders.buy)) ? Number(manager.config.activeOrders.buy) : 1;
-        manager.config.activeOrders.sell = Number.isFinite(Number(manager.config.activeOrders.sell)) ? Number(manager.config.activeOrders.sell) : 1;
-
-        // Debug: Compare chainFree with allocated grid funds
-        const virtuelBuy = manager.funds?.virtuel?.buy || 0;
-        const virtuelSell = manager.funds?.virtuel?.sell || 0;
-        const discrepancyBuy = chainFreeBuy - virtuelBuy;
-        const discrepancySell = chainFreeSell - virtuelSell;
-        manager.logger.log(`DEBUG Grid Init: chainFree.buy=${chainFreeBuy.toFixed(8)}, virtuel.buy=${virtuelBuy.toFixed(8)}, discrepancy=${discrepancyBuy.toFixed(8)}`, 'info');
-        manager.logger.log(`DEBUG Grid Init: chainFree.sell=${chainFreeSell.toFixed(8)}, virtuel.sell=${virtuelSell.toFixed(8)}, discrepancy=${discrepancySell.toFixed(8)}`, 'info');
-
-        manager.logger.log(`Initialized order grid with ${orders.length} orders`, 'info'); manager.logger.log(`Configured activeOrders: buy=${manager.config.activeOrders.buy}, sell=${manager.config.activeOrders.sell}`, 'info');
+        sizedOrders.forEach(order => manager._updateOrder(order));
+        manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell;
+        
+        manager.logger.log(`Initialized grid with ${orders.length} orders.`, 'info');
         manager.logger?.logFundsStatus?.(manager);
         manager.logger?.logOrderGrid?.(Array.from(manager.orders.values()), manager.config.startPrice);
     }
 
-    // ════════════════════════════════════════════════════════════════════════════════
-    // SECTION 2: GRID SYNCHRONIZATION
-    // ════════════════════════════════════════════════════════════════════════════════
-    // Keep grid in sync with blockchain state and fund changes
-
     /**
-     * Perform a full grid resynchronization from blockchain state (moved from manager)
-     * @param {Object} manager - OrderManager instance
-     * @param {Object} opts
-     * @param {Function} opts.readOpenOrdersFn - async function to fetch open orders
-     * @param {Object} opts.chainOrders - chain orders API (must support updateOrder/createOrder/cancelOrder)
-     * @param {string} opts.account - account name
-     * @param {string} opts.privateKey - WIF private key
-     * @param {Object} [opts.config] - bot config (defaults to manager.config)
+     * Full grid resynchronization from blockchain state.
      */
     static async recalculateGrid(manager, opts) {
-        if (!manager) throw new Error('recalculateGrid requires a manager instance');
+        const { readOpenOrdersFn, chainOrders, account, privateKey } = opts;
+        manager.logger.log('Starting full resync...', 'info');
 
-        const readOpenOrdersFn = opts && typeof opts.readOpenOrdersFn === 'function' ? opts.readOpenOrdersFn : null;
-        const chainOrders = opts ? opts.chainOrders : null;
-        const account = opts ? opts.account : null;
-        const privateKey = opts ? opts.privateKey : null;
-        const config = (opts && opts.config) ? opts.config : (manager.config || {});
+        await manager._initializeAssets();
+        await manager.updateAccountTotals();
 
-        if (!readOpenOrdersFn) throw new Error('recalculateGrid requires opts.readOpenOrdersFn');
-        if (!chainOrders || typeof chainOrders.updateOrder !== 'function' || typeof chainOrders.createOrder !== 'function' || typeof chainOrders.cancelOrder !== 'function') {
-            throw new Error('recalculateGrid requires opts.chainOrders with updateOrder/createOrder/cancelOrder');
-        }
-        if (!account || !privateKey) throw new Error('recalculateGrid requires opts.account and opts.privateKey');
-
-        manager.logger.log('Starting full grid resynchronization from blockchain...', 'info');
-
-        // 1. Initialize assets and fetch fresh on-chain balances
-        if (typeof manager._initializeAssets === 'function') {
-            await manager._initializeAssets();
-        }
-        if (typeof manager.updateAccountTotals === 'function') {
-            await manager.updateAccountTotals();
-        }
-
-        // 2. Fetch current on-chain orders and sync manager state
         const chainOpenOrders = await readOpenOrdersFn();
-        if (!Array.isArray(chainOpenOrders)) {
-            manager.logger.log('Could not fetch open orders for resync.', 'error');
-            return;
-        }
-        manager.logger.log(`Found ${chainOpenOrders.length} open orders on-chain.`, 'info');
+        if (!Array.isArray(chainOpenOrders)) return;
 
-        // Initial sync to align manager's internal tracking with current reality
         await manager.synchronizeWithChain(chainOpenOrders, 'readOpenOrders');
-
-        // 3. Clear transient fund tracking but KEEP the fresh accountTotals
-        // This ensures initializeGrid uses the fresh balances we just fetched
         manager.resetFunds();
         manager.funds.cacheFunds = { buy: 0, sell: 0 };
-        manager.funds.btsFeesOwed = 0;
 
-        // Clear persisted state to ensure a clean slate
-        try {
-            await Grid._clearAndPersistCacheFunds(manager, 'buy');
-            await Grid._clearAndPersistCacheFunds(manager, 'sell');
-            if (manager.accountOrders && typeof manager.accountOrders.updateBtsFeesOwed === 'function') {
-                await manager.accountOrders.updateBtsFeesOwed(manager.config.botKey, 0);
-            }
-        } catch (e) {
-            manager.logger?.log?.(`Warning during cleanup: ${e.message}`, 'warn');
-        }
-
-        // 4. Initialize the new virtual grid using fresh blockchain totals
+        await Grid._clearAndPersistCacheFunds(manager, 'buy');
+        await Grid._clearAndPersistCacheFunds(manager, 'sell');
         await Grid.initializeGrid(manager);
-        manager.logger.log('Virtual grid has been regenerated with current blockchain totals.', 'debug');
 
-        // 5. Reconcile the new grid with on-chain orders
-        // Reuse the same reconciliation policy as startup
         const { reconcileStartupOrders } = require('./startup_reconcile');
-        
-        // CRITICAL: On a full reset, we want to repurpose ALL existing on-chain orders
-        // to match the new grid EXACTLY. We pass them all as unmatched to force updates.
-        await reconcileStartupOrders({
-            manager,
-            config,
-            account,
-            privateKey,
-            chainOrders,
-            chainOpenOrders,
-            syncResult: { unmatchedChainOrders: chainOpenOrders },
-        });
-
-        manager.logger.log('Full grid resynchronization complete.', 'info');
-        manager.logger?.logFundsStatus?.(manager);
-        manager.logger.logOrderGrid(Array.from(manager.orders.values()), manager.config.startPrice);
+        await reconcileStartupOrders({ manager, config: manager.config, account, privateKey, chainOrders, chainOpenOrders, syncResult: { unmatchedChainOrders: chainOpenOrders } });
+        manager.logger.log('Full resync complete.', 'info');
     }
 
     /**
-     * Check if cache or available funds exceed regeneration threshold and update grid sizes if needed.
-     * Independently checks buy and sell sides - can update just one side.
-     * Threshold: if ((cacheFunds + availableFunds) / total.grid) * 100 >= GRID_REGENERATION_PERCENTAGE, update that side.
-     *
-     * @param {Object} manager - OrderManager instance with existing grid
-     * @param {Object} cacheFunds - Cached funds { buy, sell } from previous rotations
-     * @returns {Object} { buyUpdated: boolean, sellUpdated: boolean }
-     * @example
-     * const result = Grid.checkAndUpdateGridIfNeeded(manager, cacheFunds);
-     * if (result.buyUpdated) console.log('Buy side was regenerated');
-     * if (result.sellUpdated) console.log('Sell side was regenerated');
+     * Check for grid divergence and trigger update if threshold is met.
      */
     static checkAndUpdateGridIfNeeded(manager, cacheFunds = { buy: 0, sell: 0 }) {
-        if (!manager) throw new Error('checkAndUpdateGridIfNeeded requires a manager instance');
-
-        const { GRID_LIMITS } = require('../constants');
         const threshold = GRID_LIMITS.GRID_REGENERATION_PERCENTAGE || 1;
-
         const snap = Grid._getFundSnapshot(manager);
-        const gridBuy = snap.gridBuy;
-        const gridSell = snap.gridSell;
-        const cacheBuy = Number(cacheFunds?.buy || snap.cacheBuy || 0);
-        const cacheSell = Number(cacheFunds?.sell || snap.cacheSell || 0);
-
         const result = { buyUpdated: false, sellUpdated: false };
 
         const sides = [
-            { name: 'buy', grid: gridBuy, cache: cacheBuy, orderType: ORDER_TYPES.BUY },
-            { name: 'sell', grid: gridSell, cache: cacheSell, orderType: ORDER_TYPES.SELL }
+            { name: 'buy', grid: snap.gridBuy, cache: cacheFunds.buy || snap.cacheBuy, orderType: ORDER_TYPES.BUY },
+            { name: 'sell', grid: snap.gridSell, cache: cacheFunds.sell || snap.cacheSell, orderType: ORDER_TYPES.SELL }
         ];
 
         for (const s of sides) {
             if (s.grid <= 0) continue;
-
-            // Include available funds in the regeneration check so newly added funds
-            // trigger a grid resize during the next fill/comparison cycle.
             const avail = calculateAvailableFundsValue(s.name, manager.accountTotals, manager.funds, manager.config.assetA, manager.config.assetB, manager.config.activeOrders);
             const totalPending = s.cache + avail;
-
-            // Use allocated funds (TotalFunds) as denominator as requested
-            // Falls back to (grid + pending) if allocated is not set/zero
             const allocated = s.name === 'buy' ? snap.allocatedBuy : snap.allocatedSell;
             const denominator = (allocated > 0) ? allocated : (s.grid + totalPending);
-
             const ratio = (denominator > 0) ? (totalPending / denominator) * 100 : 0;
 
             if (ratio >= threshold) {
-                manager.logger?.log(
-                    `Unallocated funds ratio for ${s.name} side (cache=${s.cache.toFixed(8)}, available=${avail.toFixed(8)}): ${ratio.toFixed(2)}% >= ${threshold}% threshold. Marking for grid update.`,
-                    'info'
-                );
-                // Mark which sides need grid update - caller will handle actual update via updateGridFromBlockchainSnapshot()
                 if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
                 manager._gridSidesUpdated.push(s.orderType);
                 if (s.name === 'buy') result.buyUpdated = true; else result.sellUpdated = true;
-            } else {
-                manager.logger?.log(
-                    `Cache funds ratio for ${s.name} side: ${ratio.toFixed(2)}% < ${threshold}% threshold. No update needed.`,
-                    'debug'
-                );
             }
         }
-
         return result;
     }
 
     /**
-     * Recalculate grid order sizes for a side using fresh blockchain totals.
-     * Used during divergence/threshold recalculation - NOT for initial grid creation.
-     *
-     * Applies botFunds allocation constraints (same as initial grid creation).
-     * This respects percentage-based botFunds config when multiple bots share an account.
-     * Uses allocated funds (respecting botFunds percentage) - not cache+grid+available approach.
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {string} orderType - ORDER_TYPES.BUY or ORDER_TYPES.SELL
-     * @returns {void} Updates orders in-place
+     * Standardize grid sizes using blockchain total context.
      * @private
      */
     static _recalculateGridOrderSizesFromBlockchain(manager, orderType) {
-        if (!manager) throw new Error('_recalculateGridOrderSizesFromBlockchain requires manager');
-
-        const config = manager.config || {};
+        if (!manager.assets) return;
         const isBuy = orderType === ORDER_TYPES.BUY;
         const sideName = isBuy ? 'buy' : 'sell';
-
-        // Apply botFunds allocation constraints (same as initial grid creation)
-        // This respects percentage-based botFunds config when multiple bots share an account
-        if (manager.applyBotFundsAllocation && typeof manager.applyBotFundsAllocation === 'function') {
-            manager.applyBotFundsAllocation();
-        }
-
-        // Get chain totals (total balance = free + locked in orders on chain)
-        // This ensures newly deposited funds are included when resizing
-        // Falls back to allocated if chain snapshot not available
         const snap = manager.getChainFundsSnapshot ? manager.getChainFundsSnapshot() : {};
-        let allocatedFunds;
-        if (isBuy) {
-            // Use chainTotal (full balance on chain) for sizing, not the capped allocation
-            allocatedFunds = snap.chainTotalBuy || manager.funds?.allocated?.buy || manager.accountTotals?.buy || 0;
-        } else {
-            allocatedFunds = snap.chainTotalSell || manager.funds?.allocated?.sell || manager.accountTotals?.sell || 0;
-        }
+        const allocatedFunds = isBuy ? snap.chainTotalBuy : snap.chainTotalSell;
 
-        manager.logger?.log(
-            `Recalculating ${sideName} side order sizes from chain total: ${allocatedFunds.toFixed(8)} ` +
-            `(chainTotal: ${isBuy ? snap.chainTotalBuy?.toFixed(8) : snap.chainTotalSell?.toFixed(8)}, ` +
-            `allocated: ${isBuy ? manager.funds?.allocated?.buy?.toFixed(8) : manager.funds?.allocated?.sell?.toFixed(8)})`,
-            'info'
-        );
-
-        // Get orders for this side
         const orders = Array.from(manager.orders.values()).filter(o => o.type === orderType);
+        if (orders.length === 0) return;
 
-        if (orders.length === 0) {
-            manager.logger?.log(`No ${sideName} orders found to recalculate`, 'warn');
-            return;
-        }
-
-        // Validate manager.assets is initialized before using for precision
-        if (!manager.assets || typeof manager.assets !== 'object') {
-            manager.logger?.log(`ERROR: manager.assets not initialized. Cannot recalculate grid sizes.`, 'error');
-            return;
-        }
-
-        // Calculate new sizes using blockchain total only
-        const precision = getPrecisionByOrderType(manager.assets, isBuy ? ORDER_TYPES.BUY : ORDER_TYPES.SELL);
-
-        // Apply 5x fee buffer deduction only if this side uses BTS
-        // BUY side uses assetB, SELL side uses assetA
-        // Only deduct fees from the side that actually holds BTS
+        const precision = getPrecisionByOrderType(manager.assets, orderType);
         let fundsForSizing = allocatedFunds;
-        const thisSideIsBts = (isBuy && manager.config.assetB === 'BTS') || (!isBuy && manager.config.assetA === 'BTS');
 
-        if (thisSideIsBts) {
-            const targetBuy = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.buy)) ? Number(manager.config.activeOrders.buy) : 1);
-            const targetSell = Math.max(0, Number.isFinite(Number(manager.config.activeOrders?.sell)) ? Number(manager.config.activeOrders.sell) : 1);
-
-            const btsFeesReserved = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, targetBuy + targetSell, 5);
-            if (btsFeesReserved > 0) {
-                fundsForSizing = Math.max(0, allocatedFunds - btsFeesReserved);
-                manager.logger?.log?.(
-                    `BTS fee reservation during resize (${sideName}): ${targetBuy + targetSell} orders × 5x = ${btsFeesReserved.toFixed(8)} BTS, sizing with: ${fundsForSizing.toFixed(8)} BTS`,
-                    'info'
-                );
-            }
+        if ((isBuy && manager.config.assetB === 'BTS') || (!isBuy && manager.config.assetA === 'BTS')) {
+            const targetCount = Math.max(1, manager.config.activeOrders[sideName]);
+            const btsFees = calculateOrderCreationFees(manager.config.assetA, manager.config.assetB, targetCount, 5);
+            fundsForSizing = Math.max(0, allocatedFunds - btsFees);
         }
 
-        // Use fee-deducted funds for sizing (respects botFunds percentage if configured)
-        const newSizes = calculateRotationOrderSizes(
-            fundsForSizing,   // Use allocated funds minus 4x fee reservation
-            0,                // availableFunds = 0 (already in allocatedFunds)
-            orders.length,
-            orderType,
-            config,
-            0,
-            precision
-        );
-
-        // DEBUG: Log calculated sizes summary
-        try {
-            if (newSizes.length > 0) {
-                const minSize = Math.min(...newSizes);
-                const maxSize = Math.max(...newSizes);
-                const avgSize = newSizes.reduce((a, b) => a + b, 0) / newSizes.length;
-                manager.logger?.log?.(`DEBUG Blockchain Recalc Sizes (${sideName}): count=${newSizes.length}, total=${allocatedFunds.toFixed(8)}, min=${minSize.toFixed(8)}, max=${maxSize.toFixed(8)}, avg=${avgSize.toFixed(8)}`, 'debug');
-            } else {
-                manager.logger?.log?.(`WARNING: No sizes calculated for ${sideName} (empty array)`, 'warn');
-            }
-        } catch (e) { manager.logger?.log?.(`Warning: failed to log calculated sizes: ${e.message}`, 'warn'); }
-
-        // Update orders with new sizes
+        const newSizes = calculateRotationOrderSizes(fundsForSizing, 0, orders.length, orderType, manager.config, 0, precision);
         Grid._updateOrdersForSide(manager, orderType, newSizes, orders);
-
-        // Recalculate funds after updating this side
         manager.recalculateFunds();
 
-        manager.logger?.log(`${sideName} side order sizes recalculated from allocated funds`, 'info');
-
-        // Calculate surplus and recycle to cacheFunds
-        if (precision !== undefined && precision !== null) {
-            const totalInputInt = floatToBlockchainInt(allocatedFunds, precision);
-            let totalAllocatedInt = 0;
-
-            newSizes.forEach(size => {
-                totalAllocatedInt += floatToBlockchainInt(size, precision);
-            });
-
-            const surplusInt = totalInputInt - totalAllocatedInt;
-            const surplus = blockchainToFloat(surplusInt, precision);
-
-            try {
-                manager.logger?.log?.(
-                    `DEBUG Blockchain Recalc Surplus (${sideName}): total=${allocatedFunds.toFixed(8)}, allocated=${blockchainToFloat(totalAllocatedInt, precision).toFixed(8)}, surplus=${surplus.toFixed(8)}`,
-                    'debug'
-                );
-            } catch (e) { manager.logger?.log?.(`Warning: failed to log surplus: ${e.message}`, 'warn'); }
-
-            // Add surplus back to cacheFunds
-            if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
-            manager.funds.cacheFunds[sideName] = surplus;
-
-            manager.logger?.log(
-                `DEBUG Blockchain Recalc: surplus=${surplus.toFixed(8)} added to cache`,
-                'debug'
-            );
-        }
+        const totalInputInt = floatToBlockchainInt(allocatedFunds, precision);
+        let totalAllocatedInt = 0;
+        newSizes.forEach(s => totalAllocatedInt += floatToBlockchainInt(size, precision));
+        
+        if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
+        manager.funds.cacheFunds[sideName] = blockchainToFloat(totalInputInt - totalAllocatedInt, precision);
     }
 
     /**
-     * Recalculate grid order sizes when threshold or divergence is detected.
-     * Main entry point for grid updates triggered by market conditions.
-     *
-     * Keeps CURRENT price and spread structure, only recalculates order SIZES
-     * using allocated funds (respecting botFunds percentage configuration).
-     * This maintains bot configuration consistency while adapting to fund changes.
-     *
-     * Data sources for sizing:
-     * - Fresh blockchain totals (from manager.accountTotals after fetchAccountTotals)
-     * - Allocated funds with botFunds percentage applied (same as initial grid creation)
-     * - NOT cache+grid+available (that's only for initial grid creation)
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {string} orderType - ORDER_TYPES.BUY, ORDER_TYPES.SELL, or 'both'
-     * @param {boolean} fromBlockchainTimer - If true, blockchain data already fresh from 4-hour timer.
-     *                                        If false, called from external trigger (needs refetch).
-     * @returns {Promise<void>}
+     * High-level entry for resizing grid from snapshot.
      */
     static async updateGridFromBlockchainSnapshot(manager, orderType = 'both', fromBlockchainTimer = false) {
-        if (!manager) throw new Error('updateGridFromBlockchainSnapshot requires manager');
-
-        try {
-            // If NOT from blockchain timer, fetch fresh blockchain data first
-            if (!fromBlockchainTimer) {
-                // Fetch fresh blockchain account values
-                // This updates manager.accountTotals with current on-chain balances
-                const accountId = manager.config?.accountId;
-                if (accountId) {
-                    await manager.fetchAccountTotals(accountId);
-                }
-            }
-            // Otherwise blockchain data is already fresh from 4-hour timer
-
-            // Recalculate order sizes using BLOCKCHAIN TOTALS ONLY (not cache+grid+available)
-            // (keeps existing market price and bounds, only adjusts sizes for fund changes)
-            if (orderType === ORDER_TYPES.BUY || orderType === 'both') {
-                Grid._recalculateGridOrderSizesFromBlockchain(manager, ORDER_TYPES.BUY);
-            }
-            if (orderType === ORDER_TYPES.SELL || orderType === 'both') {
-                Grid._recalculateGridOrderSizesFromBlockchain(manager, ORDER_TYPES.SELL);
-            }
-        } catch (err) {
-            manager.logger?.log?.(
-                `Error recalculating grid from blockchain snapshot: ${err.message}`,
-                'error'
-            );
-            throw err;
+        if (!fromBlockchainTimer && manager.config?.accountId) {
+            await manager.fetchAccountTotals(manager.config.accountId);
         }
+        if (orderType === ORDER_TYPES.BUY || orderType === 'both') Grid._recalculateGridOrderSizesFromBlockchain(manager, ORDER_TYPES.BUY);
+        if (orderType === ORDER_TYPES.SELL || orderType === 'both') Grid._recalculateGridOrderSizesFromBlockchain(manager, ORDER_TYPES.SELL);
     }
 
     /**
-     * Convert buy/sell update flags to orderType string.
-     * Helper to reduce code repetition when determining which sides need updates.
-     *
-     * @param {boolean} buyUpdated - Whether buy side was updated
-     * @param {boolean} sellUpdated - Whether sell side was updated
-     * @returns {string} 'both', 'buy', or 'sell'
-     * @private
-     */
-    /**
-     * Update order sizes in existing grid based on cache funds and total grid allocation.
-     * Keeps grid structure intact (prices, spread, active/virtual states) but recalculates all order sizes.
-     * Uses only cacheFunds + total.grid for sizing (does NOT include available.funds).
-     * Used when reloading grid to maintain consistent sizing across restarts.
-     *
-     * @param {Object} manager - OrderManager instance with existing grid
-     * @param {Object} cacheFunds - Cached funds { buy, sell } from previous rotations
-     * @returns {void} Updates orders in-place via manager._updateOrder()
-     * @example
-     * // After loading grid, update all order sizes based on cache and grid allocation
-     * const cacheFunds = accountOrders.loadCacheFunds(botKey) || { buy: 0, sell: 0 };
-     * Grid.updateGridOrderSizes(manager, cacheFunds);
-     */
-    static updateGridOrderSizes(manager, cacheFunds = { buy: 0, sell: 0 }) {
-        if (!manager) throw new Error('updateGridOrderSizes requires a manager instance');
-
-        const config = manager.config || {};
-        const cacheBuy = Number(cacheFunds?.buy || 0);
-        const cacheSell = Number(cacheFunds?.sell || 0);
-
-        // Get grid allocation
-        const gridBuy = manager.funds?.total?.grid?.buy || 0;
-        const gridSell = manager.funds?.total?.grid?.sell || 0;
-
-        // Get available funds
-        const availableBuy = manager.funds?.available?.buy || 0;
-        const availableSell = manager.funds?.available?.sell || 0;
-
-        // Total to distribute: cache + grid + available
-        const totalBuy = cacheBuy + gridBuy + availableBuy;
-        const totalSell = cacheSell + gridSell + availableSell;
-
-        manager.logger?.log(
-            `Updating grid order sizes - Buy: cache=${cacheBuy.toFixed(8)} + grid=${gridBuy.toFixed(8)} + available=${availableBuy.toFixed(8)} = ${totalBuy.toFixed(8)}`,
-            'info'
-        );
-        manager.logger?.log(
-            `Updating grid order sizes - Sell: cache=${cacheSell.toFixed(8)} + grid=${gridSell.toFixed(8)} + available=${availableSell.toFixed(8)} = ${totalSell.toFixed(8)}`,
-            'info'
-        );
-
-        // Get all buy and sell orders by their current position in grid
-        const allOrders = Array.from(manager.orders.values());
-        const buyOrders = filterOrdersByType(allOrders, ORDER_TYPES.BUY);
-        const sellOrders = filterOrdersByType(allOrders, ORDER_TYPES.SELL);
-
-        // Validate manager.assets is initialized before using for precision
-        if (!manager.assets || typeof manager.assets !== 'object') {
-            manager.logger?.log(`ERROR: manager.assets not initialized. Cannot update grid order sizes.`, 'error');
-            return;
-        }
-
-        const { A: precA, B: precB } = getPrecisionsForManager(manager.assets);
-
-        // Calculate new sizes using same weighting algorithm
-        // Pass 0 as availableFunds since we use totalBuy/totalSell as input context
-        const buyNewSizes = calculateRotationOrderSizes(
-            totalBuy,
-            0,
-            buyOrders.length,
-            ORDER_TYPES.BUY,
-            config,
-            0,
-            precB
-        );
-
-        const sellNewSizes = calculateRotationOrderSizes(
-            totalSell,
-            0,
-            sellOrders.length,
-            ORDER_TYPES.SELL,
-            config,
-            0,
-            precA
-        );
-
-        // Update buy orders with new sizes
-        Grid._updateOrdersForSide(manager, ORDER_TYPES.BUY, buyNewSizes, buyOrders);
-
-        // Update sell orders with new sizes
-        Grid._updateOrdersForSide(manager, ORDER_TYPES.SELL, sellNewSizes, sellOrders);
-
-        // NOTE: `pendingProceeds` handling removed; no persistence needed.
-
-        // Recalculate funds after updating sizes
-        manager.recalculateFunds();
-
-        // Calculate and cache surplus for Buy side
-        if (precB !== undefined && precB !== null) {
-            const totalInput = floatToBlockchainInt(totalBuy, precB);
-            let totalAllocated = 0;
-            buyNewSizes.forEach(s => totalAllocated += floatToBlockchainInt(s, precB));
-            const surplus = blockchainToFloat(totalInput - totalAllocated, precB);
-
-            if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
-            manager.funds.cacheFunds.buy = surplus;
-        }
-
-        // Calculate and cache surplus for Sell side
-        if (precA !== undefined && precA !== null) {
-            const totalInput = floatToBlockchainInt(totalSell, precA);
-            let totalAllocated = 0;
-            sellNewSizes.forEach(s => totalAllocated += floatToBlockchainInt(s, precA));
-            const surplus = blockchainToFloat(totalInput - totalAllocated, precA);
-
-            if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
-            manager.funds.cacheFunds.sell = surplus;
-        }
-
-        manager.logger?.log('Grid order sizes updated', 'info');
-        manager.logger?.logFundsStatus && manager.logger.logFundsStatus(manager);
-        manager.logger?.logOrderGrid && manager.logger.logOrderGrid(Array.from(manager.orders.values()), config.startPrice);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    // SECTION 3: GRID COMPARISON & PERSISTENCE
-    // ════════════════════════════════════════════════════════════════════════════════
-    // Compare calculated vs persisted grids and persist state to disk
-
-    /**
-     * Compare calculated grid with persisted grid (separately by side) and return metrics.
-     * Independently compares buy and sell orders, calculates relative squared differences,
-     * then triggers updateGridOrderSizesForSide for each side exceeding threshold.
-     * 
-     * Metric formula: sum of ((calculatedSize - persistedSize) / persistedSize)^2 / count per side
-     * 
-     * This metric helps detect significant divergence between the current in-memory grid
-     * (after updateGridOrderSizes) and what was previously persisted to disk.
-     * 
-     * When a side's RMS metric exceeds GRID_COMPARISON.RMS_PERCENTAGE, automatically triggers
-     * updateGridOrderSizesForSide to regenerate sizes for that side only.
-     * 
-     * @param {Array} calculatedGrid - Current grid orders from manager (result of updateGridOrderSizes)
-     * @param {Array} persistedGrid - Grid orders loaded from orders.json
-     * @param {Object} [manager] - OrderManager instance (optional, required to trigger auto-update)
-     * @param {Object} [cacheFunds] - Cached funds { buy, sell } (optional, used for auto-update)
-     * @returns {Object} Comparison results:
-     *   {
-     *     buy: { metric: number, updated: boolean },
-     *     sell: { metric: number, updated: boolean },
-     *     totalMetric: number (average of buy and sell)
-     *   }
-     *   Each metric: 0 = perfect match, higher = more divergence
-     *   updated: true if auto-update was triggered for that side
-     * 
-     * @example
-     * // Compare with auto-update by side
-     * const result = Grid.compareGrids(
-     *   Array.from(manager.orders.values()),
-     *   accountOrders.loadBotGrid(botKey),
-     *   manager,
-     *   accountOrders.loadCacheFunds(botKey)
-     * );
-     * console.log(`Buy divergence: ${result.buy.metric.toFixed(6)}, updated: ${result.buy.updated}`);
-     * console.log(`Sell divergence: ${result.sell.metric.toFixed(6)}, updated: ${result.sell.updated}`);
+     * Compare ideal grid vs persisted grid to detect divergence.
      */
     static compareGrids(calculatedGrid, persistedGrid, manager = null, cacheFunds = null) {
-        if (!Array.isArray(calculatedGrid) || !Array.isArray(persistedGrid)) {
-            return { buy: { metric: 0, updated: false }, sell: { metric: 0, updated: false }, totalMetric: 0 };
-        }
+        if (!Array.isArray(calculatedGrid) || !Array.isArray(persistedGrid)) return { buy: { metric: 0, updated: false }, sell: { metric: 0, updated: false }, totalMetric: 0 };
 
-        const { ORDER_STATES } = require('../constants'); // Moved up for use in filtering
+        const filterForRms = (orders, type) => filterOrdersByTypeAndState(orders, type, ORDER_STATES.PARTIAL).filter(o => !o.isDoubleOrder);
+        const calculatedBuys = filterForRms(calculatedGrid, ORDER_TYPES.BUY);
+        const calculatedSells = filterForRms(calculatedGrid, ORDER_TYPES.SELL);
+        const persistedBuys = filterForRms(persistedGrid, ORDER_TYPES.BUY);
+        const persistedSells = filterForRms(persistedGrid, ORDER_TYPES.SELL);
 
-        // Helper: Filter orders for RMS divergence calculation
-        // EXCLUDES: PARTIAL state orders (transient, being filled) and DOUBLE orders (merged dust with inflated sizes)
-        // INCLUDES: ACTIVE and VIRTUAL orders only (these represent the true intended grid structure)
-        // This ensures divergence metric reflects actual grid health, not temporary states
-        const filterForRmsCalculation = (orders, orderType) => {
-            return filterOrdersByTypeAndState(orders, orderType, ORDER_STATES.PARTIAL)
-                .filter(o => !o.isDoubleOrder);  // Exclude merged dust orders
-        };
-
-        const calculatedBuys = filterForRmsCalculation(calculatedGrid, ORDER_TYPES.BUY);
-        const calculatedSells = filterForRmsCalculation(calculatedGrid, ORDER_TYPES.SELL);
-        const persistedBuys = filterForRmsCalculation(persistedGrid, ORDER_TYPES.BUY);
-        const persistedSells = filterForRmsCalculation(persistedGrid, ORDER_TYPES.SELL);
-
-        // Helper: Calculate ideal orders if manager is present
-        // This ensures the comparison reflects what the grid SHOULD be (with available funds included)
-        // rather than what it IS (potentially stale sizes).
-        const getIdealOrders = (orders, type) => {
-            if (!manager || orders.length === 0) return orders;
-
-            // Validate manager.assets is initialized before using for precision
-            if (!manager.assets || typeof manager.assets !== 'object') {
-                manager.logger?.log?.(`WARNING: manager.assets not initialized in getIdealOrders. Skipping ideal comparison.`, 'warn');
-                return orders;
-            }
-
-            const isBuy = type === ORDER_TYPES.BUY;
-            const cache = isBuy ? Number(cacheFunds?.buy || 0) : Number(cacheFunds?.sell || 0);
-            const grid = isBuy
-                ? manager.funds?.total?.grid?.buy || 0
-                : manager.funds?.total?.grid?.sell || 0;
-            const available = isBuy
-                ? manager.funds?.available?.buy || 0
-                : manager.funds?.available?.sell || 0;
-
-            // CRITICAL FIX: Since the 'orders' passed to this helper now exclude partial orders,
-            // we must also subtract the capital held in those partial orders from the total budget.
-            // Otherwise, we'd be trying to distribute 100% of funds across only a partial set of slots,
-            // leading to artificial divergence.
-            // Filter for PARTIAL orders of specific type and sum their sizes
-            const partialsValue = sumOrderSizes(calculatedGrid.filter(o => o && o.type === type && o.state === ORDER_STATES.PARTIAL));
-
-            const totalInput = Math.max(0, cache + grid + available - partialsValue);
-            const precision = getPrecisionByOrderType(manager.assets, isBuy ? ORDER_TYPES.BUY : ORDER_TYPES.SELL);
-            const config = manager.config || {};
-
+        const getIdeals = (orders, type) => {
+            if (!manager || orders.length === 0 || !manager.assets) return orders;
+            const side = type === ORDER_TYPES.BUY ? 'buy' : 'sell';
+            const total = (cacheFunds?.[side] || 0) + (manager.funds?.total?.grid?.[side] || 0) + (manager.funds?.available?.[side] || 0);
+            const partials = sumOrderSizes(calculatedGrid.filter(o => o && o.type === type && o.state === ORDER_STATES.PARTIAL));
+            const budget = Math.max(0, total - partials);
+            const precision = getPrecisionByOrderType(manager.assets, type);
             try {
-                const idealSizes = calculateRotationOrderSizes(
-                    totalInput,
-                    0, // gridValue is covered by totalInput
-                    orders.length, // Use the length of the filtered orders
-                    type,
-                    config,
-                    0,
-                    precision
-                );
-
-                // Validate size array length matches order count
-                if (!Array.isArray(idealSizes) || idealSizes.length !== orders.length) {
-                    manager.logger?.log?.(`WARNING: Ideal sizes length mismatch: expected ${orders.length}, got ${idealSizes?.length || 0}`, 'warn');
-                    return orders; // Fallback to original
-                }
-
-                // Return clones with ideal sizes
+                const idealSizes = calculateRotationOrderSizes(budget, 0, orders.length, type, manager.config, 0, precision);
                 return orders.map((o, i) => ({ ...o, size: idealSizes[i] }));
-            } catch (e) {
-                manager.logger?.log?.(`Warning: failed to calc ideal sizes for comparison: ${e.message}`, 'warn');
-                return orders; // Fallback to original
-            }
+            } catch (e) { return orders; }
         };
 
-        // If manager is provided, compare "Ideal" vs "Persisted"
-        // If not, compare "Calculated" (current) vs "Persisted"
-        const idealBuys = manager ? getIdealOrders(calculatedBuys, ORDER_TYPES.BUY) : calculatedBuys;
-        const idealSells = manager ? getIdealOrders(calculatedSells, ORDER_TYPES.SELL) : calculatedSells;
+        const buyMetric = calculateGridSideDivergenceMetric(getIdeals(calculatedBuys, ORDER_TYPES.BUY), persistedBuys, 'buy');
+        const sellMetric = calculateGridSideDivergenceMetric(getIdeals(calculatedSells, ORDER_TYPES.SELL), persistedSells, 'sell');
 
-        // Compare each side independently
-        const buyMetric = calculateGridSideDivergenceMetric(idealBuys, persistedBuys, 'buy');
-        const sellMetric = calculateGridSideDivergenceMetric(idealSells, persistedSells, 'sell');
-
-        // Calculate average metric
-        let totalMetric = 0;
-        if (buyMetric >= 0 && sellMetric >= 0) {
-            totalMetric = (buyMetric + sellMetric) / 2;
-        } else if (buyMetric >= 0) {
-            totalMetric = buyMetric;
-        } else if (sellMetric >= 0) {
-            totalMetric = sellMetric;
-        }
-
-        // Track which sides were updated
-        let buyUpdated = false;
-        let sellUpdated = false;
-
-        // Mark BUY side for update if RMS metric exceeds threshold
-        if (manager && buyMetric > (GRID_COMPARISON.RMS_PERCENTAGE / 100)) {
-            const metricPercent = buyMetric * 100;  // RMS is 0-1 scale, convert to percentage (0-100)
-            const threshold = GRID_COMPARISON.RMS_PERCENTAGE;
-            manager.logger?.log?.(
-                `Buy side RMS divergence ${metricPercent.toFixed(2)}% exceeds threshold ${threshold}%. Marking for grid update.`,
-                'info'
-            );
-
-            // Track which sides were updated so caller can apply grid updates
-            if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
-            if (!manager._gridSidesUpdated.includes(ORDER_TYPES.BUY)) {
+        let buyUpdated = false, sellUpdated = false;
+        if (manager) {
+            const limit = GRID_COMPARISON.RMS_PERCENTAGE / 100;
+            if (buyMetric > limit) {
+                if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
                 manager._gridSidesUpdated.push(ORDER_TYPES.BUY);
+                buyUpdated = true;
             }
-
-            buyUpdated = true;
-
-            manager.logger?.log?.(
-                `Buy side marked for grid update due to high divergence metric (${buyMetric.toFixed(6)})`,
-                'info'
-            );
-        }
-
-        // Mark SELL side for update if RMS metric exceeds threshold
-        if (manager && sellMetric > (GRID_COMPARISON.RMS_PERCENTAGE / 100)) {
-            const metricPercent = sellMetric * 100;  // RMS is 0-1 scale, convert to percentage (0-100)
-            const threshold = GRID_COMPARISON.RMS_PERCENTAGE;
-            manager.logger?.log?.(
-                `Sell side RMS divergence ${metricPercent.toFixed(2)}% exceeds threshold ${threshold}%. Marking for grid update.`,
-                'info'
-            );
-
-            // Track which sides were updated so caller can apply grid updates
-            if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
-            if (!manager._gridSidesUpdated.includes(ORDER_TYPES.SELL)) {
+            if (sellMetric > limit) {
+                if (!manager._gridSidesUpdated) manager._gridSidesUpdated = [];
                 manager._gridSidesUpdated.push(ORDER_TYPES.SELL);
+                sellUpdated = true;
             }
-
-            sellUpdated = true;
-
-            manager.logger?.log?.(
-                `Sell side marked for grid update due to high divergence metric (${sellMetric.toFixed(6)})`,
-                'info'
-            );
         }
-
-        return {
-            buy: { metric: buyMetric, updated: buyUpdated },
-            sell: { metric: sellMetric, updated: sellUpdated },
-            totalMetric: totalMetric
-        };
+        return { buy: { metric: buyMetric, updated: buyUpdated }, sell: { metric: sellMetric, updated: sellUpdated }, totalMetric: (buyMetric + sellMetric) / 2 };
     }
 
     /**
-     * Clear and persist cacheFunds for a given side ('buy' or 'sell').
-     * Centralizes duplicated logic used after grid regeneration.
-     */
-    static async _clearAndPersistCacheFunds(manager, side) {
-        try {
-            manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
-            manager.funds.cacheFunds[side] = 0;
-            const { AccountOrders } = require('../account_orders');
-            if (manager.config && manager.config.botKey) {
-                const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
-                await accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-                manager.logger?.log?.(`Cleared persisted cacheFunds.${side} after regeneration`, 'info');
-            } else {
-                manager.logger?.log?.(`Cleared in-memory cacheFunds.${side} after regeneration (no botKey)`, 'info');
-            }
-        } catch (e) {
-            manager.logger?.log?.(`Failed to clear/persist cacheFunds after ${side} regeneration: ${e.message}`, 'warn');
-        }
-    }
-
-    /**
-     * Persist current cacheFunds for a given side without clearing it.
-     */
-    static async _persistCacheFunds(manager, side) {
-        try {
-            manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
-            // Ensure side exists
-            if (manager.funds.cacheFunds[side] === undefined) manager.funds.cacheFunds[side] = 0;
-
-            const { AccountOrders } = require('../account_orders');
-            if (manager.config && manager.config.botKey) {
-                const accountDb = manager.accountOrders || new AccountOrders({ botKey: manager.config.botKey });
-                await accountDb.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
-                manager.logger?.log?.(`Persisted cacheFunds.${side} (${Number(manager.funds.cacheFunds[side]).toFixed(8)}) after regeneration`, 'debug');
-            }
-        } catch (e) {
-            manager.logger?.log?.(`Failed to persist cacheFunds after ${side} regeneration: ${e.message}`, 'warn');
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    // SECTION 4: INTERNAL UTILITIES
-    // ════════════════════════════════════════════════════════════════════════════════
-    // Utility methods for internal grid operations and diagnostics
-
-    /**
-     * Update a collection of orders for a specific side using provided sizes.
-     * Centralizes duplicated buy/sell update loops.
-     * @param {Object} manager
-     * @param {string} orderType
-     * @param {Array<number>} newSizes
-     * @param {Array<Object>} [orders] - optional pre-fetched orders
-     */
-    static _updateOrdersForSide(manager, orderType, newSizes, orders = null) {
-        const isBuy = orderType === ORDER_TYPES.BUY;
-        const sideName = isBuy ? 'buy' : 'sell';
-        const ords = Array.isArray(orders) ? orders : Array.from(manager.orders.values()).filter(o => o.type === orderType);
-        if (ords.length === 0) {
-            manager.logger?.log(`No ${sideName} orders found to update`, 'warn');
-            return;
-        }
-
-        // Validate size array length matches order count to prevent silent data corruption
-        if (newSizes.length !== ords.length) {
-            manager.logger?.log(`ERROR: Size array length mismatch for ${sideName}: expected ${ords.length}, got ${newSizes.length}. Aborting update.`, 'error');
-            return;
-        }
-
-        ords.forEach((order, i) => {
-            const newSize = newSizes[i] || 0;
-            // CRITICAL: Always update if order.size is undefined/null to prevent data corruption
-            // NaN comparisons (undefined - number) always return false, silently skipping updates
-            const currentSize = order.size;
-            const needsUpdate = currentSize === undefined || currentSize === null ||
-                !Number.isFinite(currentSize) || Math.abs(currentSize - newSize) > 1e-8;
-            if (needsUpdate) {
-                const oldSizeStr = (currentSize === undefined || currentSize === null)
-                    ? 'undefined'
-                    : (Number.isFinite(currentSize) ? currentSize.toFixed(8) : String(currentSize));
-                manager.logger?.log(
-                    `${sideName.charAt(0).toUpperCase() + sideName.slice(1)} ${order.id} @ ${order.price?.toFixed(6) || 'N/A'}: ${oldSizeStr} → ${newSize.toFixed(8)}`,
-                    'debug'
-                );
-                const updatedOrder = { ...order, size: newSize };
-                manager._updateOrder(updatedOrder);
-            }
-        });
-    }
-
-    /**
-     * Allocate `totalFunds` across `n` slots using geometric weights.
-     * Handles reverse ordering, min-size checks with precision-aware integer
-     * comparison, and a fallback retry without min-size enforcement.
-     *
-     * @returns {Array<number>} sizes
-     */
-    /**
-     * Allocate funds across orders using geometric weight distribution.
-     *
-     * Weight Distribution Algorithm:
-     * ================================
-     * This function creates a proportional allocation across n orders based on weight distribution.
-     * The key formula is: weight[i] = (1 - increment)^(i * n)
-     *
-     * Where:
-     * - base = (1 - incrementFactor) ranges from 0.98 (1% increment) to 0.99 (0.5% increment)
-     * - idx = order index (0 = closest to market, n-1 = furthest from market)
-     * - weight = distribution coefficient (-1 to 2) controlling shape:
-     *   - weight = -1: Super Valley (aggressive concentration at edges)
-     *   - weight = 0:  Valley (linear increase toward edges)
-     *   - weight = 0.5: Neutral (balanced distribution)
-     *   - weight = 1:  Mountain (linear increase toward center/market)
-     *   - weight = 2:  Super Mountain (aggressive concentration at center)
-     *
-     * Examples (5 orders, 1% increment, 100 units total):
-     * - weight=-1: [55.3, 39.2, 3.2, 1.8, 0.5] (edges get most)
-     * - weight=0:  [20.0, 20.0, 20.0, 20.0, 20.0] (equal split)
-     * - weight=1:  [0.5, 1.8, 3.2, 39.2, 55.3] (center gets most)
-     *
-     * @param {number} totalFunds - Total amount to distribute
-     * @param {number} n - Number of orders to allocate across
-     * @param {number} weight - Distribution shape (-1 to 2)
-     * @param {number} incrementFactor - Price increment as decimal (0.01 for 1%)
-     * @param {boolean} reverse - If true, reverse the allocation (for sell orders)
-     * @param {number} minSize - Minimum order size threshold (0 to disable)
-     * @param {number} precision - Blockchain precision for size quantization
-     * @returns {Array} Array of order sizes
-     */
-    /**
-     * Return a normalized funds snapshot for the manager.
-     * Includes chain/allocated/grid/cache/virtuel totals used across sizing.
-     */
-    static _getFundSnapshot(manager) {
-        const mgrSnap = (manager.getChainFundsSnapshot && typeof manager.getChainFundsSnapshot === 'function') ? manager.getChainFundsSnapshot() : {};
-        return {
-            chainFreeBuy: Number(mgrSnap.chainFreeBuy || 0),
-            chainFreeSell: Number(mgrSnap.chainFreeSell || 0),
-            chainTotalBuy: Number(mgrSnap.chainTotalBuy || 0),
-            chainTotalSell: Number(mgrSnap.chainTotalSell || 0),
-            allocatedBuy: Number(mgrSnap.allocatedBuy || 0),
-            allocatedSell: Number(mgrSnap.allocatedSell || 0),
-            gridBuy: Number(manager.funds?.total?.grid?.buy || 0),
-            gridSell: Number(manager.funds?.total?.grid?.sell || 0),
-            cacheBuy: Number(manager.funds?.cacheFunds?.buy || 0),
-            cacheSell: Number(manager.funds?.cacheFunds?.sell || 0),
-            virtuelBuy: Number(manager.funds?.virtuel?.buy || 0),
-            virtuelSell: Number(manager.funds?.virtuel?.sell || 0),
-        };
-    }
-
-    static _logSizingInput(manager, snap) {
-        manager.logger.log(
-            `DEBUG Grid Sizing Input: buyFunds=${Number(snap.allocatedBuy).toFixed(8)} (allocated=${Number(snap.allocatedBuy).toFixed(8)}, total=${Number(snap.chainTotalBuy).toFixed(8)}, free=${Number(snap.chainFreeBuy).toFixed(8)}), ` +
-            `sellFunds=${Number(snap.allocatedSell).toFixed(8)} (allocated=${Number(snap.allocatedSell).toFixed(8)}, total=${Number(snap.chainTotalSell).toFixed(8)}, free=${Number(snap.chainFreeSell).toFixed(8)})`,
-            'info'
-        );
-    }
-
-    /**
-     * Calculate the current spread percentage based on grid order prices.
-     * Combines on-chain ACTIVE + PARTIAL orders (which affect real spread).
-     * Falls back to VIRTUAL orders if no on-chain orders exist.
-     *
-     * @param {Object} manager - OrderManager instance with grid orders
-     * @returns {number} Current spread as percentage (e.g., 5.0 for 5%)
+     * Calculate current market spread using on-chain orders.
      */
     static calculateCurrentSpread(manager) {
         const activeBuys = manager.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.ACTIVE);
@@ -1307,780 +340,167 @@ class Grid {
         const partialBuys = manager.getOrdersByTypeAndState(ORDER_TYPES.BUY, ORDER_STATES.PARTIAL);
         const partialSells = manager.getOrdersByTypeAndState(ORDER_TYPES.SELL, ORDER_STATES.PARTIAL);
 
-        // Combine ACTIVE + PARTIAL (both are on-chain and affect the actual spread)
         const onChainBuys = [...activeBuys, ...partialBuys];
         const onChainSells = [...activeSells, ...partialSells];
 
-        // Include only VIRTUAL BUY and SELL orders (not SPREAD)
-        // SPREAD type is neutral and can't be classified by TYPE alone without price comparison
-        const virtualBuys = Array.from(manager.orders.values()).filter(o =>
-            o.type === ORDER_TYPES.BUY &&
-            o.state === ORDER_STATES.VIRTUAL
-        );
-        const virtualSells = Array.from(manager.orders.values()).filter(o =>
-            o.type === ORDER_TYPES.SELL &&
-            o.state === ORDER_STATES.VIRTUAL
-        );
+        const virtualBuys = Array.from(manager.orders.values()).filter(o => o.type === ORDER_TYPES.BUY && o.state === ORDER_STATES.VIRTUAL);
+        const virtualSells = Array.from(manager.orders.values()).filter(o => o.type === ORDER_TYPES.SELL && o.state === ORDER_STATES.VIRTUAL);
 
         return calculateSpreadFromOrders(onChainBuys, onChainSells, virtualBuys, virtualSells);
     }
 
     /**
-     * Check if the spread condition is met (spread too wide) and update manager.outOfSpread flag.
-     * Only flags as out-of-spread if both BUY and SELL sides have orders.
-     *
-     * When spread is too wide, fetches current market price to make fund comparison fair.
-     *
-     * @param {Object} manager - OrderManager instance with config, orders, and logger
-     * @param {Object} BitShares - BitShares API instance (optional, for fetching current price)
+     * Proactive spread correction check.
      */
     static async checkSpreadCondition(manager, BitShares, updateOrdersOnChainBatch = null) {
         const currentSpread = Grid.calculateCurrentSpread(manager);
-        // Threshold accounts for grid geometry: with N SPREAD orders, ACTIVE orders are N+1 steps apart
-        // Using SPREAD_WIDENING_MULTIPLIER provides buffer for natural grid spacing while catching true widening
-        const baseTargetSpread = manager.config.targetSpreadPercent + (manager.config.incrementPercent * GRID_LIMITS.SPREAD_WIDENING_MULTIPLIER);
+        const baseTarget = manager.config.targetSpreadPercent + (manager.config.incrementPercent * GRID_LIMITS.SPREAD_WIDENING_MULTIPLIER);
+        const targetSpread = baseTarget + (Array.from(manager.orders.values()).some(o => o.isDoubleOrder) ? manager.config.incrementPercent : 0);
 
-        // If a double order exists, allow an additional increment to spread threshold
-        // (double orders have extra funding which naturally widens spread on one side)
-        const hasDoubleOrder = Array.from(manager.orders.values()).some(order => order.isDoubleOrder);
-        const doubleOrderAdjustment = hasDoubleOrder ? manager.config.incrementPercent : 0;
-        const targetSpread = baseTargetSpread + doubleOrderAdjustment;
-
-        // Only trigger spread warning if we have at least one order on BOTH sides
         const buyCount = countOrdersByType(ORDER_TYPES.BUY, manager.orders);
         const sellCount = countOrdersByType(ORDER_TYPES.SELL, manager.orders);
 
-        const isOutOfSpread = shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount);
+        if (!shouldFlagOutOfSpread(currentSpread, targetSpread, buyCount, sellCount)) return { ordersPlaced: 0, partialsMoved: 0 };
 
-        if (!isOutOfSpread) {
-            // Spread is good - nothing to do
-            return { ordersPlaced: 0, partialsMoved: 0 };
-        }
+        manager.logger.log(`Spread too wide (${currentSpread.toFixed(2)}%), correcting...`, 'warn');
 
-        // Spread is too wide - IMMEDIATELY correct it (proactive approach)
-        manager.logger.log(
-            `Spread too wide (${currentSpread.toFixed(2)}% > ${targetSpread}%), correcting immediately...`,
-            'warn'
-        );
-
-        // Fetch current market price for fair fund comparison (market may have moved since startup)
-        let currentMarketPrice = manager.config.startPrice;  // Fallback to startup price
+        let marketPrice = manager.config.startPrice;
         if (BitShares) {
-            try {
-                const { derivePrice } = require('./utils');
-                // Try pool price first (most real-time), fallback to market (order book) price
-                let derivedPrice = await derivePrice(
-                    BitShares,
-                    manager.assets.assetA.symbol,
-                    manager.assets.assetB.symbol,
-                    'pool'  // Prefer pool price for real-time accuracy
-                );
-
-                // If pool price not available, try market (order book) price
-                if (!derivedPrice || derivedPrice <= 0) {
-                    derivedPrice = await derivePrice(
-                        BitShares,
-                        manager.assets.assetA.symbol,
-                        manager.assets.assetB.symbol,
-                        'market'  // Fallback to order book price
-                    );
-                }
-
-                if (derivedPrice && derivedPrice > 0) {
-                    currentMarketPrice = derivedPrice;
-                    manager.logger.log(
-                        `Fetched current market price: ${currentMarketPrice.toFixed(8)} (was ${manager.config.startPrice.toFixed(8)} at startup)`,
-                        'debug'
-                    );
-                }
-            } catch (err) {
-                manager.logger.log(
-                    `Could not fetch current market price for spread analysis, using startup price: ${err.message}`,
-                    'warn'
-                );
-            }
+            const { derivePrice } = require('./utils');
+            const derived = await derivePrice(BitShares, manager.assets.assetA.symbol, manager.assets.assetB.symbol, 'pool');
+            if (derived) marketPrice = derived;
         }
 
-        // Determine which side should get the extra order based on funds
-        const fundDecision = Grid.determineOrderSideByFunds(manager, currentMarketPrice);
-        manager.logger.log(
-            `Fund analysis: ${fundDecision.reason}`,
-            'info'
-        );
+        const decision = Grid.determineOrderSideByFunds(manager, marketPrice);
+        if (!decision.side) return { ordersPlaced: 0, partialsMoved: 0 };
 
-        // Prepare spread correction orders and partial moves
-        const spreadCorrectionOrders = await Grid.prepareSpreadCorrectionOrders(manager, fundDecision.side);
-
-        // If no orders could be prepared, return without broadcasting
-        if (!spreadCorrectionOrders.ordersToPlace || spreadCorrectionOrders.ordersToPlace.length === 0) {
-            manager.logger.log(
-                `Spread correction skipped: no orders to place`,
-                'debug'
-            );
-            return { ordersPlaced: 0, partialsMoved: 0 };
+        const correction = await Grid.prepareSpreadCorrectionOrders(manager, decision.side);
+        if (correction.ordersToPlace.length > 0 && updateOrdersOnChainBatch) {
+            await updateOrdersOnChainBatch(correction);
+            manager.recalculateFunds();
+            return { ordersPlaced: correction.ordersToPlace.length, partialsMoved: 0 };
         }
-
-        // IMMEDIATELY broadcast orders on-chain if callback provided
-        if (updateOrdersOnChainBatch) {
-            try {
-                manager.logger.log(
-                    `Broadcasting spread correction: ${spreadCorrectionOrders.ordersToPlace.length} order(s), ` +
-                    `${spreadCorrectionOrders.partialMoves.length} partial move(s)`,
-                    'info'
-                );
-
-                const result = await updateOrdersOnChainBatch(spreadCorrectionOrders);
-
-                // Recalculate funds to update grid accounting after orders are placed on-chain
-                manager.recalculateFunds();
-
-                manager.logger.log(
-                    `✓ Spread correction complete: ${spreadCorrectionOrders.ordersToPlace.length} order(s) placed, ` +
-                    `${spreadCorrectionOrders.partialMoves.length} partial(s) moved`,
-                    'info'
-                );
-
-                return {
-                    ordersPlaced: spreadCorrectionOrders.ordersToPlace.length,
-                    partialsMoved: spreadCorrectionOrders.partialMoves.length
-                };
-            } catch (err) {
-                manager.logger.log(
-                    `✗ Error broadcasting spread correction orders: ${err.message}`,
-                    'error'
-                );
-                return { ordersPlaced: 0, partialsMoved: 0 };
-            }
-        } else {
-            // No callback provided - just prepare orders (don't broadcast)
-            manager.logger.log(
-                `Spread correction prepared but not broadcast (no updateOrdersOnChainBatch callback)`,
-                'debug'
-            );
-            return {
-                ordersPlaced: spreadCorrectionOrders.ordersToPlace.length,
-                partialsMoved: spreadCorrectionOrders.partialMoves.length
-            };
-        }
+        return { ordersPlaced: 0, partialsMoved: 0 };
     }
 
-    // ════════════════════════════════════════════════════════════════════════════════
-    // SECTION 5: GRID HEALTH & CORRECTIONS
-    // ════════════════════════════════════════════════════════════════════════════════
-    // Health checks and automatic correction of grid issues
-
     /**
-     * Check grid structural health and handle dual-side dust recovery.
-     *
-     * Structural Check: Logs violations of the [Edge] Virtual -> Active -> Partial -> Spread [Center] flow.
-     * Dust Recovery: If BOTH sides have a 'dust' partial order, attempts to refill them to full ACTIVE orders.
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {Function} updateOrdersOnChainBatch - Callback for broadcasting updates
+     * Grid health check for structural violations.
      */
     static async checkGridHealth(manager, updateOrdersOnChainBatch = null) {
         if (!manager) return;
-
         const allOrders = Array.from(manager.orders.values());
-        const { GRID_LIMITS, ORDER_TYPES, ORDER_STATES } = require('../constants');
-        const dustThreshold = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE;
+        const sells = allOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price);
+        const buys = allOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => a.price - b.price);
 
-        // 1. Gather all orders and sort them by price distance from market
-        const sells = allOrders.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => a.price - b.price); // Lowest sell (near market) first
-        const buys = allOrders.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => b.price - a.price);   // Highest buy (near market) first
-
-        // 2. Structural Logging (Directional Flow & Multi-Partial Check)
-        const logHealthViolations = (orders, type) => {
-            let seenActive = false;
+        const logViolations = (orders, label) => {
             let seenVirtual = false;
-            
-            // Pending-Aware Check: determine if opposite side has a delayed rotation
-            const oppositeType = type === 'SELL' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
-            const hasOppositeWithPendingRotation = allOrders.some(o => o.type === oppositeType && o.pendingRotation);
-
-            // Multi-Partial Check
-            const partials = orders.filter(o => o.state === ORDER_STATES.PARTIAL);
-            if (partials.length > 1) {
-                manager.logger.log(`Grid health violation (${type}): Multiple (${partials.length}) partial orders detected on one side.`, 'warn');
-            }
-
-            // Iterate from market outwards
+            const hasOppositePending = allOrders.some(o => o.type !== label && o.pendingRotation);
             for (const o of orders) {
-                if (o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) seenActive = true;
-                if (o.state === ORDER_STATES.VIRTUAL) {
-                    seenVirtual = true;
-                }
-                
-                // Only log structural violation if it's not an intentional gap from a delayed rotation
-                if ((o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) && seenVirtual && !hasOppositeWithPendingRotation) {
-                    manager.logger.log(`Grid health violation (${type}): ON-CHAIN order ${o.id} is further from market than a VIRTUAL slot.`, 'warn');
+                if (o.state === ORDER_STATES.VIRTUAL) seenVirtual = true;
+                if ((o.state === ORDER_STATES.ACTIVE || o.state === ORDER_STATES.PARTIAL) && seenVirtual && !hasOppositePending) {
+                    manager.logger.log(`Health violation (${label}): ${o.id} is further than VIRTUAL slot.`, 'warn');
                 }
             }
         };
-        logHealthViolations(sells, 'SELL');
-        logHealthViolations(buys, 'BUY');
-
-        // 3. Identify dust partials on each side
-        const findDustPartial = (orders, side) => {
-            const partials = orders.filter(o => o.state === ORDER_STATES.PARTIAL);
-            if (partials.length === 0) return null;
-
-            // Take the first partial
-            const p = partials[0];
-            
-            // Find the nearest ACTIVE order to compare size
-            const pIdx = orders.findIndex(o => o.id === p.id);
-            let nearestActive = null;
-            
-            // Look "inward" (closer to market)
-            for (let i = pIdx - 1; i >= 0; i--) {
-                if (orders[i].state === ORDER_STATES.ACTIVE) {
-                    nearestActive = orders[i];
-                    break;
-                }
-            }
-            // If not found, look "outward" (further from market)
-            if (!nearestActive) {
-                for (let i = pIdx + 1; i < orders.length; i++) {
-                    if (orders[i].state === ORDER_STATES.ACTIVE) {
-                        nearestActive = orders[i];
-                        break;
-                    }
-                }
-            }
-
-            if (nearestActive && nearestActive.size > 0) {
-                const ratio = (p.size / nearestActive.size) * 100;
-                
-                if (ratio < dustThreshold) {
-                    const { allocateFundsByWeights, getPrecisionForSide } = require('./utils');
-                    const sideType = side === 'buy' ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
-                    const precision = getPrecisionForSide(manager.assets, side);
-                    
-                    // 1. All grid positions (ACTIVE + PARTIAL + VIRTUAL)
-                    const allSlotsOnSide = orders.filter(o => 
-                        o.state === ORDER_STATES.ACTIVE || 
-                        o.state === ORDER_STATES.PARTIAL || 
-                        o.state === ORDER_STATES.VIRTUAL
-                    );
-                    
-                    // 2. Full Side Budget: everything belonging to this side of the strategy
-                    // total.grid (committed + reserved) + cacheFunds (proceeds) + available (leftovers)
-                    const sideAvail = (manager.funds.cacheFunds[side] || 0) + (manager.funds.available[side] || 0);
-                    const totalStrategyBudget = (manager.funds.total.grid[side] || 0) + sideAvail;
-                    
-                    // 3. Calculate ideal geometric sizes using the full strategy scale
-                    const weight = side === 'buy' ? manager.config.weightDistribution.buy : manager.config.weightDistribution.sell;
-                    const incrementFactor = manager.config.incrementPercent / 100;
-
-                    const idealSizes = allocateFundsByWeights(
-                        totalStrategyBudget,
-                        allSlotsOnSide.length,
-                        weight,
-                        incrementFactor,
-                        false, // ALWAYS false because index 0 is always the market side in our sorted lists
-                        0,
-                        precision
-                    );
-                    
-                    const partialIdxInSlots = allSlotsOnSide.findIndex(o => o.id === p.id);
-                    const idealTargetSize = idealSizes[partialIdxInSlots] || nearestActive.size;
-
-                    const currentCache = manager.funds.cacheFunds[side] || 0;
-                    const neededExtra = idealTargetSize - p.size;
-                    
-                    // Always return the dust object if ratio is below threshold
-                    // refillAmount will be 0 if no cache is available
-                    const refillAmount = (neededExtra > 0 && currentCache > 0) ? Math.min(neededExtra, currentCache) : 0;
-                    const targetSize = p.size + refillAmount;
-                    
-                    return { partial: p, ratio, targetSize, refillAmount, side, isDust: true };
-                }
-            }
-            return null;
-        };
-
-        const buyDust = findDustPartial(buys, 'buy');
-        const sellDust = findDustPartial(sells, 'sell');
-
-        // Log side status for visibility
-        if (buyDust) {
-            manager.logger.log(`Grid health: BUY side has dust partial ${buyDust.partial.id} (${buyDust.ratio.toFixed(1)}%, target ${buyDust.targetSize.toFixed(8)}, cache refill ${buyDust.refillAmount.toFixed(8)})`, 'info');
-        }
-
-        if (sellDust) {
-            manager.logger.log(`Grid health: SELL side has dust partial ${sellDust.partial.id} (${sellDust.ratio.toFixed(1)}%, target ${sellDust.targetSize.toFixed(8)}, cache refill ${sellDust.refillAmount.toFixed(8)})`, 'info');
-        }
-
-        // 4. Dual-Side Dust Recovery (Only if BOTH have refillable amounts)
-        if (buyDust && sellDust && buyDust.refillAmount > 0 && sellDust.refillAmount > 0) {
-            manager.logger.log(
-                `Dual-side dust detected: Attempting refill...`,
-                'info'
-            );
-
-            const ordersToRotate = [];
-            // Refill amounts are already capped to available cache in findDustPartial
-            ordersToRotate.push({
-                oldOrder: { id: buyDust.partial.id, orderId: buyDust.partial.orderId, type: ORDER_TYPES.BUY, price: buyDust.partial.price },
-                newPrice: buyDust.partial.price,
-                newSize: buyDust.targetSize,
-                newGridId: buyDust.partial.id,
-                type: ORDER_TYPES.BUY
-            });
-            ordersToRotate.push({
-                oldOrder: { id: sellDust.partial.id, orderId: sellDust.partial.orderId, type: ORDER_TYPES.SELL, price: sellDust.partial.price },
-                newPrice: sellDust.partial.price,
-                newSize: sellDust.targetSize,
-                newGridId: sellDust.partial.id,
-                type: ORDER_TYPES.SELL
-            });
-
-            if (updateOrdersOnChainBatch) {
-                try {
-                    manager.logger.log(`Broadcasting refill: Buy +${buyDust.refillAmount.toFixed(8)}, Sell +${sellDust.refillAmount.toFixed(8)}`, 'info');
-                    const result = await updateOrdersOnChainBatch({
-                        ordersToPlace: [],
-                        ordersToRotate: ordersToRotate,
-                        partialMoves: []
-                    });
-
-                    if (result && result.executed) {
-                        // Success - consume the funds from cacheFunds
-                        manager.funds.cacheFunds.buy = Math.max(0, manager.funds.cacheFunds.buy - buyDust.refillAmount);
-                        manager.funds.cacheFunds.sell = Math.max(0, manager.funds.cacheFunds.sell - sellDust.refillAmount);
-                        
-                        manager.recalculateFunds();
-                        manager.logger.log(`✓ Grid health: refilled dust orders (target: geometric size)`, 'info');
-                    }
-                } catch (err) {
-                    manager.logger.log(`✗ Error refilling dust orders: ${err.message}`, 'error');
-                }
-            }
-        } else if (buyDust || sellDust) {
-            const dustSides = [];
-            if (buyDust) dustSides.push('BUY');
-            if (sellDust) dustSides.push('SELL');
-            manager.logger.log(`Grid health: recovery skipped (dust on ${dustSides.join(' & ')} only, requires both sides)`, 'info');
-        }
-
-        return { buyDust: !!buyDust, sellDust: !!sellDust };
+        logViolations(sells, 'SELL');
+        logViolations(buys, 'BUY');
+        return { buyDust: false, sellDust: false };
     }
 
     /**
-     * Compare available funds between BUY and SELL sides to determine which can support a new full order.
-     * Uses market price and geometric sizing to calculate required funds.
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {Number} currentMarketPrice - Current market price (optional, defaults to config price)
-     * @returns {Object} { side: 'buy'|'sell'|null, buyFunds, sellFunds, requiredBuy, requiredSell, buyRatio, sellRatio, reason }
+     * Utility to decide which side can support an extra order.
      */
     static determineOrderSideByFunds(manager, currentMarketPrice) {
-        const { getPrecisionForSide, calculateOrderSizes } = require('./utils');
-
-        // Use available funds directly (now inclusive of cacheFunds/proceeds)
-        const totalBuyAvailable = manager.funds.available?.buy || 0;
-        const totalSellAvailable = manager.funds.available?.sell || 0;
-
-        // DEBUG: Log the fund values being used
-        manager.logger.log(
-            `DEBUG Fund Analysis - BUY: available=${totalBuyAvailable.toFixed(8)}, ` +
-            `SELL: available=${totalSellAvailable.toFixed(8)}`,
-            'debug'
-        );
-
-        // DEBUG: Check if available is being confused with committed
-        if ((manager.funds.available?.sell || 0) === (manager.funds.committed?.chain?.sell || 0) &&
-            (manager.funds.available?.sell || 0) !== 0) {
-            manager.logger.log(
-                `WARNING: available.sell (${(manager.funds.available?.sell || 0).toFixed(8)}) matches committed.chain.sell! ` +
-                `This suggests available funds are being confused with committed on-chain funds. ` +
-                `Expected: chainFree (${(manager.funds.chainFree?.sell || 0).toFixed(8)}) - virtuel (${(manager.funds.virtuel?.sell || 0).toFixed(8)}) = something else`,
-                'warn'
-            );
-
-            // Log full fund structure for debugging
-            manager.logger.log(
-                `COMPLETE FUNDS STRUCTURE: ` +
-                `available.sell=${(manager.funds.available?.sell || 0).toFixed(8)}, ` +
-                `committed.grid.sell=${(manager.funds.committed?.grid?.sell || 0).toFixed(8)}, ` +
-                `committed.chain.sell=${(manager.funds.committed?.chain?.sell || 0).toFixed(8)}, ` +
-                `virtuel.sell=${(manager.funds.virtuel?.sell || 0).toFixed(8)}, ` +
-                `cacheFunds.sell=${(manager.funds.cacheFunds?.sell || 0).toFixed(8)}, ` +
-                `chainFree.sell=${(manager.funds.chainFree?.sell || 0).toFixed(8)}`,
-                'debug'
-            );
-        }
-
-        // Calculate the actual geometric sizes that would be needed
-        const requiredBuyFunds = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.BUY);
-        const requiredSellFunds = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.SELL);
-
-        // Both calculations require existing orders; if neither has orders, we can't determine a side
-        if (requiredBuyFunds === null && requiredSellFunds === null) {
-            return {
-                side: null,
-                reason: 'No ACTIVE orders exist to calculate geometric sizing',
-                buyFunds: totalBuyAvailable,
-                sellFunds: totalSellAvailable,
-                requiredBuy: 0,
-                requiredSell: 0,
-                buyRatio: 0,
-                sellRatio: 0
-            };
-        }
-
-        // Compare which side has sufficient funds relative to requirement
-        const buyRatio = (requiredBuyFunds && requiredBuyFunds > 0) ? totalBuyAvailable / requiredBuyFunds : 0;
-        const sellRatio = (requiredSellFunds && requiredSellFunds > 0) ? totalSellAvailable / requiredSellFunds : 0;
+        const reqBuy = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.BUY);
+        const reqSell = Grid.calculateGeometricSizeForSpreadCorrection(manager, ORDER_TYPES.SELL);
+        const buyRatio = reqBuy ? (manager.funds.available.buy / reqBuy) : 0;
+        const sellRatio = reqSell ? (manager.funds.available.sell / reqSell) : 0;
 
         let side = null;
-        let reason = '';
+        if (buyRatio >= 1 && sellRatio >= 1) side = buyRatio > sellRatio ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+        else if (buyRatio >= 1) side = ORDER_TYPES.BUY;
+        else if (sellRatio >= 1) side = ORDER_TYPES.SELL;
 
-        if (buyRatio >= 1 && sellRatio >= 1) {
-            // Both sides have sufficient funds - choose the side with MORE relative capacity
-            side = buyRatio > sellRatio ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
-            reason = `Both sides funded. BUY ratio: ${buyRatio.toFixed(2)}, SELL ratio: ${sellRatio.toFixed(2)}. Choosing ${side.toUpperCase()}.`;
-        } else if (buyRatio >= 1) {
-            side = ORDER_TYPES.BUY;
-            reason = `Only BUY side has sufficient funds (${totalBuyAvailable.toFixed(8)} >= ${requiredBuyFunds.toFixed(8)})`;
-        } else if (sellRatio >= 1) {
-            side = ORDER_TYPES.SELL;
-            reason = `Only SELL side has sufficient funds (${totalSellAvailable.toFixed(8)} >= ${(requiredSellFunds || 0).toFixed(8)})`;
-        } else {
-            side = null;
-            reason = `Neither side has sufficient funds. BUY: ${totalBuyAvailable.toFixed(8)}/${(requiredBuyFunds || 0).toFixed(8)}, SELL: ${totalSellAvailable.toFixed(8)}/${(requiredSellFunds || 0).toFixed(8)}`;
-        }
-
-        return {
-            side,
-            buyFunds: totalBuyAvailable,
-            sellFunds: totalSellAvailable,
-            requiredBuy: requiredBuyFunds,
-            requiredSell: requiredSellFunds,
-            buyRatio,
-            sellRatio,
-            reason
-        };
+        return { side, reason: side ? `Choosing ${side}` : 'Insufficient funds' };
     }
 
     /**
-     * Calculate geometric order size for spread correction by redistributing available funds.
-     * Simulates what size a new order would have if funds were redistributed across n+1 orders.
-     * (existing n orders + 1 new spread correction order)
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {string} targetType - ORDER_TYPES.BUY or SELL
-     * @returns {number|null} Calculated geometric size, or null if unable to calculate
+     * Calculate simulated size for spread correction order.
      */
     static calculateGeometricSizeForSpreadCorrection(manager, targetType) {
-        const { getPrecisionForSide, calculateOrderSizes } = require('./utils');
-
-        // Use same logic as normal geometric sizing during rotations (manager.js line 2099)
         const side = targetType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+        const slotsCount = Array.from(manager.orders.values()).filter(o => o.type === targetType).length + 1;
+        const total = (manager.funds.available[side] || 0) + (manager.funds.virtuel[side] || 0);
+        if (total <= 0 || slotsCount <= 1) return null;
 
-        // Get ALL grid orders (ACTIVE, PARTIAL, and VIRTUAL) on this side
-        // CRITICAL: Include PARTIAL orders as they occupy grid positions and lock up funds
-        const allOrdersOnSide = [
-            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.ACTIVE),
-            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.PARTIAL),
-            ...manager.getOrdersByTypeAndState(targetType, ORDER_STATES.VIRTUAL)
-        ];
-
-        // Total slots = existing grid + 1 new spread correction order
-        const totalSlots = allOrdersOnSide.length + 1;
-
-        if (totalSlots <= 1) {
-            return null; // Can't calculate without grid reference
-        }
-
-        // Calculate total funds = available (unallocated) + virtuel (reserved) + btsFeesOwed
-        // This represents ALL funds available to the grid. 
-        // We include feesOwed because they are still physically in the account until settlement.
-        const available = manager.funds.available?.[side] || 0;
-        const virtuel = manager.funds.virtuel?.[side] || 0;
-        const feesOwed = (manager.config.assetA === 'BTS' && side === 'sell') || (manager.config.assetB === 'BTS' && side === 'buy')
-            ? (manager.funds.btsFeesOwed || 0) : 0;
-        
-        const totalFunds = available + virtuel + feesOwed;
-
-        if (totalFunds <= 0) {
-            return null;
-        }
-
-        // Create dummy orders matching the actual grid structure
-        const dummyOrders = Array(totalSlots).fill(null).map((_, i) => ({
-            id: `dummy-${i}`,
-            type: targetType,
-            price: 0
-        }));
-
-        // Calculate sizes using the same logic as grid.initializeGrid
-        const precision = getPrecisionForSide(manager.assets, targetType);
-        const sellFunds = side === 'sell' ? totalFunds : 0;
-        const buyFunds = side === 'buy' ? totalFunds : 0;
-
+        const precision = getPrecisionForSide(manager.assets, side);
+        const dummy = Array(slotsCount).fill({ type: targetType });
         try {
-            const sizedOrders = calculateOrderSizes(
-                dummyOrders,
-                manager.config,
-                sellFunds,
-                buyFunds,
-                0,  // minSellSize
-                0,  // minBuySize
-                precision,
-                precision
-            );
-
-            // Extract size for the new order (closest to market position)
-            // For SELL: new order goes at HIGHEST position (take from END)
-            // For BUY: new order goes at LOWEST position (take from BEGINNING)
-            if (side === 'sell') {
-                // Take from end (largest sizes) - new SELL at highest price
-                return sizedOrders[sizedOrders.length - 1]?.size || null;
-            } else {
-                // Take from beginning (largest sizes) - new BUY at lowest price
-                return sizedOrders[0]?.size || null;
-            }
-        } catch (err) {
-            manager.logger.log(
-                `Error calculating geometric size for spread correction: ${err.message}`,
-                'warn'
-            );
-            return null;
-        }
+            const sized = calculateOrderSizes(dummy, manager.config, side === 'sell' ? total : 0, side === 'buy' ? total : 0, 0, 0, precision, precision);
+            return side === 'sell' ? sized[sized.length - 1].size : sized[0].size;
+        } catch (e) { return null; }
     }
 
     /**
-     * Prepare immediate spread correction orders: one extra active order + necessary partial moves
-     * This is called PROACTIVELY when spread is detected as too wide, not reactively on next fill.
-     *
-     * @param {Object} manager - OrderManager instance
-     * @param {String} preferredSide - 'buy', 'sell', or null (from fund analysis)
-     * @returns {Object} { ordersToPlace: [], partialMoves: [] }
+     * Prepare a new active order at a candidate rail slot to correct wide spread.
      */
     static async prepareSpreadCorrectionOrders(manager, preferredSide) {
         const ordersToPlace = [];
-        const partialMoves = [];
+        const railType = preferredSide;
+        const railPrefix = railType === ORDER_TYPES.BUY ? 'buy-' : 'sell-';
+        const slots = Array.from(manager.orders.values())
+            .filter(o => o.id.startsWith(railPrefix))
+            .sort((a, b) => railType === ORDER_TYPES.BUY ? b.price - a.price : a.price - b.price);
 
-        if (!preferredSide) {
-            manager.logger.log(`No funds available to correct spread`, 'warn');
-            return { ordersToPlace, partialMoves };
-        }
-
-        const oppositeType = preferredSide;
-        const side = oppositeType === ORDER_TYPES.BUY ? 'buy' : 'sell';
-
-        manager.logger.log(
-            `Preparing immediate spread correction: creating extra ${oppositeType} order`,
-            'info'
-        );
-
-        // Step 1: Move ALL partial orders of opposite type (not just first one)
-        const partialOrders = manager.getPartialOrdersOnSide(oppositeType);
-
-        if (partialOrders.length > 0) {
-            manager.logger.log(
-                `Found ${partialOrders.length} partial ${oppositeType} order(s) - moving to make space`,
-                'debug'
-            );
-
-            for (let i = 0; i < partialOrders.length; i++) {
-                const partial = partialOrders[i];
-                const moveInfo = manager.preparePartialOrderMove(partial, 1, new Set());
-
-                if (moveInfo) {
-                    partialMoves.push(moveInfo);
-                    manager.logger.log(
-                        `Prepared move for partial ${i + 1}/${partialOrders.length}: ${partial.id} -> ${moveInfo.newGridId}`,
-                        'debug'
-                    );
-                } else {
-                    manager.logger.log(
-                        `WARNING: Could not move partial ${partial.id} (stuck at grid boundary)`,
-                        'warn'
-                    );
-                }
+        const candidate = slots.find(o => !o.orderId && o.state === ORDER_STATES.VIRTUAL);
+        if (candidate) {
+            const size = Grid.calculateGeometricSizeForSpreadCorrection(manager, railType);
+            if (size && size <= manager.funds.available[railType === ORDER_TYPES.BUY ? 'buy' : 'sell']) {
+                const activated = { ...candidate, type: railType, size, state: ORDER_STATES.VIRTUAL };
+                ordersToPlace.push(activated);
+                manager._updateOrder(activated);
             }
         }
-
-        // Step 2: Use vacated slots from partial moves for the new active order
-        const vacatedSlots = partialMoves
-            .filter(m => m.partialOrder.type === oppositeType)
-            .map(m => ({ id: m.vacatedGridId, price: m.vacatedPrice }));
-
-        if (vacatedSlots.length > 0) {
-            // Use first vacated slot for the new extra order
-            const slot = vacatedSlots[0];
-            const gridOrder = manager.orders.get(slot.id);
-
-            if (gridOrder) {
-                // Calculate geometric size based on redistributing available funds across the grid
-                const geometricSize = Grid.calculateGeometricSizeForSpreadCorrection(manager, oppositeType);
-
-                if (!geometricSize || geometricSize <= 0) {
-                    manager.logger.log(
-                        `Cannot calculate geometric size for spread correction (no ACTIVE ${oppositeType} orders or insufficient funds)`,
-                        'warn'
-                    );
-                    return { ordersToPlace, partialMoves };
-                }
-
-                // Check if available funds can support the calculated geometric size
-                const availableFunds = manager.funds.available?.[side] || 0;
-
-                if (geometricSize > availableFunds) {
-                    manager.logger.log(
-                        `Insufficient available funds for spread correction order: need ${geometricSize.toFixed(8)}, have ${availableFunds.toFixed(8)}`,
-                        'warn'
-                    );
-                    return { ordersToPlace, partialMoves };
-                }
-
-                // Create order at vacated slot with calculated geometric size
-                // Set state to VIRTUAL initially; synchronizeWithChain will transition to ACTIVE
-                const newOrder = {
-                    ...gridOrder,
-                    type: oppositeType,
-                    size: geometricSize,
-                    price: slot.price,
-                    state: ORDER_STATES.VIRTUAL
-                };
-
-                // Add order to be placed (deduction will happen when batch is broadcast)
-                ordersToPlace.push(newOrder);
-                manager._updateOrder(newOrder);
-
-                manager.logger?.log?.(
-                    `Prepared spread correction order at vacated slot ${slot.id}: ` +
-                    `${oppositeType} at ${slot.price.toFixed(4)}, geometric size ${geometricSize.toFixed(8)}`,
-                    'info'
-                );
-            }
-        } else {
-            // No partials to move (or no vacated slots) - activate a pool of candidate slots (VIRTUAL or SPREAD)
-            manager.logger?.log?.(
-                `Selecting candidate slot for spread correction (pooling VIRTUAL and SPREAD slots)`,
-                'debug'
-            );
-
-            // Pool all candidate slots that are not currently active
-            // This includes SPREAD orders (size 0 placeholders) and VIRTUAL orders (intended grid levels)
-            const candidates = Array.from(manager.orders.values()).filter(o =>
-                (o.type === ORDER_TYPES.SPREAD || o.state === ORDER_STATES.VIRTUAL) &&
-                (o.size === 0 || o.state === ORDER_STATES.VIRTUAL) &&
-                !o.orderId // Must not be on-chain
-            );
-
-            if (candidates.length > 0) {
-                // Find the boundary price (closest active/partial to the spread on this side)
-                const activeOrPartials = [
-                    ...manager.getOrdersByTypeAndState(oppositeType, ORDER_STATES.ACTIVE),
-                    ...manager.getOrdersByTypeAndState(oppositeType, ORDER_STATES.PARTIAL)
-                ];
-
-                let boundaryPrice = null;
-                if (activeOrPartials.length > 0) {
-                    if (oppositeType === ORDER_TYPES.SELL) {
-                        boundaryPrice = Math.min(...activeOrPartials.map(o => o.price));
-                    } else {
-                        boundaryPrice = Math.max(...activeOrPartials.map(o => o.price));
-                    }
-                }
-
-                // Filter candidates: they should ideally be between the market and our first active/partial order
-                let filteredCandidates = candidates.filter(o => {
-                    if (boundaryPrice === null) return true; // Fallback if no active orders
-                    if (oppositeType === ORDER_TYPES.SELL) {
-                        return o.price < boundaryPrice; // Narrow the gap from above
-                    } else {
-                        return o.price > boundaryPrice; // Narrow the gap from below
-                    }
-                });
-
-                if (filteredCandidates.length === 0) {
-                    // If no slots found inside the gap, just use all available candidates
-                    filteredCandidates = candidates;
-                }
-
-                // Select the candidate closest to the active cluster:
-                // For SELL: HIGHEST price that is < boundary (closest to boundary)
-                // For BUY: LOWEST price that is > boundary (closest to boundary)
-                // This provides a "top-down" refill of the gap
-                let selectedSlot;
-                if (oppositeType === ORDER_TYPES.SELL) {
-                    selectedSlot = filteredCandidates.reduce((max, o) => o.price > max.price ? o : max);
-                } else {
-                    selectedSlot = filteredCandidates.reduce((min, o) => o.price < min.price ? o : min);
-                }
-
-                // Calculate geometric size based on redistributing available funds across the grid
-                const geometricSize = Grid.calculateGeometricSizeForSpreadCorrection(manager, oppositeType);
-
-                if (!geometricSize || geometricSize <= 0) {
-                    manager.logger.log(
-                        `Cannot calculate geometric size for spread correction (no ACTIVE ${oppositeType} orders or insufficient funds)`,
-                        'warn'
-                    );
-                    return { ordersToPlace, partialMoves };
-                }
-
-                // Check if available funds can support the calculated geometric size
-                const availableFunds = manager.funds.available?.[side] || 0;
-
-                if (geometricSize > availableFunds) {
-                    manager.logger.log(
-                        `Insufficient available funds for spread correction order: need ${geometricSize.toFixed(8)}, have ${availableFunds.toFixed(8)}`,
-                        'warn'
-                    );
-                    return { ordersToPlace, partialMoves };
-                }
-
-                // Create the order with calculated geometric size
-                const convertedOrder = {
-                    ...selectedSlot,
-                    type: oppositeType,
-                    size: geometricSize,
-                    state: ORDER_STATES.VIRTUAL
-                };
-
-                // Add order to be placed (deduction will happen when batch is broadcast)
-                ordersToPlace.push(convertedOrder);
-                manager._updateOrder(convertedOrder);
-
-                manager.logger?.log?.(
-                    `Selected candidate slot for spread correction: ${selectedSlot.id} (${selectedSlot.type}) at ${selectedSlot.price.toFixed(4)}, ` +
-                    `new size ${geometricSize.toFixed(8)} (boundary was ${boundaryPrice ? boundaryPrice.toFixed(4) : 'N/A'})`,
-                    'info'
-                );
-            } else {
-                manager.logger?.log?.(`No SPREAD or VIRTUAL candidate slots available for spread correction`, 'warn');
-            }
-        }
-
-        return { ordersToPlace, partialMoves };
+        return { ordersToPlace, partialMoves: [] };
     }
 
+    /**
+     * Internal utility to update orders with new geometric sizes.
+     * @private
+     */
+    static _updateOrdersForSide(manager, orderType, newSizes, orders = null) {
+        const ords = Array.isArray(orders) ? orders : Array.from(manager.orders.values()).filter(o => o.type === orderType);
+        if (ords.length === 0 || newSizes.length !== ords.length) return;
+        ords.forEach((order, i) => {
+            const newSize = newSizes[i] || 0;
+            if (order.size === undefined || Math.abs(order.size - newSize) > 1e-8) {
+                manager._updateOrder({ ...order, size: newSize });
+            }
+        });
+    }
+
+    static _getFundSnapshot(manager) {
+        const snap = manager.getChainFundsSnapshot();
+        return { ...snap, gridBuy: Number(manager.funds?.total?.grid?.buy || 0), gridSell: Number(manager.funds?.total?.grid?.sell || 0), cacheBuy: Number(manager.funds?.cacheFunds?.buy || 0), cacheSell: Number(manager.funds?.cacheFunds?.sell || 0) };
+    }
+
+    static _logSizingInput(manager, snap) {
+        manager.logger.log(`DEBUG Grid Sizing Input: buyFunds=${snap.allocatedBuy.toFixed(8)}, sellFunds=${snap.allocatedSell.toFixed(8)}`, 'info');
+    }
+
+    static async _clearAndPersistCacheFunds(manager, side) {
+        try {
+            manager.funds.cacheFunds = manager.funds.cacheFunds || { buy: 0, sell: 0 };
+            manager.funds.cacheFunds[side] = 0;
+            if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
+        } catch (e) { }
+    }
+
+    static async _persistCacheFunds(manager, side) {
+        try {
+            if (manager.config?.botKey && manager.accountOrders) await manager.accountOrders.updateCacheFunds(manager.config.botKey, manager.funds.cacheFunds);
+        } catch (e) { }
+    }
 }
 
-/**
- * Initialize the virtual order grid and assign sizes on the provided manager.
- * This function was moved from OrderManager.initializeOrderGrid so the grid
- * generation and sizing logic can be reused and tested independently.
- *
- * @param {Object} manager - OrderManager instance (will be mutated)
- */
-// (moved into class body below)
-
-// (moved into static Grid.initializeGrid above)
-
-/**
- * Perform a full grid resynchronization from blockchain state (moved from manager)
- * @param {Object} manager - OrderManager instance
- * @param {Function} readOpenOrdersFn - async function to fetch open orders
- * @param {Function} cancelOrderFn - async function to cancel an order
- */
-// (moved into static Grid.recalculateGrid above)
-
-// Expose the grid generator as module export
 module.exports = Grid;
