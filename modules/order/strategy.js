@@ -14,13 +14,21 @@ const {
 } = require('./utils');
 
 class StrategyEngine {
+    /**
+     * @param {Object} manager - OrderManager instance
+     */
     constructor(manager) {
         this.manager = manager;
     }
 
     /**
      * Unified rebalancing entry point.
-     * Maintains contiguous physical rails for BUY and SELL sides.
+     * Consolidates fills, rotations, and maintenance into a single standardized flow.
+     * Maintains contiguous physical rails for BUY and SELL sides by sliding active windows.
+     *
+     * @param {Array} fills - Recent fills detected (optional)
+     * @param {Set} excludeIds - IDs to skip during processing
+     * @returns {Object} A batch of operations to execute on-chain
      */
     async rebalance(fills = [], excludeIds = new Set()) {
         const mgr = this.manager;
@@ -61,8 +69,16 @@ class StrategyEngine {
     }
 
     /**
-     * Contiguous Rail Maintenance Logic.
-     * Manages a sliding window of ACTIVE orders over the fixed rail.
+     * Contiguous Rail Maintenance Logic for a specific side.
+     * Manages a sliding window of ACTIVE orders over the fixed physical grid.
+     * Implements directional sliding: expansion on fill-side, rotation on opposite side.
+     *
+     * @param {string} type - ORDER_TYPES.BUY or ORDER_TYPES.SELL
+     * @param {Array} slots - Grid slots belonging to this side (sorted inward-first)
+     * @param {number} sideBudget - Total strategy budget for this side
+     * @param {Set} excludeIds - IDs to skip
+     * @param {boolean} wasFilledSide - True if a fill occurred on this rail
+     * @param {boolean} anyFillOccurred - True if any fill occurred in this rebalance cycle
      */
     async rebalanceSideLogic(type, slots, sideBudget, excludeIds, wasFilledSide, anyFillOccurred) {
         const mgr = this.manager;
@@ -318,6 +334,9 @@ class StrategyEngine {
 
     /**
      * Complete an order rotation after blockchain confirmation.
+     * Releases committed capital from the old slot and transitions it to VIRTUAL.
+     *
+     * @param {Object} oldOrderInfo - Metadata of the rotated-away order
      */
     completeOrderRotation(oldOrderInfo) {
         const mgr = this.manager;
@@ -335,6 +354,11 @@ class StrategyEngine {
 
     /**
      * Process filled orders and trigger rebalance.
+     * Standardizes capital proceeds accounting before executing unified rebalancing.
+     *
+     * @param {Array} filledOrders - Orders detected as filled on-chain
+     * @param {Set} excludeOrderIds - IDs to ignore during processing
+     * @returns {Object} Batch result containing planned operations
      */
     async processFilledOrders(filledOrders, excludeOrderIds = new Set()) {
         const mgr = this.manager;
@@ -390,9 +414,15 @@ class StrategyEngine {
             mgr.resumeFundRecalc();
         }
     }
+
     /**
      * Compatibility method for rebalanceOrders.
-     * Delegates to the unified rebalance flow.
+     * Delegates to the unified rebalance flow with simulated fill state transitions.
+     *
+     * @param {Object} filledCounts - Counts of fills per side
+     * @param {number} extraTarget - Bonus orders to place
+     * @param {Set} excludeOrderIds - IDs to skip
+     * @returns {Object} Rebalance result
      */
     async rebalanceOrders(filledCounts, extraTarget = 0, excludeOrderIds = new Set()) {
         const dummyFills = [];
@@ -416,7 +446,11 @@ class StrategyEngine {
 
     /**
      * Compatibility method for rebalanceSideAfterFill.
-     * Delegates to the unified rebalance flow.
+     * Delegates to the unified rebalance flow with fill side context.
+     *
+     * @param {string} filledType - Side that filled
+     * @param {string} oppositeType - Rail to maintain
+     * @param {number} filledCount - Number of fills
      */
     async rebalanceSideAfterFill(filledType, oppositeType, filledCount, extraTarget = 0, excludeOrderIds = new Set()) {
         // Create a dummy fill object to provide context to the unified rebalance
@@ -425,7 +459,11 @@ class StrategyEngine {
     }
 
     /**
-     * Evaluate whether a partial order should be anchored or merged.
+     * Evaluate whether a partial order should be anchored or merged based on its size relative to ideal.
+     *
+     * @param {Object} partialOrder - The partial order to evaluate
+     * @param {Object} moveInfo - Context containing targetGridOrder and newPrice
+     * @returns {Object} Decision containing isDust and target sizes
      */
     evaluatePartialOrderAnchor(partialOrder, moveInfo) {
         const idealSize = moveInfo.targetGridOrder.size;
@@ -455,6 +493,10 @@ class StrategyEngine {
 
     /**
      * Activate the closest VIRTUAL orders for on-chain placement.
+     * Used for initial grid placement or filling gaps outside of standard rebalancing.
+     *
+     * @param {string} targetType - Side to activate
+     * @param {number} count - Target activations
      */
     async activateClosestVirtualOrdersForPlacement(targetType, count, excludeOrderIds = new Set()) {
         const mgr = this.manager;
@@ -483,7 +525,7 @@ class StrategyEngine {
             if (orderSize <= 0) continue;
 
             const activatedOrder = { ...order, type: targetType, size: orderSize, state: ORDER_STATES.VIRTUAL };
-            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation');
+            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation', 0);
 
             mgr._updateOrder(activatedOrder);
             activated.push(activatedOrder);
@@ -494,6 +536,10 @@ class StrategyEngine {
 
     /**
      * Prepare the furthest ACTIVE orders for rotation to new prices.
+     * Consumes cache funds to create virtual orders in spread zone.
+     *
+     * @param {string} targetType - Side to rotate
+     * @param {number} count - Number of rotations
      */
     async prepareFurthestOrdersForRotation(targetType, count, excludeOrderIds = new Set(), filledCount = 0, options = {}) {
         const mgr = this.manager;
@@ -557,7 +603,7 @@ class StrategyEngine {
             };
 
             const virtualOrder = { ...targetSpreadSlot, type: targetType, size: fundsPerOrder, state: ORDER_STATES.VIRTUAL };
-            mgr.accountant.updateOptimisticFreeBalance(order, virtualOrder, 'rotation');
+            mgr.accountant.updateOptimisticFreeBalance(order, virtualOrder, 'rotation', 0);
             
             mgr.funds.cacheFunds[side] = Math.max(0, (mgr.funds.cacheFunds[side] || 0) - fundsPerOrder);
             
@@ -570,6 +616,10 @@ class StrategyEngine {
 
     /**
      * Prepare a partial order to move toward market/spread.
+     * Calculates new price and minToReceive for the target grid slot.
+     *
+     * @param {Object} partialOrder - The order to move
+     * @param {number} gridSlotsToMove - Physical distance to shift
      */
     preparePartialOrderMove(partialOrder, gridSlotsToMove, reservedGridIds = new Set()) {
         const mgr = this.manager;
@@ -618,6 +668,7 @@ class StrategyEngine {
 
     /**
      * Complete the partial order move after blockchain confirmation.
+     * Transfers the orderId and state to the new physical slot ID.
      */
     completePartialOrderMove(moveInfo) {
         const mgr = this.manager;
@@ -626,7 +677,7 @@ class StrategyEngine {
         const oldGridOrder = mgr.orders.get(partialOrder.id);
         if (oldGridOrder && (!oldGridOrder.orderId || oldGridOrder.orderId === partialOrder.orderId)) {
             const updatedOld = { ...oldGridOrder, state: ORDER_STATES.VIRTUAL, orderId: null };
-            mgr.accountant.updateOptimisticFreeBalance(oldGridOrder, updatedOld, 'move-vacate');
+            mgr.accountant.updateOptimisticFreeBalance(oldGridOrder, updatedOld, 'move-vacate', 0);
             mgr._updateOrder(updatedOld);
         }
 
@@ -644,13 +695,17 @@ class StrategyEngine {
                 ...targetGridOrder, ...partialOrder, type: partialOrder.type,
                 state: newState, orderId: partialOrder.orderId, size: partialOrder.size, price: newPrice
             };
-            mgr.accountant.updateOptimisticFreeBalance(targetGridOrder, updatedNew, 'move-occupy');
+            mgr.accountant.updateOptimisticFreeBalance(targetGridOrder, updatedNew, 'move-occupy', 0);
             mgr._updateOrder(updatedNew);
         }
     }
 
     /**
      * Activate spread placeholder orders as buy/sell orders.
+     * Consumes unallocated available funds to fill the gap near spread.
+     *
+     * @param {string} targetType - Side to activate
+     * @param {number} count - Target number of orders to place
      */
     async activateSpreadOrders(targetType, count) {
         const mgr = this.manager;
@@ -690,7 +745,7 @@ class StrategyEngine {
 
             const order = spreadOrders[i];
             const activatedOrder = { ...order, type: targetType, size: fundsPerOrder, state: ORDER_STATES.ACTIVE };
-            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation');
+            mgr.accountant.updateOptimisticFreeBalance(order, activatedOrder, 'spread-activation', 0);
             
             mgr.funds.cacheFunds[side] = Math.max(0, (mgr.funds.cacheFunds[side] || 0) - fundsPerOrder);
             
