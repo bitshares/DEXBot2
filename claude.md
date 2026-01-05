@@ -14,7 +14,7 @@ See `docs/WORKFLOW.md` for detailed workflow.
 ## Key Modules
 - `dexbot.js` - Entry point
 - `modules/dexbot_class.js` - Core bot class
-- `modules/order/` - Order management (manager, strategy, grid, accounting, sync_engine, legacy-testing)
+- `modules/order/` - Order management (manager, strategy, grid, accounting, sync_engine)
 - `modules/chain_orders.js`, `account_orders.js`, `account_bots.js` - Chain interaction
 - `modules/constants.js` - Configuration
 
@@ -57,7 +57,6 @@ git checkout main && git pull && git merge --no-ff dev && git push
 - `logger.js` - Order logging
 - `runner.js` - Order execution runner
 - `async_lock.js` - Concurrency control
-- `legacy-testing.js` - Deprecated testing functions for backward compatibility
 
 ### Blockchain Interaction
 - `modules/chain_orders.js` - Blockchain order operations (269+ lines)

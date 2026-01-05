@@ -1,19 +1,18 @@
 /**
- * Tests for rebalanceOrders symmetric logic
+ * Tests for rebalance symmetric logic using StrategyEngine
  * Verifies that SELL fills and BUY fills are handled symmetrically:
- * - When SELL fills: activate BUY virtuals, check BUY count vs target, create or rotate BUYs
- * - When BUY fills: activate SELL virtuals, check SELL count vs target, create or rotate SELLs
+ * - When SELL fills: window shifts, activating replacements
+ * - When BUY fills: window shifts, activating replacements
  */
 
 const assert = require('assert');
 const { OrderManager } = require('../modules/order/index.js');
 const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
-const { rebalanceOrders } = require('../modules/order/legacy-testing');
 
 console.log('\n========== REBALANCE ORDERS TESTS ==========\n');
 
 /**
- * TEST 1: When SELL fills and BUY < target, should create new BUY orders
+ * TEST 1: When SELL fills and BUY < target, should create new BUY orders (via window expansion)
  */
 async function testSellFillCreateBuy() {
     const mgr = new OrderManager({
@@ -33,41 +32,38 @@ async function testSellFillCreateBuy() {
 
     // Set up orders: 2 active BUYs, 3 active SELLs
     const testOrders = [
-        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
-        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
-        // buy3 missing - below target of 3
-        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
-        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.4' },
-        { id: 'sell3', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.5' },
-        // Virtual orders for replacement
-        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
-        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
+        { id: 'buy-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
+        { id: 'buy-2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
+        // buy-0 missing - below target of 3 (indices are sorted inward-first: 0 is closest to market)
+        { id: 'sell-0', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
+        { id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.4' },
+        { id: 'sell-2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.5' },
+        // Spread placeholders
+        { id: 'buy-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 95 },
+        { id: 'sell-X', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 140 }, 
     ];
 
     testOrders.forEach(o => mgr._updateOrder(o));
+    mgr.recalculateFunds();
 
-    mgr.funds.available.buy = 500;
-    mgr.funds.available.sell = 5;
-
-    // When SELL fills (1 SELL fill, 0 extra), should:
-    // 1. Activate 1 virtual SELL
-    // 2. Check BUY count (2) < target (3)
-    // 3. Create 1 new BUY order
-    const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 1, [ORDER_TYPES.BUY]: 0 }, 0);
-
-    assert(Array.isArray(result.ordersToPlace), 'ordersToPlace should be array');
-    // Should have: 1 activated SELL + 1 created BUY
-    assert(result.ordersToPlace.length >= 1, `Should have at least 1 order to place, got ${result.ordersToPlace.length}`);
+    // Simulating SELL fill: sell-0 is gone (replaced by virtual)
+    mgr._updateOrder({ ...testOrders[2], state: ORDER_STATES.VIRTUAL, orderId: null });
+    const fills = [{ type: ORDER_TYPES.SELL, price: 110 }];
+    
+    // When SELL fills:
+    // 1. SELL window expands to maintain target (activates sell-X)
+    // 2. BUY window might slide or stay (if below target, expansion happens)
+    const result = await mgr.strategy.rebalance(fills);
 
     const placeByType = {};
     result.ordersToPlace.forEach(o => {
         placeByType[o.type] = (placeByType[o.type] || 0) + 1;
     });
 
-    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should activate SELL order when SELL fills');
-    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should create BUY order when BUY < target');
+    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should activate SELL replacement');
+    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should expand BUY window if below target');
 
-    console.log('✅ TEST 1 PASSED: SELL fill creates new BUY when BUY < target');
+    console.log('✅ TEST 1 PASSED: SELL fill triggers symmetric rebalance');
 }
 
 /**
@@ -91,41 +87,34 @@ async function testBuyFillCreateSell() {
 
     // Set up orders: 3 active BUYs, 2 active SELLs
     const testOrders = [
-        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
-        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
-        { id: 'buy3', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.3' },
-        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.4' },
-        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.5' },
-        // sell3 missing - below target of 3
-        // Virtual orders for replacement
-        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
-        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
+        { id: 'buy-0', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
+        { id: 'buy-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
+        { id: 'buy-2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.3' },
+        { id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.4' },
+        { id: 'sell-2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.5' },
+        // sell-0 missing
+        { id: 'sell-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 110 },
+        { id: 'buy-X', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 60 },
     ];
 
     testOrders.forEach(o => mgr._updateOrder(o));
+    mgr.recalculateFunds();
 
-    mgr.funds.available.buy = 500;
-    mgr.funds.available.sell = 5;
+    // Simulating BUY fill: buy-0 is gone
+    mgr._updateOrder({ ...testOrders[0], state: ORDER_STATES.VIRTUAL, orderId: null });
+    const fills = [{ type: ORDER_TYPES.BUY, price: 90 }];
 
-    // When BUY fills (1 BUY fill, 0 extra), should:
-    // 1. Activate 1 virtual BUY (not SELL - this was the bug!)
-    // 2. Check SELL count (2) < target (3) (not BUY - this was the bug!)
-    // 3. Create 1 new SELL order (not BUY - this was the bug!)
-    const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 0, [ORDER_TYPES.BUY]: 1 }, 0);
-
-    assert(Array.isArray(result.ordersToPlace), 'ordersToPlace should be array');
-    // Should have: 1 activated BUY + 1 created SELL
-    assert(result.ordersToPlace.length >= 1, `Should have at least 1 order to place, got ${result.ordersToPlace.length}`);
+    const result = await mgr.strategy.rebalance(fills);
 
     const placeByType = {};
     result.ordersToPlace.forEach(o => {
         placeByType[o.type] = (placeByType[o.type] || 0) + 1;
     });
 
-    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should activate BUY order when BUY fills');
-    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should create SELL order when SELL < target (THIS WAS THE BUG!)');
+    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should activate BUY replacement');
+    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should expand SELL window if below target');
 
-    console.log('✅ TEST 2 PASSED: BUY fill creates new SELL when SELL < target (BUG FIXED!)');
+    console.log('✅ TEST 2 PASSED: BUY fill triggers symmetric rebalance (BUG FIXED!)');
 }
 
 /**
@@ -149,32 +138,27 @@ async function testSellFillRotateBuy() {
 
     // Set up orders: 2 active BUYs (= target), 2 active SELLs
     const testOrders = [
-        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
-        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.2' }, // furthest
-        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
-        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.4' }, // furthest
-        // Virtual orders for placement/rotation
-        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
-        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
-        // Spread placeholder
-        { id: 'spread1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 102, size: 0 },
+        { id: 'buy-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.1' },
+        { id: 'buy-2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.2' }, // furthest
+        { id: 'sell-0', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
+        { id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.4' },
+        // buy-0 is SPREAD (inward slot)
+        { id: 'buy-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 90 },
+        { id: 'sell-X', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 130 },
     ];
 
     testOrders.forEach(o => mgr._updateOrder(o));
+    mgr.recalculateFunds();
 
-    mgr.funds.available.buy = 500;
-    mgr.funds.available.sell = 5;
-    mgr.funds.cacheFunds = { buy: 100, sell: 0.5 };
+    // Simulating SELL fill: sell-0 is gone
+    mgr._updateOrder({ ...testOrders[2], state: ORDER_STATES.VIRTUAL, orderId: null });
+    const fills = [{ type: ORDER_TYPES.SELL, price: 110 }];
 
-    // When SELL fills and BUY >= target, should rotate BUY orders
-    const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 1, [ORDER_TYPES.BUY]: 0 }, 0);
+    const result = await mgr.strategy.rebalance(fills);
 
-    assert(Array.isArray(result.ordersToRotate), 'ordersToRotate should be array');
-    // Should have BUY rotation since BUY count >= target
-    if (result.ordersToRotate.length > 0) {
-        const hasRotatedBuy = result.ordersToRotate.some(r => r.oldOrder.type === ORDER_TYPES.BUY);
-        assert(hasRotatedBuy, 'Should rotate BUY orders when BUY >= target');
-    }
+    assert(result.ordersToRotate.length > 0, 'Should rotate orders to maintain contiguous rail');
+    const hasRotatedBuy = result.ordersToRotate.some(r => r.type === ORDER_TYPES.BUY);
+    assert(hasRotatedBuy, 'Should rotate BUY orders inward when opposite side fills');
 
     console.log('✅ TEST 3 PASSED: SELL fill rotates BUY when BUY >= target');
 }
@@ -200,32 +184,27 @@ async function testBuyFillRotateSell() {
 
     // Set up orders: 2 active BUYs, 2 active SELLs (= target)
     const testOrders = [
-        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
-        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.2' }, // furthest
-        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
-        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.4' }, // furthest
-        // Virtual orders for placement/rotation
-        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
-        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
-        // Spread placeholder
-        { id: 'spread1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 102, size: 0 },
+        { id: 'buy-0', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
+        { id: 'buy-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
+        { id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.3' },
+        { id: 'sell-2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.4' }, // furthest
+        // sell-0 is SPREAD (inward slot)
+        { id: 'sell-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 110 },
+        { id: 'buy-X', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 70 },
     ];
 
     testOrders.forEach(o => mgr._updateOrder(o));
+    mgr.recalculateFunds();
 
-    mgr.funds.available.buy = 500;
-    mgr.funds.available.sell = 5;
-    mgr.funds.cacheFunds = { buy: 100, sell: 0.5 };
+    // Simulating BUY fill: buy-0 is gone
+    mgr._updateOrder({ ...testOrders[0], state: ORDER_STATES.VIRTUAL, orderId: null });
+    const fills = [{ type: ORDER_TYPES.BUY, price: 90 }];
 
-    // When BUY fills and SELL >= target, should rotate SELL orders
-    const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 0, [ORDER_TYPES.BUY]: 1 }, 0);
+    const result = await mgr.strategy.rebalance(fills);
 
-    assert(Array.isArray(result.ordersToRotate), 'ordersToRotate should be array');
-    // Should have SELL rotation since SELL count >= target
-    if (result.ordersToRotate.length > 0) {
-        const hasRotatedSell = result.ordersToRotate.some(r => r.oldOrder.type === ORDER_TYPES.SELL);
-        assert(hasRotatedSell, 'Should rotate SELL orders when SELL >= target (THIS WAS THE BUG!)');
-    }
+    assert(result.ordersToRotate.length > 0, 'Should rotate orders');
+    const hasRotatedSell = result.ordersToRotate.some(r => r.type === ORDER_TYPES.SELL);
+    assert(hasRotatedSell, 'Should rotate SELL orders inward when opposite side fills');
 
     console.log('✅ TEST 4 PASSED: BUY fill rotates SELL when SELL >= target (BUG FIXED!)');
 }
@@ -251,37 +230,36 @@ async function testBothSidesFilledTogether() {
 
     // Set up orders: 2 BUY, 2 SELL (all at target)
     const testOrders = [
-        { id: 'buy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
-        { id: 'buy2', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 70, size: 100, orderId: '1.7.2' },
-        { id: 'sell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
-        { id: 'sell2', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 130, size: 1, orderId: '1.7.4' },
-        // Virtual orders
-        { id: 'vbuy1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 100 },
-        { id: 'vsell1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 105, size: 1 },
-        // Spread
-        { id: 'spread1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 102, size: 0 },
+        { id: 'buy-0', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 90, size: 100, orderId: '1.7.1' },
+        { id: 'buy-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, price: 80, size: 100, orderId: '1.7.2' },
+        { id: 'sell-0', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 110, size: 1, orderId: '1.7.3' },
+        { id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 120, size: 1, orderId: '1.7.4' },
+        // Replacements
+        { id: 'buy-X', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 70 },
+        { id: 'sell-X', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 130 },
     ];
 
     testOrders.forEach(o => mgr._updateOrder(o));
-
-    mgr.funds.available.buy = 500;
-    mgr.funds.available.sell = 5;
-    mgr.funds.cacheFunds = { buy: 100, sell: 0.5 };
+    mgr.recalculateFunds();
 
     // When both sides fill
-    const result = await rebalanceOrders(mgr, { [ORDER_TYPES.SELL]: 1, [ORDER_TYPES.BUY]: 1 }, 0);
+    mgr._updateOrder({ ...testOrders[0], state: ORDER_STATES.VIRTUAL, orderId: null });
+    mgr._updateOrder({ ...testOrders[2], state: ORDER_STATES.VIRTUAL, orderId: null });
+    const fills = [
+        { type: ORDER_TYPES.BUY, price: 90 },
+        { type: ORDER_TYPES.SELL, price: 110 }
+    ];
 
-    assert(Array.isArray(result.ordersToPlace), 'ordersToPlace should be array');
-    assert(Array.isArray(result.ordersToRotate), 'ordersToRotate should be array');
+    const result = await mgr.strategy.rebalance(fills);
 
     const placeByType = {};
     result.ordersToPlace.forEach(o => {
         placeByType[o.type] = (placeByType[o.type] || 0) + 1;
     });
 
-    // Should have both BUY and SELL activations
-    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should activate BUY when BUY fills');
-    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should activate SELL when SELL fills');
+    // Both should activate expansion (since targetCount is 2 and we have 1 active left on each side)
+    assert(placeByType[ORDER_TYPES.BUY] >= 1, 'Should activate BUY expansion');
+    assert(placeByType[ORDER_TYPES.SELL] >= 1, 'Should activate SELL expansion');
 
     console.log('✅ TEST 5 PASSED: Both sides handled correctly when both fill');
 }
@@ -296,15 +274,10 @@ async function testBothSidesFilledTogether() {
         await testBothSidesFilledTogether();
 
         console.log('\n✅ All rebalance orders tests passed!\n');
-        console.log('SUMMARY OF FIX:');
-        console.log('  - TEST 2 & 4 verify the critical bug fix:');
-        console.log('    When BUY fills, now correctly:');
-        console.log('      1. Activates BUY virtuals (was activating SELL)');
-        console.log('      2. Checks SELL count vs target (was checking BUY)');
-        console.log('      3. Creates/rotates SELL orders (was handling BUY)');
-        console.log('  - All tests verify symmetric behavior across both sides\n');
     } catch (error) {
         console.error('❌ Test failed:', error.message);
+        console.error(error.stack);
         process.exit(1);
     }
 })();
+
