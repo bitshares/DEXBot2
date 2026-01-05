@@ -765,7 +765,7 @@ async function main() {
                         if (entry) {
                             config.bots[idx] = entry;
                             saveBotsConfig(config, filePath);
-                            console.log(`\nUpdated bot '${entry.name}' in ${path.basename(filePath)}.`);
+                            console.log(`saved settings '${entry.name}' in ${path.basename(filePath)}.\n`);
                         }
                     } catch (err) {
                         console.log(`\n❌ Invalid input: ${err.message}\n`);

@@ -56,6 +56,23 @@ function readPassword(prompt) {
             const s = String(chunk);
             for (let i = 0; i < s.length; i++) {
                 const ch = s[i];
+
+                if (ch === '\x1b') { // ESC
+                    // Only treat as ESC if it's a single char, otherwise it might be part of an escape sequence
+                    // However, for password reading, we might want to prioritize canceling.
+                    // But we also have handling for [3~ below.
+                    // Let's assume standalone ESC or start of sequence.
+                    // If we just return, we might break sequences.
+                    // But for simple ESC key press:
+                    if (s.length === 1) {
+                        cleanup();
+                        stdout.write('\n');
+                        return resolve('\x1b');
+                    }
+                    // If it's part of a sequence, we might want to let the sequence handling logic take over or ignore it.
+                    // For now, let's just continue to the sequence handling logic below.
+                }
+
                 if (ch === '\r' || ch === '\n' || ch === '\u0004') {
                     cleanup();
                     stdout.write('\n');
@@ -98,6 +115,77 @@ function readPassword(prompt) {
                     stdout.write('\r\x1b[K' + prompt + '*'.repeat(password.length));
                 }
             }
+        };
+
+        stdin.on('data', onData);
+    });
+}
+
+/**
+ * Async version of readlineSync.question that supports ESC key.
+ * Returns the input string, or '\x1b' if ESC is pressed.
+ */
+function readInput(prompt, options = {}) {
+    const { mask, hideEchoBack = false } = options;
+    return new Promise((resolve) => {
+        const stdin = process.stdin;
+        const stdout = process.stdout;
+        let input = '';
+        
+        stdout.write(prompt);
+
+        const isRaw = stdin.isRaw;
+        if (stdin.isTTY) stdin.setRawMode(true);
+        stdin.resume();
+        stdin.setEncoding('utf8');
+
+        const onData = (chunk) => {
+            const s = String(chunk);
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+
+                if (ch === '\x1b') { // ESC
+                    if (s.length === 1) {
+                        cleanup();
+                        stdout.write('\n');
+                        return resolve('\x1b');
+                    }
+                    continue;
+                }
+
+                if (ch === '\r' || ch === '\n' || ch === '\u0004') {
+                    cleanup();
+                    stdout.write('\n');
+                    return resolve(input);
+                }
+
+                if (ch === '\u0003') { // Ctrl+C
+                    cleanup();
+                    process.exit();
+                }
+
+                if (ch === '\u007f' || ch === '\u0008') { // Backspace
+                    if (input.length > 0) {
+                        input = input.slice(0, -1);
+                        stdout.write('\b \b');
+                    }
+                    continue;
+                }
+
+                const code = ch.charCodeAt(0);
+                if (code >= 32 && code <= 126) {
+                    input += ch;
+                    if (!hideEchoBack) {
+                        stdout.write(mask || ch);
+                    }
+                }
+            }
+        };
+
+        const cleanup = () => {
+            try { stdin.removeListener('data', onData); } catch (e) { }
+            try { if (stdin.isTTY) stdin.setRawMode(false); } catch (e) { }
+            try { stdin.pause(); } catch (e) { }
         };
 
         stdin.on('data', onData);
@@ -307,17 +395,19 @@ function listKeyNames(accounts) {
     });
 }
 
-function selectKeyName(accounts, promptText) {
+async function selectKeyName(accounts, promptText) {
     const names = Object.keys(accounts);
     if (!names.length) {
         console.log('No accounts available to select.');
         return null;
     }
     names.forEach((name, index) => console.log(`  ${index + 1}. ${name}`));
-    const raw = readlineSync.question(`${promptText} [1-${names.length}]: `).trim();
+    const raw = (await readInput(`${promptText} [1-${names.length}]: `)).trim();
+    if (raw === '\x1b') return '\x1b';
+
     const idx = Number(raw) - 1;
     if (Number.isNaN(idx) || idx < 0 || idx >= names.length) {
-        console.log('Invalid selection.');
+        if (raw !== '') console.log('Invalid selection.');
         return null;
     }
     return names[idx];
@@ -329,12 +419,18 @@ async function changeMasterPassword(accountsData, currentPassword) {
         return currentPassword;
     }
     const oldPassword = await readPassword('Enter current master password: ');
+    if (oldPassword === '\x1b') return currentPassword;
+
     if (hashPassword(oldPassword) !== accountsData.masterPasswordHash) {
         console.log('Incorrect master password!');
         return currentPassword;
     }
     const newPassword = await readPassword('Enter new master password:     ');
+    if (newPassword === '\x1b') return currentPassword;
+
     const confirmPassword = await readPassword('Confirm new master password:   ');
+    if (confirmPassword === '\x1b') return currentPassword;
+
     if (newPassword !== confirmPassword) {
         console.log('Passwords do not match!');
         return currentPassword;
@@ -433,12 +529,27 @@ async function main() {
         console.log('6. Change master password');
         console.log('7. Exit');
 
-        const choice = readlineSync.question('Choose an option: ');
+        const choiceRaw = await readInput('Choose an option: ');
         console.log('');
 
+        if (choiceRaw === '\x1b') {
+            console.log('Keymanager closed!');
+            break;
+        }
+
+        const choice = choiceRaw.trim();
+
         if (choice === '1') {
-            const accountName = readlineSync.question('Enter account name: ');
+            const accountNameRaw = await readInput('Enter account name: ');
+            if (accountNameRaw === '\x1b') continue;
+            const accountName = accountNameRaw.trim();
+            if (!accountName) {
+                continue;
+            }
+
             const privateKeyRaw = await readPassword('Enter private key:  ');
+            if (privateKeyRaw === '\x1b') continue;
+
             const privateKey = privateKeyRaw.replace(/\s+/g, '');
 
             const validation = validatePrivateKey(privateKey);
@@ -454,9 +565,12 @@ async function main() {
             saveAccounts(accountsData);
             console.log(`Account '${accountName}' added successfully.`);
         } else if (choice === '2') {
-            const accountName = selectKeyName(accountsData.accounts, 'Select key to modify');
-            if (!accountName) continue;
+            const accountName = await selectKeyName(accountsData.accounts, 'Select key to modify');
+            if (accountName === '\x1b' || !accountName) continue;
+            
             const privateKeyRaw = await readPassword('Enter private key:   ');
+            if (privateKeyRaw === '\x1b') continue;
+            
             const privateKey = privateKeyRaw.replace(/\s+/g, '');
 
             const validation = validatePrivateKey(privateKey);
@@ -471,9 +585,12 @@ async function main() {
             saveAccounts(accountsData);
             console.log(`Account '${accountName}' updated successfully.`);
         } else if (choice === '3') {
-            const accountName = selectKeyName(accountsData.accounts, 'Select key to remove');
-            if (!accountName) continue;
-            const confirm = readlineSync.question(`Remove '${accountName}'? (y/n): `).trim().toLowerCase();
+            const accountName = await selectKeyName(accountsData.accounts, 'Select key to remove');
+            if (accountName === '\x1b' || !accountName) continue;
+            
+            const confirm = (await readInput(`Remove '${accountName}'? (y/n): `)).trim().toLowerCase();
+            if (confirm === '\x1b') continue;
+
             if (confirm === 'y') {
                 delete accountsData.accounts[accountName];
                 saveAccounts(accountsData);
@@ -484,8 +601,9 @@ async function main() {
         } else if (choice === '4') {
             listKeyNames(accountsData.accounts);
         } else if (choice === '5') {
-            const accountName = selectKeyName(accountsData.accounts, 'Select key to test');
-            if (!accountName) continue;
+            const accountName = await selectKeyName(accountsData.accounts, 'Select key to test');
+            if (accountName === '\x1b' || !accountName) continue;
+            
             try {
                 const decryptedKey = decrypt(accountsData.accounts[accountName].encryptedKey, masterPassword);
                 console.log(`First 5 characters: ${decryptedKey.substring(0, 5)}`);
