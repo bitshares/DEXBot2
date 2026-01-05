@@ -14,6 +14,75 @@ function parseJsonWithComments(raw) {
 const BOTS_FILE = path.join(__dirname, '..', 'profiles', 'bots.json');
 const SETTINGS_FILE = path.join(__dirname, '..', 'profiles', 'general.settings.json');
 
+/**
+ * Async version of readlineSync.question that supports ESC key.
+ * Returns the input string, or '\x1b' if ESC is pressed.
+ */
+function readInput(prompt, options = {}) {
+    const { mask, hideEchoBack = false } = options;
+    return new Promise((resolve) => {
+        const stdin = process.stdin;
+        const stdout = process.stdout;
+        let input = '';
+        
+        stdout.write(prompt);
+
+        const isRaw = stdin.isRaw;
+        if (stdin.isTTY) stdin.setRawMode(true);
+        stdin.resume();
+        stdin.setEncoding('utf8');
+
+        const onData = (chunk) => {
+            const s = String(chunk);
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+
+                if (ch === '\x1b') { // ESC
+                    if (s.length === 1) {
+                        cleanup();
+                        stdout.write('\n');
+                        return resolve('\x1b');
+                    }
+                    continue;
+                }
+
+                if (ch === '\r' || ch === '\n' || ch === '\u0004') {
+                    cleanup();
+                    stdout.write('\n');
+                    return resolve(input);
+                }
+
+                if (ch === '\u0003') { // Ctrl+C
+                    cleanup();
+                    process.exit();
+                }
+
+                if (ch === '\u007f' || ch === '\u0008') { // Backspace
+                    if (input.length > 0) {
+                        input = input.slice(0, -1);
+                        stdout.write('\b \b');
+                    }
+                    continue;
+                }
+
+                const code = ch.charCodeAt(0);
+                if (code >= 32 && code <= 126) {
+                    input += ch;
+                    if (!hideEchoBack) {
+                        stdout.write(mask || ch);
+                    }
+                }
+            }
+        };
+
+        const cleanup = () => {
+            stdin.removeListener('data', onData);
+            if (stdin.isTTY) stdin.setRawMode(isRaw);
+        };
+
+        stdin.on('data', onData);
+    });
+}
 
 function ensureProfilesDirectory() {
     const dir = path.dirname(BOTS_FILE);
@@ -92,28 +161,31 @@ function listBots(bots) {
     });
 }
 
-function selectBotIndex(bots, promptMessage) {
+async function selectBotIndex(bots, promptMessage) {
     if (!bots.length) return null;
     listBots(bots);
-    const raw = readlineSync.question(`${promptMessage} [1-${bots.length}]: `).trim();
+    const raw = (await readInput(`${promptMessage} [1-${bots.length}]: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     const idx = Number(raw);
     if (Number.isNaN(idx) || idx < 1 || idx > bots.length) {
-        console.log('Invalid selection.');
+        if (raw !== '') console.log('Invalid selection.');
         return null;
     }
     return idx - 1;
 }
 
-function askString(promptText, defaultValue) {
+async function askString(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const answer = readlineSync.question(`${promptText}${suffix}: `);
+    const answer = await readInput(`${promptText}${suffix}: `);
+    if (answer === '\x1b') return '\x1b';
     if (!answer) return defaultValue;
     return answer.trim();
 }
 
-function askRequiredString(promptText, defaultValue) {
+async function askRequiredString(promptText, defaultValue) {
     while (true) {
-        const value = askString(promptText, defaultValue);
+        const value = await askString(promptText, defaultValue);
+        if (value === '\x1b') return '\x1b';
         if (value && value.trim()) return value.trim();
         console.log('This field is required.');
     }
@@ -124,10 +196,8 @@ async function askAsset(promptText, defaultValue) {
         const displayDefault = defaultValue ? String(defaultValue).toUpperCase() : undefined;
         const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
 
-        // Use readlineSync with mask to capture and display as uppercase
-        const answer = readlineSync.question(`${promptText}${suffix}: `, {
-            hideEchoBack: false
-        }).trim();
+        const answer = await readInput(`${promptText}${suffix}: `);
+        if (answer === '\x1b') return '\x1b';
 
         if (!answer) {
             if (displayDefault) return displayDefault;
@@ -135,7 +205,7 @@ async function askAsset(promptText, defaultValue) {
             continue;
         }
 
-        return answer.toUpperCase();
+        return answer.toUpperCase().trim();
     }
 }
 
@@ -144,10 +214,8 @@ async function askAssetB(promptText, defaultValue, assetA) {
         const displayDefault = defaultValue ? String(defaultValue).toUpperCase() : undefined;
         const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
 
-        // Use readlineSync with mask to capture and display as uppercase
-        const answer = readlineSync.question(`${promptText}${suffix}: `, {
-            hideEchoBack: false
-        }).trim();
+        const answer = await readInput(`${promptText}${suffix}: `);
+        if (answer === '\x1b') return '\x1b';
 
         if (!answer) {
             if (displayDefault) return displayDefault;
@@ -155,7 +223,7 @@ async function askAssetB(promptText, defaultValue, assetA) {
             continue;
         }
 
-        const assetB = answer.toUpperCase();
+        const assetB = answer.toUpperCase().trim();
 
         // Validate that Asset B is different from Asset A
         if (assetB === assetA) {
@@ -167,9 +235,10 @@ async function askAssetB(promptText, defaultValue, assetA) {
     }
 }
 
-function askNumber(promptText, defaultValue) {
+async function askNumber(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -184,12 +253,13 @@ function askNumber(promptText, defaultValue) {
     return parsed;
 }
 
-function askWeightDistribution(promptText, defaultValue) {
+async function askWeightDistribution(promptText, defaultValue) {
     const MIN_WEIGHT = -1;
     const MAX_WEIGHT = 2;
     console.log('\x1b[33m  -1=SuperValley ←→ 0=Valley ←→ 0.5=Neutral ←→ 1=Mountain ←→ 2=SuperMountain\x1b[0m');
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -203,11 +273,12 @@ function askWeightDistribution(promptText, defaultValue) {
     return parsed;
 }
 
-function askWeightDistributionNoLegend(promptText, defaultValue) {
+async function askWeightDistributionNoLegend(promptText, defaultValue) {
     const MIN_WEIGHT = -1;
     const MAX_WEIGHT = 2;
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -225,9 +296,10 @@ function isMultiplierString(value) {
     return typeof value === 'string' && /^[ -￿]*[0-9]+(?:\.[0-9]+)?x[ -￿]*$/i.test(value);
 }
 
-function askNumberWithBounds(promptText, defaultValue, minVal, maxVal) {
+async function askNumberWithBounds(promptText, defaultValue, minVal, maxVal) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -251,10 +323,11 @@ function askNumberWithBounds(promptText, defaultValue, minVal, maxVal) {
     return parsed;
 }
 
-function askTargetSpreadPercent(promptText, defaultValue, incrementPercent) {
+async function askTargetSpreadPercent(promptText, defaultValue, incrementPercent) {
     const minRequired = incrementPercent * 2;
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue.toFixed(2)}]` : '';
-    const raw = readlineSync.question(`${promptText} (>= ${minRequired.toFixed(2)})${suffix}: `).trim();
+    const raw = (await readInput(`${promptText} (>= ${minRequired.toFixed(2)})${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -279,9 +352,10 @@ function askTargetSpreadPercent(promptText, defaultValue, incrementPercent) {
     return parsed;
 }
 
-function askIntegerInRange(promptText, defaultValue, minVal, maxVal) {
+async function askIntegerInRange(promptText, defaultValue, minVal, maxVal) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -301,9 +375,10 @@ function askIntegerInRange(promptText, defaultValue, minVal, maxVal) {
     return parsed;
 }
 
-function askNumberOrMultiplier(promptText, defaultValue) {
+async function askNumberOrMultiplier(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     if (isMultiplierString(raw)) {
         const trimmed = raw.trim();
@@ -327,9 +402,10 @@ function askNumberOrMultiplier(promptText, defaultValue) {
     return parsed;
 }
 
-function askMaxPrice(promptText, defaultValue, minPrice) {
+async function askMaxPrice(promptText, defaultValue, minPrice) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     if (isMultiplierString(raw)) {
         const trimmed = raw.trim();
@@ -368,9 +444,10 @@ function normalizePercentageInput(value) {
     return `${numeric}%`;
 }
 
-function askNumberOrPercentage(promptText, defaultValue) {
+async function askNumberOrPercentage(promptText, defaultValue) {
     const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     const percent = normalizePercentageInput(raw);
     if (percent !== null) return percent;
@@ -382,17 +459,20 @@ function askNumberOrPercentage(promptText, defaultValue) {
     return parsed;
 }
 
-function askBoolean(promptText, defaultValue) {
+async function askBoolean(promptText, defaultValue) {
     const label = defaultValue ? 'Y/n' : 'y/N';
-    const raw = readlineSync.question(`${promptText} (${label}): `).trim().toLowerCase();
+    const raw = (await readInput(`${promptText} (${label}): `)).trim().toLowerCase();
+    if (raw === '\x1b') return '\x1b';
     if (!raw) return !!defaultValue;
     return raw.startsWith('y');
 }
 
-function askStartPrice(promptText, defaultValue) {
+async function askStartPrice(promptText, defaultValue) {
     while (true) {
         const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-        const raw = readlineSync.question(`${promptText}${suffix}: `).trim();
+        const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+
+        if (raw === '\x1b') return '\x1b';
 
         if (!raw) {
             if (defaultValue !== undefined && defaultValue !== null) {
@@ -449,36 +529,76 @@ async function promptBotData(base = {}) {
         console.log('\x1b[32mS) Save & Exit\x1b[0m');
         console.log('\x1b[31mC) Cancel (Discard changes)\x1b[0m');
 
-        const choice = readlineSync.question('\nSelect section to edit or action: ').trim().toLowerCase();
+        const choice = (await readInput('\nSelect section to edit or action: ')).trim().toLowerCase();
+
+        if (choice === '\x1b') {
+            finished = true;
+            cancelled = true;
+            break;
+        }
 
         switch (choice) {
             case '1':
-                data.assetA = await askAsset('Asset A for selling', data.assetA);
-                data.assetB = await askAssetB('Asset B for buying', data.assetB, data.assetA);
+                const assetA = await askAsset('Asset A for selling', data.assetA);
+                if (assetA === '\x1b') break;
+                const assetB = await askAssetB('Asset B for buying', data.assetB, assetA);
+                if (assetB === '\x1b') break;
+                data.assetA = assetA;
+                data.assetB = assetB;
                 break;
             case '2':
-                data.name = askRequiredString('Bot name', data.name);
-                data.preferredAccount = askRequiredString('Preferred account', data.preferredAccount);
-                data.active = askBoolean('Active', data.active);
-                data.dryRun = askBoolean('Dry run', data.dryRun);
+                const name = await askRequiredString('Bot name', data.name);
+                if (name === '\x1b') break;
+                const prefAcc = await askRequiredString('Preferred account', data.preferredAccount);
+                if (prefAcc === '\x1b') break;
+                const active = await askBoolean('Active', data.active);
+                if (active === '\x1b') break;
+                const dryRun = await askBoolean('Dry run', data.dryRun);
+                if (dryRun === '\x1b') break;
+                data.name = name;
+                data.preferredAccount = prefAcc;
+                data.active = active;
+                data.dryRun = dryRun;
                 break;
             case '3':
-                data.minPrice = askNumberOrMultiplier('minPrice', data.minPrice);
-                data.maxPrice = askMaxPrice('maxPrice', data.maxPrice, data.minPrice);
-                data.startPrice = askStartPrice('startPrice (pool, market or A/B)', data.startPrice);
+                const minP = await askNumberOrMultiplier('minPrice', data.minPrice);
+                if (minP === '\x1b') break;
+                const maxP = await askMaxPrice('maxPrice', data.maxPrice, minP);
+                if (maxP === '\x1b') break;
+                const startP = await askStartPrice('startPrice (pool, market or A/B)', data.startPrice);
+                if (startP === '\x1b') break;
+                data.minPrice = minP;
+                data.maxPrice = maxP;
+                data.startPrice = startP;
                 break;
             case '4':
-                data.weightDistribution.sell = askWeightDistribution('Weight distribution (sell)', data.weightDistribution.sell);
-                data.weightDistribution.buy = askWeightDistributionNoLegend('Weight distribution (buy)', data.weightDistribution.buy);
-                data.incrementPercent = askNumberWithBounds('incrementPercent', data.incrementPercent, 0.01, 10);
-                const defaultSpread = data.targetSpreadPercent || data.incrementPercent * 4;
-                data.targetSpreadPercent = askTargetSpreadPercent('targetSpread %', defaultSpread, data.incrementPercent);
+                const wSell = await askWeightDistribution('Weight distribution (sell)', data.weightDistribution.sell);
+                if (wSell === '\x1b') break;
+                const wBuy = await askWeightDistributionNoLegend('Weight distribution (buy)', data.weightDistribution.buy);
+                if (wBuy === '\x1b') break;
+                const incrP = await askNumberWithBounds('incrementPercent', data.incrementPercent, 0.01, 10);
+                if (incrP === '\x1b') break;
+                const defaultSpread = data.targetSpreadPercent || incrP * 4;
+                const targetS = await askTargetSpreadPercent('targetSpread %', defaultSpread, incrP);
+                if (targetS === '\x1b') break;
+                data.weightDistribution.sell = wSell;
+                data.weightDistribution.buy = wBuy;
+                data.incrementPercent = incrP;
+                data.targetSpreadPercent = targetS;
                 break;
             case '5':
-                data.botFunds.sell = askNumberOrPercentage('botFunds sell amount', data.botFunds.sell);
-                data.botFunds.buy = askNumberOrPercentage('botFunds buy amount', data.botFunds.buy);
-                data.activeOrders.sell = askIntegerInRange('activeOrders sell count', data.activeOrders.sell, 1, 100);
-                data.activeOrders.buy = askIntegerInRange('activeOrders buy count', data.activeOrders.buy, 1, 100);
+                const fSell = await askNumberOrPercentage('botFunds sell amount', data.botFunds.sell);
+                if (fSell === '\x1b') break;
+                const fBuy = await askNumberOrPercentage('botFunds buy amount', data.botFunds.buy);
+                if (fBuy === '\x1b') break;
+                const oSell = await askIntegerInRange('activeOrders sell count', data.activeOrders.sell, 1, 100);
+                if (oSell === '\x1b') break;
+                const oBuy = await askIntegerInRange('activeOrders buy count', data.activeOrders.buy, 1, 100);
+                if (oBuy === '\x1b') break;
+                data.botFunds.sell = fSell;
+                data.botFunds.buy = fBuy;
+                data.activeOrders.sell = oSell;
+                data.activeOrders.buy = oBuy;
                 break;
             case 's':
                 // Final basic validation before saving
@@ -489,10 +609,8 @@ async function promptBotData(base = {}) {
                 finished = true;
                 break;
             case 'c':
-                if (askBoolean('Discard all changes?', false)) {
-                    finished = true;
-                    cancelled = true;
-                }
+                finished = true;
+                cancelled = true;
                 break;
             default:
                 console.log('Invalid choice.');
@@ -534,30 +652,55 @@ async function promptGeneralSettings() {
         console.log('\x1b[32mS) Save & Exit\x1b[0m');
         console.log('\x1b[31mC) Cancel (Discard changes)\x1b[0m');
 
-        const choice = readlineSync.question('\nSelect section to edit or action: ').trim().toLowerCase();
+        const choice = (await readInput('\nSelect section to edit or action: ')).trim().toLowerCase();
+
+        if (choice === '\x1b') {
+            finished = true;
+            break;
+        }
 
         switch (choice) {
             case '1':
-                settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE = askNumberWithBounds('Grid Cache Regeneration %', settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE, 0.1, 50);
-                settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE = askNumberWithBounds('RMS Divergence Threshold %', settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE, 1, 100);
-                settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE = askNumberWithBounds('Partial Dust Threshold %', settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE, 0.1, 50);
+                const gRegen = await askNumberWithBounds('Grid Cache Regeneration %', settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE, 0.1, 50);
+                if (gRegen === '\x1b') break;
+                const rms = await askNumberWithBounds('RMS Divergence Threshold %', settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE, 1, 100);
+                if (rms === '\x1b') break;
+                const dust = await askNumberWithBounds('Partial Dust Threshold %', settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE, 0.1, 50);
+                if (dust === '\x1b') break;
+                settings.GRID_LIMITS.GRID_REGENERATION_PERCENTAGE = gRegen;
+                settings.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE = rms;
+                settings.GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE = dust;
                 break;
             case '2':
-                settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN = askNumberWithBounds('Blockchain Fetch Interval (min)', settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN, 1, 1440);
-                settings.TIMING.SYNC_DELAY_MS = askNumberWithBounds('Sync Delay (ms)', settings.TIMING.SYNC_DELAY_MS, 100, 10000);
-                settings.TIMING.LOCK_TIMEOUT_MS = askNumberWithBounds('Lock Timeout (ms)', settings.TIMING.LOCK_TIMEOUT_MS, 1000, 60000);
+                const fetch = await askNumberWithBounds('Blockchain Fetch Interval (min)', settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN, 1, 1440);
+                if (fetch === '\x1b') break;
+                const delay = await askNumberWithBounds('Sync Delay (ms)', settings.TIMING.SYNC_DELAY_MS, 100, 10000);
+                if (delay === '\x1b') break;
+                const lock = await askNumberWithBounds('Lock Timeout (ms)', settings.TIMING.LOCK_TIMEOUT_MS, 1000, 60000);
+                if (lock === '\x1b') break;
+                settings.TIMING.BLOCKCHAIN_FETCH_INTERVAL_MIN = fetch;
+                settings.TIMING.SYNC_DELAY_MS = delay;
+                settings.TIMING.LOCK_TIMEOUT_MS = lock;
                 break;
             case '3':
-                settings.TIMING.FILL_DEDUPE_WINDOW_MS = askNumberWithBounds('Fill Dedup Window (ms)', settings.TIMING.FILL_DEDUPE_WINDOW_MS, 100, 30000);
-                settings.TIMING.FILL_CLEANUP_INTERVAL_MS = askNumberWithBounds('Fill Cleanup Interval (ms)', settings.TIMING.FILL_CLEANUP_INTERVAL_MS, 1000, 60000);
-                settings.TIMING.FILL_RECORD_RETENTION_MS = askNumberWithBounds('Fill Record Retention (ms)', settings.TIMING.FILL_RECORD_RETENTION_MS, 600000, 86400000);
+                const dedupe = await askNumberWithBounds('Fill Dedup Window (ms)', settings.TIMING.FILL_DEDUPE_WINDOW_MS, 100, 30000);
+                if (dedupe === '\x1b') break;
+                const clean = await askNumberWithBounds('Fill Cleanup Interval (ms)', settings.TIMING.FILL_CLEANUP_INTERVAL_MS, 1000, 60000);
+                if (clean === '\x1b') break;
+                const retain = await askNumberWithBounds('Fill Record Retention (ms)', settings.TIMING.FILL_RECORD_RETENTION_MS, 600000, 86400000);
+                if (retain === '\x1b') break;
+                settings.TIMING.FILL_DEDUPE_WINDOW_MS = dedupe;
+                settings.TIMING.FILL_CLEANUP_INTERVAL_MS = clean;
+                settings.TIMING.FILL_RECORD_RETENTION_MS = retain;
                 break;
             case '4':
                 const levels = ['debug', 'info', 'warn', 'error'];
                 console.log(`Available levels: ${levels.join(', ')}`);
-                const newLevel = askString('Enter log level', settings.LOG_LEVEL).toLowerCase();
-                if (levels.includes(newLevel)) {
-                    settings.LOG_LEVEL = newLevel;
+                const newLevel = await askString('Enter log level', settings.LOG_LEVEL);
+                if (newLevel === '\x1b') break;
+                const lowered = newLevel.toLowerCase();
+                if (levels.includes(lowered)) {
+                    settings.LOG_LEVEL = lowered;
                 } else {
                     console.log('Invalid log level.');
                 }
@@ -567,9 +710,7 @@ async function promptGeneralSettings() {
                 finished = true;
                 break;
             case 'c':
-                if (askBoolean('Discard all changes?', false)) {
-                    finished = true;
-                }
+                finished = true;
                 break;
             default:
                 console.log('Invalid choice.');
@@ -591,63 +732,78 @@ async function main() {
         console.log('  5) List bots');
         console.log('  6) General settings');
         console.log('  7) Exit');
-        const selection = readlineSync.question('Choose an action [1-7]: ').trim();
+        const selection = (await readInput('Choose an action [1-7]: ')).trim();
         console.log('');
+        
+        if (selection === '\x1b' || selection === '7') {
+            exit = true;
+            continue;
+        }
+
         switch (selection) {
             case '1': {
-                try {
-                    const entry = await promptBotData();
-                    if (entry) {
+                while (true) {
+                    try {
+                        const entry = await promptBotData();
+                        if (!entry) break;
                         config.bots.push(entry);
                         saveBotsConfig(config, filePath);
                         console.log(`\nAdded bot '${entry.name}' to ${path.basename(filePath)}.`);
+                    } catch (err) {
+                        console.log(`\n❌ Invalid input: ${err.message}\n`);
+                        break;
                     }
-                } catch (err) {
-                    console.log(`\n❌ Invalid input: ${err.message}\n`);
                 }
                 break;
             }
             case '2': {
-                const idx = selectBotIndex(config.bots, 'Select bot to modify');
-                if (idx === null) break;
-                try {
-                    const entry = await promptBotData(config.bots[idx]);
-                    if (entry) {
-                        config.bots[idx] = entry;
-                        saveBotsConfig(config, filePath);
-                        console.log(`\nUpdated bot '${entry.name}' in ${path.basename(filePath)}.`);
+                while (true) {
+                    const idx = await selectBotIndex(config.bots, 'modify or leave (Enter/Esc)');
+                    if (idx === null || idx === '\x1b') break;
+                    try {
+                        const entry = await promptBotData(config.bots[idx]);
+                        if (entry) {
+                            config.bots[idx] = entry;
+                            saveBotsConfig(config, filePath);
+                            console.log(`\nUpdated bot '${entry.name}' in ${path.basename(filePath)}.`);
+                        }
+                    } catch (err) {
+                        console.log(`\n❌ Invalid input: ${err.message}\n`);
                     }
-                } catch (err) {
-                    console.log(`\n❌ Invalid input: ${err.message}\n`);
                 }
                 break;
             }
             case '3': {
-                const idx = selectBotIndex(config.bots, 'Select bot to delete');
-                if (idx === null) break;
-                const placeholderName = config.bots[idx].name || `<unnamed-${idx + 1}>`;
-                const confirm = askBoolean(`Delete '${placeholderName}'?`, false);
-                if (confirm) {
-                    const removed = config.bots.splice(idx, 1)[0];
-                    saveBotsConfig(config, filePath);
-                    console.log(`\nRemoved bot '${removed.name || placeholderName}' from ${path.basename(filePath)}.`);
-                } else {
-                    console.log('\nDeletion cancelled.');
+                while (true) {
+                    const idx = await selectBotIndex(config.bots, 'delete or leave (Enter/Esc)');
+                    if (idx === null || idx === '\x1b') break;
+                    const placeholderName = config.bots[idx].name || `<unnamed-${idx + 1}>`;
+                    const confirm = await askBoolean(`Delete '${placeholderName}'?`, false);
+                    if (confirm === '\x1b') break;
+                    if (confirm) {
+                        const removed = config.bots.splice(idx, 1)[0];
+                        saveBotsConfig(config, filePath);
+                        console.log(`\nRemoved bot '${removed.name || placeholderName}' from ${path.basename(filePath)}.`);
+                    } else {
+                        console.log('\nDeletion cancelled.');
+                    }
                 }
                 break;
             }
             case '4': {
-                const idx = selectBotIndex(config.bots, 'Select bot to copy');
-                if (idx === null) break;
-                try {
-                    const entry = await promptBotData(config.bots[idx]);
-                    if (entry) {
-                        config.bots.splice(idx + 1, 0, entry);
-                        saveBotsConfig(config, filePath);
-                        console.log(`\nCopied bot '${entry.name}' into ${path.basename(filePath)}.`);
+                while (true) {
+                    const idx = await selectBotIndex(config.bots, 'copy or leave (Enter/Esc)');
+                    if (idx === null || idx === '\x1b') break;
+                    try {
+                        const entry = await promptBotData(config.bots[idx]);
+                        if (entry) {
+                            config.bots.splice(idx + 1, 0, entry);
+                            saveBotsConfig(config, filePath);
+                            console.log(`\nCopied bot '${entry.name}' into ${path.basename(filePath)}.`);
+                        }
+                    } catch (err) {
+                        console.log(`\n❌ Invalid input: ${err.message}\n`);
                     }
-                } catch (err) {
-                    console.log(`\n❌ Invalid input: ${err.message}\n`);
                 }
                 break;
             }

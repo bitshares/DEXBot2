@@ -505,6 +505,7 @@ async function handleCLICommands() {
             await runAccountManager({ waitForConnection: true, exitAfter: true, disconnectAfter: true });
             return true;
         case 'bots':
+            setSuppressConnectionLog(true);
             await accountBots.main();
             try {
                 BitShares.disconnect();
