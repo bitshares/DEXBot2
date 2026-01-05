@@ -77,6 +77,7 @@ Tests for fee calculations, fund management, and asset precision.
 Complex tests that simulate larger workflows or system integration.
 
 *   `test_engine_integration.js` - Integration tests for the core engine.
+*   `test_market_scenarios.js` - Realistic market simulation (Pumps, Dumps, V-Shape recovery).
 *   `test_anchor_refill_integration.js` - Integration tests for the anchor refill mechanism.
 *   `test_anchor_refill_endtoend.js` - End-to-end tests for anchor refill.
 *   `test_anchor_refill_strategy.js` - Strategy logic tests for anchor refill.
