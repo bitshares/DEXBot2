@@ -103,7 +103,8 @@ async function runOrderManagerCalculation() {
 
     for (let cycle = 1; cycle <= cycles; cycle++) {
         manager.logger.log(`\n----- Cycle ${cycle}/${cycles} -----`, 'info');
-        await manager.fetchOrderUpdates({ calculate: true });
+        // Use syncFromOpenOrders([]) to simulate a sync check in the test runner
+        await manager.syncFromOpenOrders([]);
         manager.logger && manager.logger.displayStatus && manager.logger.displayStatus(manager);
         if (cycle < cycles) await new Promise(resolve => setTimeout(resolve, delayMs));
     }

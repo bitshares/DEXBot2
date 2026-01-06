@@ -13,8 +13,7 @@ const {
     findMatchingGridOrderByOpenOrder, 
     applyChainSizeToGridOrder, 
     convertToSpreadPlaceholder,
-    hasValidAccountTotals,
-    formatOrderSize
+    hasValidAccountTotals
 } = require('./utils');
 
 class SyncEngine {

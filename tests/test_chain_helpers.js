@@ -45,14 +45,4 @@ assert.ok(Math.abs(parsedBuy.size - 0.12345) < 1e-12, `buy size should be 0.1234
 const minSell = utils.getMinOrderSize('sell', assets, 50);
 assert.ok(Math.abs(minSell - 0.005) < 1e-12, `expected minSell 0.005 got ${minSell}`);
 
-// findBestMatchByPrice simple test
-const ordersMap = new Map();
-ordersMap.set('g1', { id: 'g1', price: 20.0, type: 'sell', size: 1 });
-ordersMap.set('g2', { id: 'g2', price: 25.0, type: 'sell', size: 1 });
-const candidates = ['g1','g2'];
-const chain = { price: 20.1, type: 'sell' };
-const calcTol = () => 0.2; // tolerance 0.2 allows 20.1 to match g1 (diff 0.1)
-const best = utils.findBestMatchByPrice(chain, candidates, ordersMap, calcTol);
-assert.strictEqual(best.match.id, 'g1', 'expect g1 to be best match');
-
 console.log('chain_helpers tests passed');

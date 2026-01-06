@@ -26,6 +26,7 @@ const AsyncLock = require('./async_lock');
 const Accountant = require('./accounting');
 const StrategyEngine = require('./strategy');
 const SyncEngine = require('./sync_engine');
+const Grid = require('./grid');
 
 class OrderManager {
     /**
@@ -636,60 +637,20 @@ class OrderManager {
 
     /**
      * Get all PARTIAL orders of a given type that are NOT locked.
-     *
-     * PARTIAL orders are those that have partially filled on-chain and are waiting for
-     * consolidation or rotation. They are critical to the multi-partial consolidation
-     * logic which:
-     * - Restores outer partials to their ideal grid sizes
-     * - Absorbs residual capital into the innermost partial
-     * - Prevents "traffic jams" where multiple partials block each other
-     *
-     * We exclude locked orders because they are being processed in parallel by
-     * other operations (fills, rotations, etc.) and should not be moved while locked.
      */
     getPartialOrdersOnSide(type) {
         return this.getOrdersByTypeAndState(type, ORDER_STATES.PARTIAL).filter(o => !this.isOrderLocked(o.id) && !this.isOrderLocked(o.orderId));
     }
 
-    async fetchOrderUpdates(options = { calculate: false }) {
-        try {
-            const activeOrders = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE);
-            if (activeOrders.length === 0 || (options && options.calculate)) {
-                const { remaining, filled } = await this.calculateOrderUpdates();
-                remaining.forEach(o => this.orders.set(o.id, o));
-                if (filled.length > 0) await this.processFilledOrders(filled);
-                return { remaining, filled };
-            }
-            return { remaining: activeOrders, filled: [] };
-        } catch (e) {
-            this.logger.log(`Error fetching order updates: ${e.message}`, 'error');
-            return { remaining: [], filled: [] };
-        }
-    }
-
-    async calculateOrderUpdates() {
-        const active = this.getOrdersByTypeAndState(null, ORDER_STATES.ACTIVE);
-        const start = this.config.startPrice;
-        const sells = active.filter(o => o.type === ORDER_TYPES.SELL).sort((a, b) => Math.abs(a.price - start) - Math.abs(b.price - start));
-        const buys = active.filter(o => o.type === ORDER_TYPES.BUY).sort((a, b) => Math.abs(a.price - start) - Math.abs(b.price - start));
-        const filled = [];
-        if (sells.length > 0) filled.push({ ...sells[0] });
-        else if (buys.length > 0) filled.push({ ...buys[0] });
-        return { remaining: active.filter(o => !filled.some(f => f.id === o.id)), filled };
-    }
-
     async checkSpreadCondition(BitShares, batchCb) {
-        const Grid = require('./grid');
         return await Grid.checkSpreadCondition(this, BitShares, batchCb);
     }
 
     async checkGridHealth(batchCb) {
-        const Grid = require('./grid');
         return await Grid.checkGridHealth(this, batchCb);
     }
 
     calculateCurrentSpread() {
-        const Grid = require('./grid');
         return Grid.calculateCurrentSpread(this);
     }
 

@@ -1286,9 +1286,9 @@ class DEXBot {
             while (true) {
                 try {
                     if (this.manager && !this.config.dryRun) {
-                        // Wrap fetchOrderUpdates in fill lock to prevent concurrent modifications
+                        // Use syncFromOpenOrders to keep grid in sync with blockchain reality
                         await this._fillProcessingLock.acquire(async () => {
-                            await this.manager.fetchOrderUpdates();
+                            await this.manager.syncFromOpenOrders();
                         });
                     }
                 } catch (err) { console.error('Order manager loop error:', err.message); }

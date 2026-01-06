@@ -41,11 +41,11 @@ assert.strictEqual(mgr.funds.available.sell, 10);
     assert(typeof committedBuy === 'number');
     assert(typeof committedSell === 'number');
 
-    // Check fetchOrderUpdates flows
-    const updates = await mgr.fetchOrderUpdates({ calculate: true });
-    assert(updates && typeof updates === 'object', 'fetchOrderUpdates should return object');
-    assert(Array.isArray(updates.remaining), 'remaining should be array');
-    assert(Array.isArray(updates.filled), 'filled should be array');
+    // Check syncFromOpenOrders flows
+    const syncResult = await mgr.syncFromOpenOrders([]);
+    assert(syncResult && typeof syncResult === 'object', 'syncResult should return object');
+    assert(Array.isArray(syncResult.updatedOrders), 'updatedOrders should be array');
+    assert(Array.isArray(syncResult.filledOrders), 'filledOrders should be array');
 
     console.log('manager tests passed');
 

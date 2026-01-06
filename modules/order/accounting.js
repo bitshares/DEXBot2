@@ -44,13 +44,10 @@ class Accountant {
             available: { buy: 0, sell: 0 },
             total: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
             virtual: { buy: 0, sell: 0 },
-            reserved: { buy: 0, sell: 0 }, // backwards compat alias
             committed: { chain: { buy: 0, sell: 0 }, grid: { buy: 0, sell: 0 } },
             cacheFunds: { buy: 0, sell: 0 },       // Surplus from rotation + fill proceeds
             btsFeesOwed: 0                         // Unpaid BTS fees (deducted from cache)
         };
-        // Make reserved an alias for virtual
-        mgr.funds.reserved = mgr.funds.virtual;
     }
 
     /**
@@ -157,9 +154,8 @@ class Accountant {
         mgr.funds.committed.grid = { buy: gridBuy, sell: gridSell };
         mgr.funds.committed.chain = { buy: chainBuy, sell: chainSell };
 
-        // Set virtual/virtual (grid orders not on-chain yet)
+        // Set virtual (grid orders not on-chain yet)
         mgr.funds.virtual = { buy: virtualBuy, sell: virtualSell };
-        mgr.funds.reserved = mgr.funds.virtual; // backwards compat alias
 
         // Set totals based on accountable funds only (chainFree + chainCommitted from on-chain orders)
         // Do NOT use blockchain-reported totals as they may include vesting balances, call orders,

@@ -26,7 +26,6 @@
  * SECTION 2: BLOCKCHAIN CONVERSIONS & PRECISION (lines 247-290)
  *   - blockchainToFloat, floatToBlockchainInt
  *   - getPrecisionByOrderType, getPrecisionForSide, getPrecisionsForManager
- *   - hasBtsPair
  *   Purpose: Handle blockchain conversions and precision calculations
  *
  * SECTION 3: FUND CALCULATIONS (lines 95-240)
@@ -42,7 +41,7 @@
  *   Purpose: Price calculation, tolerance checking, and derivation
  *
  * SECTION 5: CHAIN ORDER MATCHING & RECONCILIATION (lines 351-611)
- *   - parseChainOrder, findBestMatchByPrice
+ *   - parseChainOrder
  *   - findMatchingGridOrderByOpenOrder
  *   - applyChainSizeToGridOrder, correctOrderPriceOnChain
  *   - correctAllPriceMismatches, validateOrderAmountsWithinLimits
@@ -57,11 +56,10 @@
  * SECTION 7: GRID STATE MANAGEMENT (lines 1179-1440)
  *   - persistGridSnapshot, retryPersistenceIfNeeded
  *   - runGridComparisons, applyGridDivergenceCorrections
- *   - compareBlockchainSizes
  *   Purpose: Persist and compare grid state with blockchain
  *
  * SECTION 8: ORDER UTILITIES (lines 1442-1545)
- *   - buildCreateOrderArgs, convertToSpreadPlaceholder, formatOrderSize
+ *   - buildCreateOrderArgs, convertToSpreadPlaceholder
  *   - getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound
  *   Purpose: Build and manipulate order objects
  *
@@ -442,21 +440,6 @@ function parseChainOrder(chainOrder, assets) {
     } catch (e) { size = null; }
 
     return { orderId: chainOrder.id, price, type, size };
-}
-
-function findBestMatchByPrice(chainOrder, candidateIds, ordersMap, calcToleranceFn) {
-    let bestMatch = null; let smallestDiff = Infinity;
-    for (const gridOrderId of candidateIds) {
-        const gridOrder = ordersMap.get(gridOrderId);
-        if (!gridOrder || gridOrder.type !== chainOrder.type) continue;
-        const priceDiff = Math.abs(gridOrder.price - chainOrder.price);
-        const orderSize = toFiniteNumber(gridOrder.size ?? chainOrder.size);
-        const tolerance = calcToleranceFn(gridOrder.price, orderSize, gridOrder.type);
-        if (priceDiff <= tolerance && priceDiff < smallestDiff) {
-            smallestDiff = priceDiff; bestMatch = gridOrder;
-        }
-    }
-    return { match: bestMatch, priceDiff: smallestDiff };
 }
 
 /**
@@ -1423,25 +1406,6 @@ function buildCreateOrderArgs(order, assetA, assetB) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// SECTION 10: FILTERING & ANALYSIS (PART 1 - Numeric Validation)
-// ════════════════════════════════════════════════════════════════════════════════
-// Validate and convert numeric values
-
-/**
- * Compare two sizes at blockchain integer precision.
- * @param {number} size1 - First size
- * @param {number} size2 - Second size
- * @param {number} precision - Blockchain precision
- * @returns {number} -1 if size1 < size2, 0 if equal, 1 if size1 > size2
- */
-function compareBlockchainSizes(size1, size2, precision) {
-    const int1 = floatToBlockchainInt(size1, precision);
-    const int2 = floatToBlockchainInt(size2, precision);
-    if (int1 === int2) return 0;
-    return int1 > int2 ? 1 : -1;
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
 // SECTION 10: FILTERING & ANALYSIS (PART 2 - Order Filtering)
 // ════════════════════════════════════════════════════════════════════════════════
 // Filter, count, and analyze orders
@@ -1556,16 +1520,6 @@ function getPrecisionsForManager(assets) {
         A: assets?.assetA?.precision ?? 8,
         B: assets?.assetB?.precision ?? 8
     };
-}
-
-/**
- * Check if trading pair includes BTS as one of the assets.
- * @param {string} assetA - First asset symbol
- * @param {string} assetB - Second asset symbol
- * @returns {boolean} True if either asset is BTS
- */
-function hasBtsPair(assetA, assetB) {
-    return assetA === 'BTS' || assetB === 'BTS';
 }
 
 /**
@@ -1930,17 +1884,6 @@ function resolveConfiguredPriceBound(value, fallback, startPrice, mode) {
 }
 
 /**
- * Format a numeric value to 8 decimal places (standard BTS precision).
- * Used for logging and display purposes.
- *
- * @param {number} value - Value to format
- * @returns {string} Value formatted to 8 decimals
- */
-function formatOrderSize(value) {
-    return (Number(value) || 0).toFixed(8);
-}
-
-/**
  * Convert a filled order to a SPREAD placeholder.
  * Sets type to SPREAD, state to VIRTUAL, size to 0, and clears orderId.
  *
@@ -2008,7 +1951,6 @@ module.exports = {
 
     // Parsing + matching
     parseChainOrder,
-    findBestMatchByPrice,
     findMatchingGridOrderByOpenOrder,
 
     // Reconciliation
@@ -2042,7 +1984,6 @@ module.exports = {
     // Numeric validation helpers
     toFiniteNumber,
     isValidNumber,
-    compareBlockchainSizes,
 
     // Order filtering helpers
     filterOrdersByType,
@@ -2055,9 +1996,6 @@ module.exports = {
     getPrecisionByOrderType,
     getPrecisionForSide,
     getPrecisionsForManager,
-
-    // Pair detection
-    hasBtsPair,
 
     // Size validation helpers
     checkSizesBeforeMinimum,
@@ -2076,7 +2014,6 @@ module.exports = {
     resolveConfiguredPriceBound,
 
     // Formatting
-    formatOrderSize,
     convertToSpreadPlaceholder,
 
     // Validation helpers

@@ -86,15 +86,12 @@ class AccountOrders {
    * @param {string} options.profilesPath - Custom path for orders.json (legacy single-file mode)
    */
   constructor(options = {}) {
+    if (!options.botKey) throw new Error("botKey required for AccountOrders");
     this.botKey = options.botKey;
 
-    // Determine file path: per-bot file if botKey provided, otherwise legacy shared file
-    if (this.botKey) {
-      const ordersDir = path.join(__dirname, '..', 'profiles', 'orders');
-      this.profilesPath = path.join(ordersDir, `${this.botKey}.json`);
-    } else {
-      this.profilesPath = options.profilesPath || PROFILES_ORDERS_FILE;
-    }
+    // Use per-bot file: {botKey}.json
+    const ordersDir = path.join(__dirname, '..', 'profiles', 'orders');
+    this.profilesPath = path.join(ordersDir, `${this.botKey}.json`);
 
     // AsyncLock prevents concurrent read-modify-write races on file I/O
     // Serializes storeMasterGrid, updateCacheFunds, updateBtsFeesOwed operations
@@ -151,17 +148,13 @@ class AccountOrders {
       const validKeys = new Set();
       let changed = false;
 
-      // In per-bot mode: only process the matching bot
-      const entriesToProcess = this.botKey
-        ? botEntries.filter(bot => {
-            const key = bot.botKey || createBotKey(bot, botEntries.indexOf(bot));
-            const matches = key === this.botKey;
-            console.log(`[AccountOrders] per-bot filter: checking bot name=${bot.name}, key=${key}, this.botKey=${this.botKey}, matches=${matches}`);
-            return matches;
-          })
-        : botEntries;
+      // Filter to only the matching bot entry
+      const entriesToProcess = botEntries.filter(bot => {
+          const key = bot.botKey || createBotKey(bot, botEntries.indexOf(bot));
+          return key === this.botKey;
+      });
 
-      // 1. Update/Create active bots
+      // 1. Update/Create the matching bot entry
       for (const [index, bot] of entriesToProcess.entries()) {
         const key = bot.botKey || createBotKey(bot, index);
         validKeys.add(key);
@@ -407,17 +400,34 @@ class AccountOrders {
   async updateBtsFeesOwed(botKey, btsFeesOwed) {
     if (!botKey) return;
 
-    // Use AsyncLock to serialize writes and prevent stale data issues (fixes Issue #4)
-    // Always reload from disk regardless of mode to ensure latest state
     await this._persistenceLock.acquire(async () => {
       this.data = this._loadData() || { bots: {}, lastUpdated: nowIso() };
 
       if (!this.data || !this.data.bots || !this.data.bots[botKey]) {
         return;
       }
-      this.data.bots[botKey].btsFeesOwed = Number.isFinite(btsFeesOwed) ? btsFeesOwed : 0;
+      this.data.bots[botKey].btsFeesOwed = btsFeesOwed || 0;
       this.data.lastUpdated = nowIso();
       this._persist();
+    });
+  }
+
+  /**
+   * Clear the persisted grid for the bot.
+   * @returns {Promise<boolean>} true if cleared successfully
+   */
+  async clearBotGrid() {
+    return await this._persistenceLock.acquire(async () => {
+      this.data = this._loadData() || { bots: {} };
+      if (this.data.bots[this.botKey]) {
+        this.data.bots[this.botKey].grid = [];
+        this.data.bots[this.botKey].cacheFunds = { buy: 0, sell: 0 };
+        this.data.bots[this.botKey].btsFeesOwed = 0;
+        this.data.lastUpdated = nowIso();
+        this._persist();
+        return true;
+      }
+      return false;
     });
   }
 
