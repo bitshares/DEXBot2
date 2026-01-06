@@ -55,7 +55,7 @@ class Grid {
 
         // Generate all possible price levels for the total grid
         const priceLevels = [];
-        
+
         // 1. Generate levels upwards from startPrice
         let upPrice = startPrice * Math.sqrt(stepUp);
         while (upPrice <= maxPrice) {
@@ -84,18 +84,27 @@ class Grid {
             }
         });
 
-        // 5. Role Assignment (Initial pivot-aware roles)
+        // 5. Role Assignment (Initial market-aware roles)
         const step = 1 + (incrementPercent / 100);
-        const requiredSteps = Math.ceil(Math.log(1 + (config.targetSpreadPercent / 100)) / Math.log(step));
+        const minSpreadPercent = incrementPercent * (GRID_LIMITS.MIN_SPREAD_FACTOR || 2);
+        const targetSpreadPercent = Math.max(config.targetSpreadPercent || 0, minSpreadPercent);
+        const requiredSteps = Math.ceil(Math.log(1 + (targetSpreadPercent / 100)) / Math.log(step));
         const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 2, requiredSteps);
-        
-        // Balanced centering: split gapSlots equally around the pivot
-        const buyEndIdx = pivotIdx - Math.floor((gapSlots + 1) / 2);
-        const sellStartIdx = buyEndIdx + gapSlots + 1;
+
+        // Find Split Point (first slot >= startPrice)
+        let splitIdx = priceLevels.findIndex(p => p >= startPrice);
+        if (splitIdx === -1) splitIdx = priceLevels.length;
+
+        // Balanced centering: split gapSlots around the splitIdx point
+        const buySpread = Math.floor(gapSlots / 2);
+        const sellSpread = gapSlots - buySpread;
+
+        const buyEndIdx = splitIdx - buySpread - 1;
+        const sellStartIdx = splitIdx + sellSpread;
 
         const orders = priceLevels.map((price, i) => {
             let type = ORDER_TYPES.SPREAD;
-            
+
             if (i <= buyEndIdx) {
                 type = ORDER_TYPES.BUY;
             } else if (i >= sellStartIdx) {
@@ -114,8 +123,8 @@ class Grid {
         });
 
         const initialSpreadCount = {
-            buy: orders.filter(o => o.type === ORDER_TYPES.SPREAD && o.price < startPrice).length,
-            sell: orders.filter(o => o.type === ORDER_TYPES.SPREAD && o.price > startPrice).length
+            buy: buySpread,
+            sell: sellSpread
         };
 
         return { orders, boundaryIdx: buyEndIdx, initialSpreadCount };
@@ -153,9 +162,9 @@ class Grid {
     static async initializeGrid(manager) {
         if (!manager) throw new Error('initializeGrid requires a manager instance');
         await manager._initializeAssets();
-        
+
         const mpRaw = manager.config.startPrice;
-        
+
         // Auto-derive price if requested
         if (!Number.isFinite(Number(mpRaw)) || typeof mpRaw === 'string') {
             try {
@@ -168,7 +177,7 @@ class Grid {
         const mp = Number(manager.config.startPrice);
         const minP = resolveConfiguredPriceBound(manager.config.minPrice, DEFAULT_CONFIG.minPrice, mp, 'min');
         const maxP = resolveConfiguredPriceBound(manager.config.maxPrice, DEFAULT_CONFIG.maxPrice, mp, 'max');
-        
+
         manager.config.minPrice = minP;
         manager.config.maxPrice = maxP;
 
@@ -180,7 +189,7 @@ class Grid {
         } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
 
         const { orders, boundaryIdx, initialSpreadCount } = Grid.createOrderGrid(manager.config);
-        
+
         // Persist master boundary for StrategyEngine
         manager.boundaryIdx = boundaryIdx;
 
@@ -204,10 +213,10 @@ class Grid {
         }
 
         // Check for warning if orders are near minimal size (regression fix) 
-        const warningSellSize = minSellSize > 0 ? getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0; 
-        const warningBuySize = minBuySize > 0 ? getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0; 
-        if (checkSizesNearMinimum(sells, warningSellSize, precA) || checkSizesNearMinimum(buys, warningBuySize, precB)) { 
-            manager.logger.log("WARNING: Order grid contains orders near minimum size. To ensure the bot runs properly, consider increasing the funds of your bot.", "warn"); 
+        const warningSellSize = minSellSize > 0 ? getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0;
+        const warningBuySize = minBuySize > 0 ? getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR * 2) : 0;
+        if (checkSizesNearMinimum(sells, warningSellSize, precA) || checkSizesNearMinimum(buys, warningBuySize, precB)) {
+            manager.logger.log("WARNING: Order grid contains orders near minimum size. To ensure the bot runs properly, consider increasing the funds of your bot.", "warn");
         }
 
         manager.orders.clear();
@@ -216,11 +225,11 @@ class Grid {
         manager.resetFunds();
 
         sizedOrders.forEach(order => manager._updateOrder(order));
-        
+
         // Calculate spread count from initialized orders
         manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell;
         manager.currentSpreadCount = manager.targetSpreadCount;
-        
+
         manager.logger.log(`Initialized grid with ${orders.length} orders.`, 'info');
         manager.logger?.logFundsStatus?.(manager);
         manager.logger?.logOrderGrid?.(Array.from(manager.orders.values()), manager.config.startPrice);
@@ -311,7 +320,7 @@ class Grid {
         const totalInputInt = floatToBlockchainInt(allocatedFunds, precision);
         let totalAllocatedInt = 0;
         newSizes.forEach(s => totalAllocatedInt += floatToBlockchainInt(s, precision));
-        
+
         if (!manager.funds.cacheFunds) manager.funds.cacheFunds = { buy: 0, sell: 0 };
         manager.funds.cacheFunds[sideName] = blockchainToFloat(totalInputInt - totalAllocatedInt, precision);
     }
@@ -518,7 +527,7 @@ class Grid {
     static async prepareSpreadCorrectionOrders(manager, preferredSide) {
         const ordersToPlace = [];
         const railType = preferredSide;
-        
+
         // Find all virtual slots that could potentially take this role
         const candidateSlots = Array.from(manager.orders.values())
             .filter(o => o.state === ORDER_STATES.VIRTUAL && !o.orderId)
@@ -526,7 +535,7 @@ class Grid {
 
         // Find the slot closest to market that isn't currently active
         const candidate = candidateSlots[0];
-        
+
         if (candidate) {
             const size = Grid.calculateGeometricSizeForSpreadCorrection(manager, railType);
             if (size && size <= manager.funds.available[railType === ORDER_TYPES.BUY ? 'buy' : 'sell']) {

@@ -41,21 +41,21 @@ class StrategyEngine {
 
         // 1. Initial Boundary Determination (Recovery)
         if (mgr.boundaryIdx === undefined) {
-            let referencePrice = mgr.config.startPrice;
-            let pivotIdx = 0;
-            let minDiff = Infinity;
-            allSlots.forEach((slot, i) => {
-                const diff = Math.abs(slot.price - referencePrice);
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    pivotIdx = i;
-                }
-            });
-
+            const referencePrice = mgr.config.startPrice;
             const step = 1 + (mgr.config.incrementPercent / 100);
-            const requiredSteps = Math.ceil(Math.log(1 + (mgr.config.targetSpreadPercent / 100)) / Math.log(step));
-            const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 0, requiredSteps);
-            mgr.boundaryIdx = pivotIdx - Math.floor((gapSlots + 1) / 2);
+
+            // Enforce MIN_SPREAD_FACTOR (synchronize with Grid.js)
+            const minSpreadPercent = (mgr.config.incrementPercent || 0.5) * (GRID_LIMITS.MIN_SPREAD_FACTOR || 2);
+            const targetSpreadPercent = Math.max(mgr.config.targetSpreadPercent || 0, minSpreadPercent);
+            const requiredSteps = Math.ceil(Math.log(1 + (targetSpreadPercent / 100)) / Math.log(step));
+            const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 2, requiredSteps);
+
+            // Find Split Point (first slot >= startPrice)
+            let splitIdx = allSlots.findIndex(s => s.price >= referencePrice);
+            if (splitIdx === -1) splitIdx = allSlots.length;
+
+            const buySpread = Math.floor(gapSlots / 2);
+            mgr.boundaryIdx = splitIdx - buySpread - 1;
         }
 
         // 2. Incremental Boundary Shift based on Fills
@@ -69,8 +69,10 @@ class StrategyEngine {
 
         // 3. Define Roles and Static Gap
         const step = 1 + (mgr.config.incrementPercent / 100);
-        const requiredSteps = Math.ceil(Math.log(1 + (mgr.config.targetSpreadPercent / 100)) / Math.log(step));
-        const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 0, requiredSteps);
+        const minSpreadPercent = (mgr.config.incrementPercent || 0.5) * (GRID_LIMITS.MIN_SPREAD_FACTOR || 2);
+        const targetSpreadPercent = Math.max(mgr.config.targetSpreadPercent || 0, minSpreadPercent);
+        const requiredSteps = Math.ceil(Math.log(1 + (targetSpreadPercent / 100)) / Math.log(step));
+        const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 2, requiredSteps);
 
         const buyEndIdx = boundaryIdx;
         const sellStartIdx = boundaryIdx + gapSlots + 1;

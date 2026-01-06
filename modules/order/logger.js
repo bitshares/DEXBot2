@@ -69,9 +69,30 @@ class Logger {
         console.log('');
         sellNearSpread.forEach(order => this._logOrderRow(order));
 
-        // SPREAD: first 3
-        const spreadSample = allSpreads.slice(0, 3);
-        spreadSample.forEach(order => this._logOrderRow(order));
+        // SPREAD: high, middle, low with gap indicators
+        if (allSpreads.length > 0) {
+            const highIdx = 0;
+            const midIdx = Math.floor(allSpreads.length / 2);
+            const lowIdx = allSpreads.length - 1;
+
+            const high = allSpreads[highIdx];
+            const mid = (allSpreads.length > 2) ? allSpreads[midIdx] : null;
+            const low = allSpreads[lowIdx];
+
+            this._logOrderRow(high);
+
+            if (mid) {
+                if (midIdx > highIdx + 1) console.log(''); // Gap between high and mid
+                this._logOrderRow(mid);
+                if (lowIdx > midIdx + 1) console.log('');  // Gap between mid and low
+            } else if (lowIdx > highIdx + 1) {
+                console.log(''); // Gap between high and low (when only 2 total)
+            }
+
+            if (low.id !== high.id) {
+                this._logOrderRow(low);
+            }
+        }
 
         // BUY: top 3 (highest prices, next to spread) + last 3 (lowest prices, edge)
         const buyNearSpread = allBuys.slice(0, 3);
