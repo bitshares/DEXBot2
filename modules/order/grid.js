@@ -89,8 +89,8 @@ class Grid {
         const requiredSteps = Math.ceil(Math.log(1 + (config.targetSpreadPercent / 100)) / Math.log(step));
         const gapSlots = Math.max(GRID_LIMITS.MIN_SPREAD_ORDERS || 2, requiredSteps);
         
-        const halfGap = Math.floor(gapSlots / 2);
-        const buyEndIdx = pivotIdx - halfGap;
+        // Balanced centering: split gapSlots equally around the pivot
+        const buyEndIdx = pivotIdx - Math.floor((gapSlots + 1) / 2);
         const sellStartIdx = buyEndIdx + gapSlots + 1;
 
         const orders = priceLevels.map((price, i) => {
@@ -118,7 +118,7 @@ class Grid {
             sell: orders.filter(o => o.type === ORDER_TYPES.SPREAD && o.price > startPrice).length
         };
 
-        return { orders, pivotIdx, initialSpreadCount };
+        return { orders, boundaryIdx: buyEndIdx, initialSpreadCount };
     }
 
     /**
@@ -179,10 +179,10 @@ class Grid {
             }
         } catch (e) { console.warn("[grid.js] silent catch:", e.message); }
 
-        const { orders, pivotIdx } = Grid.createOrderGrid(manager.config);
+        const { orders, boundaryIdx, initialSpreadCount } = Grid.createOrderGrid(manager.config);
         
-        // Persist pivot index for StrategyEngine
-        manager.currentPivotIdx = pivotIdx;
+        // Persist master boundary for StrategyEngine
+        manager.boundaryIdx = boundaryIdx;
 
         const minSellSize = getMinOrderSize(ORDER_TYPES.SELL, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
         const minBuySize = getMinOrderSize(ORDER_TYPES.BUY, manager.assets, GRID_LIMITS.MIN_ORDER_SIZE_FACTOR);
@@ -218,9 +218,8 @@ class Grid {
         sizedOrders.forEach(order => manager._updateOrder(order));
         
         // Calculate spread count from initialized orders
-        const spreadCount = sizedOrders.filter(o => o.type === ORDER_TYPES.SPREAD).length;
-        manager.targetSpreadCount = spreadCount;
-        manager.currentSpreadCount = spreadCount;
+        manager.targetSpreadCount = initialSpreadCount.buy + initialSpreadCount.sell;
+        manager.currentSpreadCount = manager.targetSpreadCount;
         
         manager.logger.log(`Initialized grid with ${orders.length} orders.`, 'info');
         manager.logger?.logFundsStatus?.(manager);
@@ -357,13 +356,15 @@ class Grid {
         const persistedSells = filterForRms(persistedGrid, ORDER_TYPES.SELL);
 
         // Calculate ideal sizes for each order based on current available budget
-        // This gives us what sizes SHOULD be, allowing comparison with actual persisted sizes
         const getIdeals = (orders, type) => {
             if (!manager || orders.length === 0 || !manager.assets) return orders;
             const side = type === ORDER_TYPES.BUY ? 'buy' : 'sell';
 
-            // Total budget = cache + grid committed + available funds
-            const total = (cacheFunds?.[side] || 0) + (manager.funds?.total?.grid?.[side] || 0) + (manager.funds?.available?.[side] || 0);
+            // Total budget = cache + grid total (Free + Committed)
+            const total = (cacheFunds?.[side] || 0) + (manager.funds?.total?.grid?.[side] || 0);
+
+            // Safety Gate: If total is 0 or very small during startup, don't try to size
+            if (total <= 0) return orders;
 
             // Subtract existing partial sizes to get residual budget for ideal sizing
             const partials = sumOrderSizes(calculatedGrid.filter(o => o && o.type === type && o.state === ORDER_STATES.PARTIAL));

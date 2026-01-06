@@ -12,7 +12,7 @@ const cfg = {
     minPrice: 50,
     maxPrice: 200,
     incrementPercent: 10,
-    targetSpreadPercent: 20,
+    targetSpreadPercent: 10,
     botFunds: { buy: 1000, sell: 10 },
     activeOrders: { buy: 2, sell: 2 },
 };
@@ -66,13 +66,21 @@ assert.strictEqual(mgr.funds.available.sell, 10);
         [ORDER_TYPES.SPREAD]: new Set()
     };
 
-    // Add SPREAD placeholders around the market price (Unified IDs)
-    // slot-0 (lowest) -> slot-3 (highest)
+    // Add SPREAD placeholders across a wider range (Unified IDs)
+    // midpoint is 100. slots 0-5 are BUY zone, 6-11 are SELL zone
     const spreads = [
-        { id: 'slot-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 92, size: 10 },
-        { id: 'slot-1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 95, size: 10 },
-        { id: 'slot-2', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 105, size: 10 },
-        { id: 'slot-3', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 108, size: 10 }
+        { id: 'slot-0', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 50, size: 10 },
+        { id: 'slot-1', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 60, size: 10 },
+        { id: 'slot-2', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 70, size: 10 },
+        { id: 'slot-3', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 80, size: 10 },
+        { id: 'slot-4', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 90, size: 10 },
+        { id: 'slot-5', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 95, size: 10 },
+        { id: 'slot-6', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 105, size: 10 },
+        { id: 'slot-7', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 110, size: 10 },
+        { id: 'slot-8', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 120, size: 10 },
+        { id: 'slot-9', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 130, size: 10 },
+        { id: 'slot-10', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 140, size: 10 },
+        { id: 'slot-11', type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, price: 150, size: 10 }
     ];
     spreads.forEach(s => mgr._updateOrder(s));
 
@@ -81,19 +89,22 @@ assert.strictEqual(mgr.funds.available.sell, 10);
     mgr.funds.available.sell = 1000;
     mgr.recalculateFunds();
 
+    // Ensure each test case starts with a fresh boundary determination
+    mgr.boundaryIdx = undefined;
+
     // Trigger rebalance: Since there are no active orders, it should try to place new ones
     // and correctly assign SPREAD types vs BUY/SELL types.
     const rebalanceResult = await mgr.strategy.rebalance();
     
-    const buyPlacements = rebalanceResult.ordersToPlace.filter(o => o.type === ORDER_TYPES.BUY);
-    const sellPlacements = rebalanceResult.ordersToPlace.filter(o => o.type === ORDER_TYPES.SELL);
+    const buyPlacements = rebalanceResult.ordersToPlace.filter(o => o.type === ORDER_TYPES.BUY).sort((a,b) => b.price - a.price);
+    const sellPlacements = rebalanceResult.ordersToPlace.filter(o => o.type === ORDER_TYPES.SELL).sort((a,b) => a.price - b.price);
     
     assert(buyPlacements.length > 0, 'Should place at least one buy');
     assert(sellPlacements.length > 0, 'Should place at least one sell');
     
     // The new engine picks the inward-most slot for activation
-    assert.strictEqual(buyPlacements[0].price, 95, 'BUY activation should pick closest spread price (95)');
-    assert.strictEqual(sellPlacements[0].price, 105, 'SELL activation should pick closest spread price (105)');
+    assert.strictEqual(buyPlacements[0].price, 90, 'BUY activation should pick closest price below pivot (90)');
+    assert.strictEqual(sellPlacements[0].price, 110, 'SELL activation should pick closest price above pivot (110)');
 
     console.log('spread selection tests (via rebalance) passed');
 })();
@@ -106,43 +117,41 @@ assert.strictEqual(mgr.funds.available.sell, 10);
         startPrice: 100,
         minPrice: 50,
         maxPrice: 200,
-        incrementPercent: 10,
-        targetSpreadPercent: 20,
-        botFunds: { buy: 0, sell: 10 }, // Zero buy budget forces rotation of existing order
+        incrementPercent: 1,
+        targetSpreadPercent: 5,
+        botFunds: { buy: 1000, sell: 1000 },
+        weightDistribution: { buy: 1.0, sell: 1.0 }, // EQUAL WEIGHTS for rotation test
         activeOrders: { buy: 1, sell: 1 }
     });
 
     rotateMgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.1', precision: 5 } };
-    rotateMgr.setAccountTotals({ buy: 0, sell: 10, buyFree: 0, sellFree: 10 });
+    rotateMgr.setAccountTotals({ buy: 1000, sell: 1000, buyFree: 1000, sellFree: 1000 });
     rotateMgr.resetFunds();
 
-    // 1. Grid of slots (Unified IDs)
-    const slots = [
-        { id: 'slot-0', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 75, size: 10 },
-        { id: 'slot-1', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 85, size: 10 },
-        { id: 'slot-2', type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, price: 95, size: 10 }
-    ];
-    slots.forEach(s => rotateMgr._updateOrder(s));
+    // 1. Large grid of slots
+    for (let i = 0; i < 100; i++) {
+        const type = (i <= 50) ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
+        rotateMgr._updateOrder({ id: `slot-${i}`, type, state: ORDER_STATES.VIRTUAL, price: 50 + i, size: 10 });
+    }
     
-    // 2. Place an active order at the furthest slot (slot-0)
-    // We give it a size so it has "value" to rotate
-    const furthestOrder = { ...slots[0], state: ORDER_STATES.ACTIVE, orderId: '1.7.100', size: 10 };
+    // 2. Set Boundary and Outlier
+    rotateMgr.boundaryIdx = 50; 
+    rotateMgr.config.activeOrders = { buy: 1, sell: 1 };
+    
+    // Place active BUY at furthest outlier (slot-0)
+    const furthestOrder = { id: 'slot-0', type: ORDER_TYPES.BUY, state: ORDER_STATES.ACTIVE, orderId: '1.7.100', size: 10, price: 50 };
     rotateMgr._updateOrder(furthestOrder);
     rotateMgr.recalculateFunds();
 
-    rotateMgr.config.activeOrders = { buy: 1, sell: 1 };
-    
-    // Trigger rebalance with a mock fill on the OPPOSITE side (SELL) 
+    // 3. Trigger rebalance with a mock fill on the OPPOSITE side (SELL) 
+    // This moves boundary UP (+1) -> slot-51 becomes new BUY hole.
     const mockFills = [{ type: ORDER_TYPES.SELL, price: 105 }];
     const result = await rotateMgr.strategy.rebalance(mockFills);
     
     assert.strictEqual(result.ordersToRotate.length, 1, 'Should rotate 1 order');
-    assert.strictEqual(result.ordersToRotate[0].oldOrder.id, 'slot-0', 'Should rotate the furthest order');
-    // Inward rotation: slot-0 should move to the target window (slot-1 is closest BUY to pivot slot-2 with gap)
-    assert.strictEqual(result.ordersToRotate[0].newGridId, 'slot-1', 'Should rotate inward to slot-1');
+    assert.strictEqual(result.ordersToRotate[0].oldOrder.id, 'slot-0', 'Should rotate the furthest outlier');
+    assert.strictEqual(result.ordersToRotate[0].newGridId, 'slot-51', 'Should rotate to the new market hole (slot-51)');
 
     console.log('rotation behavior tests (via rebalance) passed');
 })();
-
-
 

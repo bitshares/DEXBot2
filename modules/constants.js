@@ -89,11 +89,8 @@ let GRID_LIMITS = {
     // Minimum number of spread orders (1 buy, 1 sell) to maintain proper spread zone
     // Default: 2
     MIN_SPREAD_ORDERS: 2,
-    // Buffer multiplier for spread widening condition threshold
-    // Accounts for grid geometry: with N SPREAD orders, ACTIVE orders are N+1 steps apart
-    // Using 1.5x multiplier provides buffer for natural grid spacing while catching true widening
-    // Default: 1.5
     SPREAD_WIDENING_MULTIPLIER: 1.5,
+
     // Grid comparison metrics
     // Detects significant divergence between calculated (in-memory) and persisted grid state
     // after order fills and rotations

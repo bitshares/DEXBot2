@@ -1691,7 +1691,7 @@ function deductOrderFeesFromFunds(buyFunds, sellFunds, fees, config, logger = nu
  * @param {number} n - Number of orders
  * @param {number} weight - Weight distribution (-1 to 2): controls exponential scaling
  * @param {number} incrementFactor - Increment percentage / 100 (e.g., 0.01 for 1%)
- * @param {boolean} reverse - If true, reverse position indexing (for sell orders high→low)
+ * @param {boolean} reverse - If true, reverse position indexing
  * @param {number} minSize - Minimum order size
  * @param {number|null} precision - Blockchain precision for quantization
  * @returns {Array<number>} Array of order sizes
@@ -1700,29 +1700,13 @@ function allocateFundsByWeights(totalFunds, n, weight, incrementFactor, reverse 
     if (n <= 0) return [];
     if (!Number.isFinite(totalFunds) || totalFunds <= 0) return new Array(n).fill(0);
 
-    const MIN_WEIGHT = -1;
-    const MAX_WEIGHT = 2;
-    if (!Number.isFinite(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
-        throw new Error(`Invalid weight distribution: ${weight}. Must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
-    }
-
-    // CRITICAL: Validate increment factor (0.01 to 0.10 for 1% to 10%)
-    // If incrementFactor is 0, base = 1, and all orders get equal weight (loses position weighting)
-    // If incrementFactor >= 1, base <= 0, causing invalid exponential calculation
-    if (incrementFactor <= 0 || incrementFactor >= 1) {
-        throw new Error(`Invalid incrementFactor: ${incrementFactor}. Must be between ${INCREMENT_BOUNDS.MIN_FACTOR} (${INCREMENT_BOUNDS.MIN_PERCENT}%) and ${INCREMENT_BOUNDS.MAX_FACTOR} (${INCREMENT_BOUNDS.MAX_PERCENT}%).`);
-    }
-
-    // Step 1: Calculate base factor from increment
-    // base = (1 - increment) creates exponential decay/growth
-    // e.g., 1% increment → base = 0.99
+    // Step 1: Calculate base factor from increment (base < 1.0)
     const base = 1 - incrementFactor;
 
     // Step 2: Calculate raw weights for each order position
     // The formula: weight[i] = base^(idx * weight)
-    // - base^0 = 1.0 (first position always gets base weight)
-    // - base^(idx*weight) scales exponentially based on position and weight coefficient
-    // - reverse parameter inverts the position index so sell orders decrease geometrically
+    // - base^0 = 1.0 (largest weight)
+    // - reverse parameter inverts the position index
     const rawWeights = new Array(n);
     for (let i = 0; i < n; i++) {
         const idx = reverse ? (n - 1 - i) : i;
@@ -1730,13 +1714,10 @@ function allocateFundsByWeights(totalFunds, n, weight, incrementFactor, reverse 
     }
 
     // Step 3: Normalize weights to sum to 1, then scale by totalFunds
-    // This ensures all funds are distributed and ratios are preserved
     const sizes = new Array(n).fill(0);
     const totalWeight = rawWeights.reduce((s, w) => s + w, 0) || 1;
 
     if (precision !== null && precision !== undefined) {
-        // Quantitative allocation: use units to avoid floating point noise from the start
-        // This ensures every order in the grid is perfectly aligned with blockchain increments.
         const totalUnits = floatToBlockchainInt(totalFunds, precision);
         let unitsSummary = 0;
         const units = new Array(n);
@@ -1746,7 +1727,6 @@ function allocateFundsByWeights(totalFunds, n, weight, incrementFactor, reverse 
             unitsSummary += units[i];
         }
 
-        // Adjust for rounding discrepancy in units calculation (usually +/- 1 unit)
         const diff = totalUnits - unitsSummary;
         if (diff !== 0 && n > 0) {
             let largestIdx = 0;
@@ -1757,7 +1737,6 @@ function allocateFundsByWeights(totalFunds, n, weight, incrementFactor, reverse 
             sizes[i] = blockchainToFloat(units[i], precision);
         }
     } else {
-        // Fallback for cases without precision (not recommended for grid orders)
         for (let i = 0; i < n; i++) {
             sizes[i] = (rawWeights[i] / totalWeight) * totalFunds;
         }
@@ -1785,17 +1764,29 @@ function calculateOrderSizes(orders, config, sellFunds, buyFunds, minSellSize = 
     const { incrementPercent, weightDistribution: { sell: sellWeight, buy: buyWeight } } = config;
     const incrementFactor = incrementPercent / 100;
 
-    const sellOrders = filterOrdersByType(orders, ORDER_TYPES.SELL);
-    const buyOrders = filterOrdersByType(orders, ORDER_TYPES.BUY);
+    // Grid order for SELL: [Market, ..., Edge]
+    const sellOrders = orders.filter(o => o.type === ORDER_TYPES.SELL);
+    // Grid order for BUY: [Edge, ..., Market]
+    const buyOrders = orders.filter(o => o.type === ORDER_TYPES.BUY);
 
-    const sellSizes = allocateFundsByWeights(sellFunds, sellOrders.length, sellWeight, incrementFactor, true, minSellSize, precisionA);
-    const buySizes = allocateFundsByWeights(buyFunds, buyOrders.length, buyWeight, incrementFactor, false, minBuySize, precisionB);
+    // Mountain at Market (using base < 1 math):
+    // SELL: reverse=false -> Largest at index 0 (Market)
+    // BUY: reverse=true -> Largest at last index (Market)
+    const sellSizes = allocateFundsByWeights(sellFunds, sellOrders.length, sellWeight, incrementFactor, false, minSellSize, precisionA);
+    const buySizes = allocateFundsByWeights(buyFunds, buyOrders.length, buyWeight, incrementFactor, true, minBuySize, precisionB);
 
-    const sizeMap = { [ORDER_TYPES.SELL]: { sizes: sellSizes, index: 0 }, [ORDER_TYPES.BUY]: { sizes: buySizes, index: 0 } };
-    return orders.map(order => ({
-        ...order,
-        size: sizeMap[order.type] ? sizeMap[order.type].sizes[sizeMap[order.type].index++] : 0
-    }));
+    const sellState = { sizes: sellSizes, index: 0 };
+    const buyState = { sizes: buySizes, index: 0 };
+
+    return orders.map(order => {
+        let size = 0;
+        if (order.type === ORDER_TYPES.SELL) {
+            size = sellState.sizes[sellState.index++] || 0;
+        } else if (order.type === ORDER_TYPES.BUY) {
+            size = buyState.sizes[buyState.index++] || 0;
+        }
+        return { ...order, size };
+    });
 }
 
 /**
@@ -1831,8 +1822,10 @@ function calculateRotationOrderSizes(availableFunds, totalGridAllocation, orderC
     // Select weight distribution based on side (buy or sell)
     const weight = (orderType === ORDER_TYPES.SELL) ? weightDistribution.sell : weightDistribution.buy;
 
-    // Reverse the allocation for sell orders so they're ordered from high to low price
-    const reverse = (orderType === ORDER_TYPES.SELL);
+    // Mountain at Market Alignment:
+    // SELL (market-to-edge): reverse=false -> largest at market (index 0)
+    // BUY (edge-to-market): reverse=true -> largest at market (last index)
+    const reverse = (orderType === ORDER_TYPES.BUY);
 
     // Allocate total funds using geometric weighting
     return allocateFundsByWeights(totalFunds, orderCount, weight, incrementFactor, reverse, minSize, precision);
