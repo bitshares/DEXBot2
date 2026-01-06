@@ -85,16 +85,39 @@ class StrategyEngine {
         sellSlots.forEach(s => { if (s.type !== ORDER_TYPES.SELL) mgr._updateOrder({ ...s, type: ORDER_TYPES.SELL }); });
         spreadSlots.forEach(s => { if (s.type !== ORDER_TYPES.SPREAD) mgr._updateOrder({ ...s, type: ORDER_TYPES.SPREAD }); });
 
-        // 4. Budget Calculation
+        // 4. Budget Calculation (Total side budget for geometric sizing)
         const snap = mgr.getChainFundsSnapshot();
-        const budgetBuy = snap.allocatedBuy + (mgr.funds.cacheFunds?.buy || 0);
-        const budgetSell = snap.allocatedSell + (mgr.funds.cacheFunds?.sell || 0);
+        
+        // Target from Config (What we want)
+        const targetBuy = snap.allocatedBuy + (mgr.funds.cacheFunds?.buy || 0);
+        const targetSell = snap.allocatedSell + (mgr.funds.cacheFunds?.sell || 0);
+
+        // Reality from Wallet (What we have)
+        // Note: available already subtracts virtual reserves and fees
+        const realityBuy = (mgr.funds.available?.buy || 0) + 
+                          (mgr.funds.committed?.grid?.buy || 0) + 
+                          (mgr.funds.virtual?.buy || 0) + 
+                          (mgr.funds.cacheFunds?.buy || 0);
+        
+        const realitySell = (mgr.funds.available?.sell || 0) + 
+                           (mgr.funds.committed?.grid?.sell || 0) + 
+                           (mgr.funds.virtual?.sell || 0) + 
+                           (mgr.funds.cacheFunds?.sell || 0);
+
+        // Final Sizing Budgets: Cap strategy target by liquid reality
+        const budgetBuy = Math.min(targetBuy, realityBuy);
+        const budgetSell = Math.min(targetSell, realitySell);
+
+        // Available Pool for net capital increases (Unreserved Cash + Surplus)
+        // available already subtracts virtual reserves and fees
+        const availablePoolBuy = (mgr.funds.available?.buy || 0) + (mgr.funds.cacheFunds?.buy || 0);
+        const availablePoolSell = (mgr.funds.available?.sell || 0) + (mgr.funds.cacheFunds?.sell || 0);
 
         const reactionCap = Math.max(1, fills.length);
 
         // 5. Minimalist Side Rebalancing
-        const buyResult = await this.rebalanceSideRobust(ORDER_TYPES.BUY, allSlots, buySlots, -1, budgetBuy, excludeIds, reactionCap);
-        const sellResult = await this.rebalanceSideRobust(ORDER_TYPES.SELL, allSlots, sellSlots, 1, budgetSell, excludeIds, reactionCap);
+        const buyResult = await this.rebalanceSideRobust(ORDER_TYPES.BUY, allSlots, buySlots, -1, budgetBuy, availablePoolBuy, excludeIds, reactionCap);
+        const sellResult = await this.rebalanceSideRobust(ORDER_TYPES.SELL, allSlots, sellSlots, 1, budgetSell, availablePoolSell, excludeIds, reactionCap);
         
         const allUpdates = [...buyResult.stateUpdates, ...sellResult.stateUpdates]; 
         allUpdates.forEach(upd => mgr._updateOrder(upd)); 
@@ -113,7 +136,7 @@ class StrategyEngine {
         return result;
     }
 
-    async rebalanceSideRobust(type, allSlots, sideSlots, direction, totalSideBudget, excludeIds, reactionCap) {
+    async rebalanceSideRobust(type, allSlots, sideSlots, direction, totalSideBudget, availablePool, excludeIds, reactionCap) {
         if (sideSlots.length === 0) return { ordersToPlace: [], ordersToRotate: [], ordersToUpdate: [], ordersToCancel: [], stateUpdates: [] };
 
         const mgr = this.manager;
@@ -127,8 +150,6 @@ class StrategyEngine {
         const targetCount = (mgr.config.activeOrders && Number.isFinite(mgr.config.activeOrders[side])) ? Math.max(1, mgr.config.activeOrders[side]) : sideSlots.length;
         
         // SORT SIDE SLOTS: Market-closest first
-        // For BUY: price ascending (edge to market) -> need highest price first
-        // For SELL: price ascending (market to edge) -> need lowest price first
         const sortedSideSlots = [...sideSlots].sort((a, b) => direction === 1 ? a.price - b.price : b.price - a.price);
         
         const targetIndices = [];
@@ -144,13 +165,9 @@ class StrategyEngine {
             .filter(s => s.orderId && (s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL))
             .reduce((sum, o) => sum + (Number(o.size) || 0), 0);
         
-        const totalBudget = totalSideBudget + currentGridAllocation;
+        // Total budget is target strategy value (allocated + surplus)
+        const totalBudget = totalSideBudget;
         
-        // MOUNTAIN AT MARKET ORIENTATION:
-        // Sell sideSlots is market-to-edge. Buy sideSlots is edge-to-market.
-        // In utils.js base < 1.0 (base^0 is Largest):
-        // SELL: reverse=false -> Largest at index 0 (Market)
-        // BUY: reverse=true -> Largest at last index (Market)
         const reverse = (type === ORDER_TYPES.BUY);
         const sideIdealSizes = allocateFundsByWeights(totalBudget, sideSlots.length, sideWeight, mgr.config.incrementPercent / 100, reverse, 0, precision);
         
@@ -159,8 +176,6 @@ class StrategyEngine {
             const globalIdx = allSlots.findIndex(s => s.id === slot.id);
             const size = sideIdealSizes[i] || 0;
             idealSizes[globalIdx] = size;
-            
-            // Critical fix: update the size of every slot in the grid state, even if VIRTUAL
             stateUpdates.push({ ...slot, size });
         });
 
@@ -194,13 +209,37 @@ class StrategyEngine {
         }
 
         const remainingCap = Math.max(0, effectiveCap - ordersToRotate.length);
-        for (let i = 0; i < Math.min(shortages.length - pairCount, remainingCap); i++) {
-            const idx = shortages[pairCount + i];
-            const slot = allSlots[idx];
-            const idealSize = idealSizes[idx];
-            if (idealSize > 0) {
-                ordersToPlace.push({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
-                stateUpdates.push({ ...slot, type: type, size: idealSize, state: ORDER_STATES.ACTIVE });
+        const placementShortages = shortages.slice(pairCount, pairCount + remainingCap);
+        
+        if (placementShortages.length > 0) {
+            // Calculate Net Capital Increase for this batch
+            let totalIncreaseNeeded = 0;
+            placementShortages.forEach(idx => {
+                const oldReservedSize = allSlots[idx].size || 0;
+                const newIdealSize = idealSizes[idx];
+                totalIncreaseNeeded += Math.max(0, newIdealSize - oldReservedSize);
+            });
+
+            // Scale factor only applies to the *increase* component
+            const scale = (totalIncreaseNeeded > availablePool) ? (availablePool / totalIncreaseNeeded) : 1.0;
+
+            for (const idx of placementShortages) {
+                const slot = allSlots[idx];
+                const oldReservedSize = slot.size || 0;
+                const newIdealSize = idealSizes[idx];
+                
+                // Final size = old reserved amount + allowed increase
+                // If newIdealSize is smaller than old, we just use newIdealSize (releasing funds)
+                let finalSize = (newIdealSize <= oldReservedSize) 
+                    ? newIdealSize 
+                    : (oldReservedSize + (newIdealSize - oldReservedSize) * scale);
+
+                const size = blockchainToFloat(floatToBlockchainInt(finalSize, precision), precision);
+                
+                if (size > 0) {
+                    ordersToPlace.push({ ...slot, type: type, size: size, state: ORDER_STATES.ACTIVE });
+                    stateUpdates.push({ ...slot, type: type, size: size, state: ORDER_STATES.ACTIVE });
+                }
             }
         }
 
