@@ -7,6 +7,7 @@ const {
     buildDirectionalDocumentQuery,
     fetchKibanaCandles,
     resolveRequestedFillRange,
+    sourceFieldsForFieldMap,
 } = require('../market_adapter/core/kibana_candles');
 
 const FIELD_MAP = {
@@ -263,12 +264,135 @@ async function testFetchKibanaCandlesForwardsAbortSignal() {
     assert.ok(seenSignals.every((signal) => signal === controller.signal), 'fetchKibanaCandles should forward the same abort signal to each paginated search');
 }
 
+function testSourceFieldsForFieldMap() {
+    const fields = sourceFieldsForFieldMap(FIELD_MAP);
+
+    assert.ok(
+        fields.includes('block_data.block_time'),
+        'source projection must always include the block timestamp'
+    );
+    assert.ok(
+        fields.includes('operation_id_num'),
+        'source projection must always include the top-level sort/sequence field'
+    );
+    assert.ok(
+        fields.includes('operation_history.op_object.amount_to_sell'),
+        'source projection must include the sold-amount branch from the field map'
+    );
+    assert.ok(
+        fields.includes('operation_history.operation_result_object.data_object'),
+        'source projection must include the received-amount branch from the field map'
+    );
+    assert.ok(
+        fields.every((f) => !f.endsWith('.keyword')),
+        'source projection should not carry .keyword suffixes (those are query-time only)'
+    );
+
+    const fillFields = sourceFieldsForFieldMap({
+        soldAssetField: 'operation_history.op_object.pays.asset_id.keyword',
+        receivedAssetField: 'operation_history.op_object.receives.asset_id.keyword',
+        soldAmountField: 'operation_history.op_object.pays.amount',
+        receivedAmountField: 'operation_history.op_object.receives.amount',
+    });
+    assert.ok(
+        fillFields.includes('operation_history.op_object.pays'),
+        'fill_order field map should project the pays branch'
+    );
+    assert.ok(
+        fillFields.includes('operation_history.op_object.receives'),
+        'fill_order field map should project the receives branch'
+    );
+}
+
+function testDirectionalDocumentQueryUsesSourceProjection() {
+    const sourceFields = sourceFieldsForFieldMap(FIELD_MAP);
+    const query = buildDirectionalDocumentQuery({
+        opType: 63,
+        soldAssetField: FIELD_MAP.soldAssetField,
+        receivedAssetField: FIELD_MAP.receivedAssetField,
+        poolField: FIELD_MAP.poolField,
+        soldAssetId: ASSET_A.id,
+        receivedAssetId: ASSET_B.id,
+        lookbackHours: 24,
+        poolId: '1.19.1',
+        timeRange: null,
+        size: 1000,
+        sourceFields,
+    });
+
+    assert.deepStrictEqual(
+        query._source,
+        sourceFields,
+        'paginated queries should request only the projected _source fields'
+    );
+
+    const legacy = buildDirectionalDocumentQuery({
+        opType: 63,
+        soldAssetField: FIELD_MAP.soldAssetField,
+        receivedAssetField: FIELD_MAP.receivedAssetField,
+        poolField: FIELD_MAP.poolField,
+        soldAssetId: ASSET_A.id,
+        receivedAssetId: ASSET_B.id,
+        lookbackHours: 24,
+        poolId: '1.19.1',
+        timeRange: null,
+        size: 1000,
+    });
+    assert.strictEqual(legacy._source, true, 'omitting sourceFields keeps the legacy full _source behavior');
+}
+
+async function testTransientPageErrorsAreRetried() {
+    let aDirectionAttempts = 0;
+
+    const candles = await fetchKibanaCandles({
+        opType: 63,
+        fieldMap: FIELD_MAP,
+        assetA: ASSET_A,
+        assetB: ASSET_B,
+        poolId: '1.19.1',
+        config: {
+            intervalSeconds: 3600,
+            fillGaps: false,
+            kibanaPageRetries: 3,
+            kibanaRetryDelayMs: 1,
+            kibanaSearch: async (_cfg, query) => {
+                if (soldAssetFromQuery(query) !== ASSET_A.id) return kibanaHits([]);
+                aDirectionAttempts++;
+                if (aDirectionAttempts <= 2) {
+                    // First two attempts die mid-transfer like a proxy
+                    // connection reset; the retry should recover the page.
+                    throw new Error('Kibana response aborted (connection reset mid-transfer)');
+                }
+                return kibanaHits([hit({
+                    id: '1.11.1',
+                    opId: '1.11.1',
+                    ts: Date.parse('2026-04-28T02:00:00Z'),
+                    soldAssetId: ASSET_A.id,
+                    receivedAssetId: ASSET_B.id,
+                    soldAmount: 10,
+                    receivedAmount: 20,
+                })]);
+            },
+        },
+    });
+
+    assert.strictEqual(candles.length, 1, 'a recovered page should still produce its candle');
+    assert.strictEqual(
+        aDirectionAttempts,
+        3,
+        'transient aborts should be retried until the page succeeds (2 failures + 1 success)'
+    );
+}
+
 async function run() {
     await testTimeRangeControlsRequestedFillRange();
     await testLiveAdapterCanDisableRequestedRangeFill();
     await testKibanaBuildsTrueOhlcFromTradeDocuments();
     testDirectionalDocumentQueryDisablesTotalHitCounting();
     await testFetchKibanaCandlesForwardsAbortSignal();
+    testSourceFieldsForFieldMap();
+    testDirectionalDocumentQueryUsesSourceProjection();
+    await testTransientPageErrorsAreRetried();
 }
 
 run()

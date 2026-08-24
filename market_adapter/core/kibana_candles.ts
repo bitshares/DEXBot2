@@ -9,14 +9,83 @@ const DEFAULT_CONFIG = {
     lookbackHours: 500,
     consolidateByTimestamp: true,
     fillGapsToRequestedRange: true,
-    kibanaPageSize: 10000,
+    // The Kibana console proxy resets connections when a single page streams
+    // too much data (observed with full _source payloads around ~8k documents).
+    // 2000-document pages with a restricted _source stay well inside the limit.
+    kibanaPageSize: 2000,
+    kibanaPageRetries: 3,
+    kibanaRetryDelayMs: 1000,
 };
 
 function sourceField(field: any) {
     return String(field || '').replace(/\.keyword$/, '');
 }
 
-function buildDirectionalDocumentQuery({ opType, soldAssetField, receivedAssetField, poolField, soldAssetId, receivedAssetId, lookbackHours, poolId, timeRange, size, searchAfter }: { opType: any; soldAssetField: any; receivedAssetField: any; poolField: any; soldAssetId: any; receivedAssetId: any; lookbackHours: any; poolId: any; timeRange: any; size: any; searchAfter?: any }) {
+/**
+ * Fixed _source fields needed by hitToTrade / hitSequence regardless of the
+ * caller's field map (timestamps, ordering and sequence candidates).
+ */
+const SOURCE_EXTRA_FIELDS = [
+    'block_data.block_time',
+    'operation_id_num',
+    'account_history.operation_id',
+    'account_history.sequence',
+];
+
+/**
+ * Derive the minimal _source projection from a field map.
+ *
+ * The Kibana proxy aborts responses once a page grows too large, and the full
+ * operation documents (account_history, operation_history with every op field)
+ * are heavy. Fetching only the branches the field map actually reads keeps
+ * each page small and the transfer fast.
+ *
+ * @param {Object} fieldMap - { soldAssetField, receivedAssetField, ..., operationIdField }
+ * @returns {Array<string>} distinct _source paths
+ */
+function sourceFieldsForFieldMap(fieldMap: any) {
+    const prefixes = new Set<string>();
+    for (const key of [
+        'soldAssetField',
+        'receivedAssetField',
+        'soldAmountField',
+        'receivedAmountField',
+        'poolField',
+        'operationIdField',
+    ]) {
+        const path = sourceField(fieldMap?.[key]);
+        if (!path) continue;
+        const parts = path.split('.').filter(Boolean);
+        if (parts.length <= 1) {
+            prefixes.add(path);
+            continue;
+        }
+        // Keep the containing object branch (strip the trailing leaf such as
+        // asset_id / amount / keyword), capped at a depth that still covers
+        // the nested op/result objects used by the known field maps.
+        prefixes.add(parts.slice(0, Math.min(parts.length - 1, 3)).join('.'));
+    }
+    for (const extra of SOURCE_EXTRA_FIELDS) prefixes.add(extra);
+    return [...prefixes];
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientPageError(err: any) {
+    const msg = String(err?.message || err || '');
+    return (
+        msg.includes('aborted') ||
+        msg.includes('connection reset') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('socket hang up') ||
+        msg.includes('timed out') ||
+        msg.includes('EPIPE')
+    );
+}
+
+function buildDirectionalDocumentQuery({ opType, soldAssetField, receivedAssetField, poolField, soldAssetId, receivedAssetId, lookbackHours, poolId, timeRange, size, searchAfter, sourceFields }: { opType: any; soldAssetField: any; receivedAssetField: any; poolField: any; soldAssetId: any; receivedAssetId: any; lookbackHours: any; poolId: any; timeRange: any; size: any; searchAfter?: any; sourceFields?: any }) {
     const rangeValue = timeRange
         ? { gte: timeRange.gte, lte: timeRange.lte }
         : { gte: `now-${lookbackHours}h`, lte: 'now' };
@@ -35,10 +104,10 @@ function buildDirectionalDocumentQuery({ opType, soldAssetField, receivedAssetFi
         filters.push({ term: { [poolField]: poolId } });
     }
 
-    const query = {
+    const query: any = {
         size,
         track_total_hits: false,
-        _source: true,
+        _source: Array.isArray(sourceFields) && sourceFields.length > 0 ? sourceFields : true,
         query: { bool: { filter: filters } },
         sort: [
             { 'block_data.block_time': { order: 'asc' } },
@@ -46,7 +115,7 @@ function buildDirectionalDocumentQuery({ opType, soldAssetField, receivedAssetFi
         ],
     };
 
-    if (Array.isArray(searchAfter)) (query as any).search_after = searchAfter;
+    if (Array.isArray(searchAfter)) query.search_after = searchAfter;
     return query;
 }
 
@@ -141,7 +210,12 @@ function hitToTrade(hit: any, { soldAsset, receivedAsset, soldAmountField, recei
 }
 
 async function fetchDirectionalTradeDocs({ search, cfg, opType, fieldMap, soldAsset, receivedAsset, lookbackHours, poolId, timeRange }: any) {
-    const size = Math.min(Math.max(1, Number(cfg.kibanaPageSize) || 10000), 10000);
+    const size = Math.min(Math.max(1, Number(cfg.kibanaPageSize) || DEFAULT_CONFIG.kibanaPageSize), 10000);
+    const retriesRaw = Number(cfg.kibanaPageRetries);
+    const retries = Number.isFinite(retriesRaw) && retriesRaw >= 1 ? Math.floor(retriesRaw) : DEFAULT_CONFIG.kibanaPageRetries;
+    const delayRaw = Number(cfg.kibanaRetryDelayMs);
+    const retryDelayMs = Number.isFinite(delayRaw) && delayRaw >= 0 ? delayRaw : DEFAULT_CONFIG.kibanaRetryDelayMs;
+    const sourceFields = sourceFieldsForFieldMap(fieldMap);
     const trades: any[] = [];
     let searchAfter: any = null;
 
@@ -158,9 +232,28 @@ async function fetchDirectionalTradeDocs({ search, cfg, opType, fieldMap, soldAs
             timeRange,
             size,
             searchAfter,
+            sourceFields,
         });
 
-        const result = await search(cfg, query);
+        // The Kibana proxy intermittently resets connections mid-transfer.
+        // A failed page is safe to retry: search_after pagination is
+        // stateless on the server, so replaying the same page yields the
+        // same documents.
+        let result: any = null;
+        let lastErr: any = null;
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                result = await search(cfg, query);
+                lastErr = null;
+                break;
+            } catch (err: any) {
+                lastErr = err;
+                if (attempt >= retries || !isTransientPageError(err)) throw err;
+                if (retryDelayMs > 0) await sleep(retryDelayMs * attempt);
+            }
+        }
+        if (lastErr) throw lastErr;
+
         const hits = result?.hits?.hits || [];
         if (!Array.isArray(hits) || hits.length === 0) break;
 
@@ -265,5 +358,5 @@ async function fetchKibanaClosePrices(params: any) {
     return candles.map(([, , , , close]: any) => close);
 }
 
-export { buildDirectionalDocumentQuery, resolveRequestedFillRange, fetchKibanaCandles, fetchKibanaClosePrices, DEFAULT_CONFIG }
+export { buildDirectionalDocumentQuery, resolveRequestedFillRange, fetchKibanaCandles, fetchKibanaClosePrices, sourceFieldsForFieldMap, DEFAULT_CONFIG }
 

@@ -83,21 +83,37 @@ function doKibanaRequest(cfg: any, esQuery: any, resolve: any, reject: any, redi
     }
 
     let raw = '';
+    let settled = false;
+    const fail = (err: any) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
     res.on('data', (c: any) => { raw += c; });
+    // A response stream that dies mid-transfer (server/proxy connection reset
+    // on large payloads) never emits 'end' — without these handlers the
+    // surrounding promise stays pending forever and callers hang.
+    res.on('aborted', () => {
+      fail(new Error('Kibana response aborted (connection reset mid-transfer — reduce kibanaPageSize / restrict _source fields)'));
+    });
+    res.on('error', (e: any) => {
+      fail(new Error(`Kibana response stream error: ${getErrorMessage(e)}`));
+    });
     res.on('end', () => {
+      if (settled) return;
       if (res.statusCode === 401 || res.statusCode === 403) {
-        reject(new Error(
+        fail(new Error(
           `Kibana auth required (HTTP ${res.statusCode}). ` +
           `Set config.apiKey — generate in Kibana → Stack Management → API Keys.`
         ));
         return;
       }
       if (res.statusCode >= 400) {
-        reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0, 300)}`));
+        fail(new Error(`HTTP ${res.statusCode}: ${raw.slice(0, 300)}`));
         return;
       }
-      try { resolve(JSON.parse(raw)); }
-      catch (e: any) { reject(new Error(`JSON parse failed: ${getErrorMessage(e)}\n${raw.slice(0, 200)}`)); }
+      try { settled = true; resolve(JSON.parse(raw)); }
+      catch (e: any) { settled = true; reject(new Error(`JSON parse failed: ${getErrorMessage(e)}\n${raw.slice(0, 200)}`)); }
     });
   });
 
