@@ -497,7 +497,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     <span class="legend-item"><span class="legend-dot" style="background:#93c5fd"></span><span class="legend-label">VWMA</span> <span class="legend-value" id="legend-vwap">-</span></span>
                 </div>
             </div>
-            <div id="price-chart"></div>
+            <div id="price-chart" title="Wheel: zoom time (ulos = tyhjaa tilaa datan ymparilla) · Drag: siirra aika- ja hintanakymaa · Wheel/drag hinta-akselilla: zoomaa hintaa · Double-click hinta-akselia: autofit"></div>
             <div id="volume-chart"></div>
         </div>
     </div>
@@ -556,6 +556,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         let lastRenderedPriceScale = null;
         let charts = [];
         let chartEventsBound = false;
+        let manualYRange = null;
         let pendingRange = null;
         let pendingRangeRaf = 0;
         let smaWorker = null;
@@ -577,6 +578,27 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             if (abs >= 100) return v.toFixed(3);
             if (abs >= 1) return v.toFixed(4);
             return v.toPrecision(6);
+        }
+        function fmtPriceAxis(vals) {
+            if (!Array.isArray(vals) || vals.length === 0) return [];
+            let step = Infinity;
+            for (let i = 1; i < vals.length; i++) {
+                const d = Math.abs(Number(vals[i]) - Number(vals[i - 1]));
+                if (Number.isFinite(d) && d > 0 && d < step) step = d;
+            }
+            let decimals = 4;
+            if (Number.isFinite(step) && step > 0) decimals = Math.ceil(-Math.log10(step));
+            decimals = Math.max(0, Math.min(10, decimals));
+            return vals.map((v) => (v == null || !Number.isFinite(v)) ? '' : Number(v).toFixed(decimals));
+        }
+        function fmtPriceLabel(v) {
+            if (v == null || !Number.isFinite(v)) return '-';
+            const abs = Math.abs(v);
+            if (abs >= 1000) return v.toFixed(2);
+            if (abs >= 1) return v.toFixed(4);
+            let s = v.toPrecision(6);
+            if (s.indexOf('e') >= 0) s = v.toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
+            return s;
         }
         function fmtVolume(v) {
             if (v == null || !Number.isFinite(v)) return '-';
@@ -1007,8 +1029,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 if (Number.isFinite(v)) { if (v < min) min = v; if (v > max) max = v; }
             }
             if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null;
-            if (min === max) return [min * 0.98, max * 1.02];
-            return [min * 0.97, max * 1.03];
+            if (min === max) return [min * 0.96, max * 1.04];
+            // ~7 % hengitystilaa yla- ja alapuolelle (TradingView-tyyli)
+            return [min * 0.93, max * 1.07];
         }
         function visibleVolumeRange(u) {
             if (!currentCandles.length) return null;
@@ -1342,6 +1365,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         distr: isLogScale ? 3 : 1,
                         log: isLogScale ? 10 : undefined,
                         range: (u, min, max) => {
+                            if (manualYRange) return [manualYRange.min, manualYRange.max];
                             const vis = visiblePriceRange(u);
                             if (vis) return vis;
                             if (isLogScale) {
@@ -1368,8 +1392,21 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 ],
                 axes: [
                     makeTimeAxis(false),
-                    { scale: 'y', size: 62, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, values: (u, vals) => vals.map((v) => (v == null ? '' : fmtPrice(v))) },
+                    {
+                        scale: 'y',
+                        side: 1,
+                        size: 76,
+                        space: 16,
+                        stroke: '#ffffff',
+                        grid: { stroke: '#272f3a' },
+                        ticks: { stroke: '#414b57', width: 1 },
+                        font: '11px Segoe UI, sans-serif',
+                        values: (u, vals) => fmtPriceAxis(vals),
+                    },
                 ],
+                hooks: {
+                    draw: [(u) => positionPriceMarker(u)],
+                },
             };
 
             const plugin = candlePlugin();
@@ -1403,7 +1440,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 ],
                 axes: [
                     makeTimeAxis(true),
-                    { scale: 'y', size: 62, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
+                    { scale: 'y', side: 1, size: 62, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
                 ],
             };
 
@@ -1421,12 +1458,12 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             if (!currentCandles.length || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
             const first = currentCandles[0].time;
             const last = currentCandles[currentCandles.length - 1].time;
-            let lo = min;
-            let hi = max;
-            if (lo < first) { hi += first - lo; lo = first; }
-            if (hi > last) { lo -= hi - last; hi = last; }
-            if (lo < first) lo = first;
-            if (hi > last) hi = last;
+            // Salli tyhjaa tilaa datan molemmin puolin (TradingView-tyyli):
+            // enintaan 75 % datan pituudesta reunapuskurina kummallekin puolelle.
+            const dataSpan = Math.max(1, last - first);
+            const maxPad = dataSpan * 0.75;
+            const lo = Math.max(first - maxPad, min);
+            const hi = Math.min(last + maxPad, max);
             if (hi <= lo) return null;
             return { min: lo, max: hi };
         }
@@ -1441,11 +1478,167 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 charts.forEach((chart) => chart.batch(() => chart.setScale('x', next)));
             });
         }
+        function inYAxisZone(chart, clientX) {
+            const over = chart.over;
+            if (!over) return false;
+            const overRect = over.getBoundingClientRect();
+            if (!overRect || overRect.width <= 0) return false;
+            return clientX < overRect.left || clientX > overRect.right;
+        }
+        let priceMarkerLabel = null;
+        let priceMarkerLine = null;
+        function ensurePriceMarker(u) {
+            if (priceMarkerLabel && priceMarkerLabel.parentNode === u.root) return;
+            if (priceMarkerLabel && priceMarkerLabel.parentNode) priceMarkerLabel.parentNode.removeChild(priceMarkerLabel);
+            if (priceMarkerLine && priceMarkerLine.parentNode) priceMarkerLine.parentNode.removeChild(priceMarkerLine);
+            try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
+            priceMarkerLabel = document.createElement('div');
+            priceMarkerLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;font:600 11px Segoe UI, sans-serif;line-height:18px;height:18px;padding:0 6px;border-radius:3px;color:#ffffff;white-space:nowrap;box-sizing:border-box;text-align:center;overflow:hidden;';
+            priceMarkerLine = document.createElement('div');
+            priceMarkerLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:1px dashed currentColor;opacity:0.6;';
+            u.root.appendChild(priceMarkerLine);
+            u.root.appendChild(priceMarkerLabel);
+        }
+        function positionPriceMarker(u) {
+            if (!u || !u.over || !currentCandles.length) return;
+            ensurePriceMarker(u);
+            const last = currentCandles[currentCandles.length - 1];
+            const prev = currentCandles.length > 1 ? currentCandles[currentCandles.length - 2] : last;
+            const price = last.close;
+            if (!Number.isFinite(price)) {
+                priceMarkerLabel.style.display = 'none';
+                priceMarkerLine.style.display = 'none';
+                return;
+            }
+            const up = price >= (Number.isFinite(prev.close) ? prev.close : price);
+            const color = up ? '#26a69a' : '#ef5350';
+            const s = u.scales.y || {};
+            const sMin = Number.isFinite(s.min) ? s.min : null;
+            const sMax = Number.isFinite(s.max) ? s.max : null;
+            if (sMin == null || sMax == null || sMax <= sMin) {
+                priceMarkerLabel.style.display = 'none';
+                priceMarkerLine.style.display = 'none';
+                return;
+            }
+            let frac;
+            if (currentPriceScale === 'log') {
+                const lmin = Math.log10(sMin);
+                const lmax = Math.log10(sMax);
+                const lp = Math.log10(Math.max(price, 1e-12));
+                frac = (lp - lmin) / (lmax - lmin);
+            } else {
+                frac = (price - sMin) / (sMax - sMin);
+            }
+            const rootRect = u.root.getBoundingClientRect();
+            const overRect = u.over.getBoundingClientRect();
+            if (!overRect || overRect.height <= 0) return;
+            const plotTop = overRect.top - rootRect.top;
+            const yRel = (1 - frac) * overRect.height;
+            const inRange = frac >= 0 && frac <= 1;
+            priceMarkerLabel.style.display = 'block';
+            priceMarkerLabel.textContent = fmtPriceLabel(price);
+            priceMarkerLabel.style.background = color;
+            priceMarkerLabel.style.top = (plotTop + Math.max(0, Math.min(overRect.height, yRel)) - 9) + 'px';
+            const leftAxisW = overRect.left - rootRect.left;
+            const rightAxisW = rootRect.right - overRect.right;
+            if (leftAxisW >= rightAxisW) {
+                priceMarkerLabel.style.left = '0px';
+                priceMarkerLabel.style.right = '';
+                priceMarkerLabel.style.width = Math.max(40, leftAxisW - 4) + 'px';
+            } else {
+                priceMarkerLabel.style.left = '';
+                priceMarkerLabel.style.right = '0px';
+                priceMarkerLabel.style.width = Math.max(40, rightAxisW - 4) + 'px';
+            }
+            if (inRange) {
+                priceMarkerLine.style.display = 'block';
+                priceMarkerLine.style.color = color;
+                priceMarkerLine.style.top = (plotTop + yRel) + 'px';
+                priceMarkerLine.style.left = (overRect.left - rootRect.left) + 'px';
+                priceMarkerLine.style.width = overRect.width + 'px';
+            } else {
+                priceMarkerLine.style.display = 'none';
+            }
+        }
+        function currentYRange(chart) {
+            const s = chart.scales.y || {};
+            let min = Number.isFinite(s.min) ? s.min : null;
+            let max = Number.isFinite(s.max) ? s.max : null;
+            if (min == null || max == null) {
+                const vis = visiblePriceRange(chart);
+                if (vis) { min = vis[0]; max = vis[1]; }
+            }
+            if (min == null || max == null || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+            return { min: min, max: max };
+        }
+        let priceBounds = null;
+        function computePriceBounds() {
+            let min = Infinity;
+            let max = -Infinity;
+            for (let i = 0; i < currentCandles.length; i++) {
+                const lo = currentLow[i];
+                const hi = currentHigh[i];
+                if (Number.isFinite(lo) && lo > 0 && lo < min) min = lo;
+                if (Number.isFinite(hi) && hi > max) max = hi;
+            }
+            if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= min) {
+                priceBounds = null;
+                return;
+            }
+            const range = max - min;
+            // Uloszoomauksen rajat: alin naytettava hinta voi painua viimeistaan
+            // ~35 % datan minimin alapuolelle, ylin ~1.6x datan maksimin, ja
+            // kokonaisvali saa olla enintaan ~1.6x datan hintahaarukasta —
+            // ei siis paase "lipsahtamaan" candleita nakyvasta kadottaen.
+            priceBounds = { min: min, max: max, floor: min * 0.35, ceil: max * 1.6, maxSpan: range * 1.6 };
+        }
+        function applyYRange(chart, min, max) {
+            if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return false;
+            const ref = Math.max(Math.abs(min), Math.abs(max), 1e-12);
+            if (max - min < ref * 1e-9) return false;
+            if (currentPriceScale === 'log' && min <= 0) {
+                min = max > 0 ? max * 1e-6 : 1e-6;
+                if (max <= min) return false;
+            }
+            if (priceBounds) {
+                let nMin = Math.max(min, priceBounds.floor);
+                let nMax = Math.min(max, priceBounds.ceil);
+                if (nMax - nMin > priceBounds.maxSpan) {
+                    const c = (nMin + nMax) / 2;
+                    nMin = c - priceBounds.maxSpan / 2;
+                    nMax = c + priceBounds.maxSpan / 2;
+                    nMin = Math.max(nMin, priceBounds.floor);
+                    nMax = Math.min(nMax, priceBounds.ceil);
+                }
+                if (nMax <= nMin) return false;
+                min = nMin;
+                max = nMax;
+            }
+            manualYRange = { min: min, max: max };
+            chart.setScale('y', { min: min, max: max });
+            return true;
+        }
+        function zoomYAt(chart, centerY, factor) {
+            const r = currentYRange(chart);
+            if (!r) return;
+            const span = r.max - r.min;
+            let ratio = (centerY - r.min) / span;
+            if (!Number.isFinite(ratio)) ratio = 0.5;
+            ratio = Math.max(0.05, Math.min(0.95, ratio));
+            const nextSpan = span * factor;
+            const nextMin = centerY - nextSpan * ratio;
+            applyYRange(chart, nextMin, nextMin + nextSpan);
+        }
         function bindWheelZoom(chart) {
             chart.root.addEventListener('wheel', (e) => {
                 if (e.ctrlKey || e.metaKey || e.altKey) return;
                 e.preventDefault();
                 const rect = chart.root.getBoundingClientRect();
+                if (chart === priceChart && inYAxisZone(chart, e.clientX)) {
+                    const centerY = chart.posToVal(e.clientY - rect.top, 'y');
+                    zoomYAt(chart, centerY, e.deltaY < 0 ? 0.91 : 1.10);
+                    return;
+                }
                 const center = chart.posToVal(e.clientX - rect.left, 'x');
                 const s = chart.scales.x || {};
                 const currMin = Number.isFinite(s.min) ? s.min : currentCandles[0].time;
@@ -1456,7 +1649,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 const fullSpan = Number.isFinite(first) && Number.isFinite(last) ? Math.max(1, last - first) : span;
                 if (!Number.isFinite(span) || span <= 0) return;
                 const factor = e.deltaY < 0 ? 0.85 : 1.15;
-                const nextSpan = Math.max(1, Math.min(fullSpan, span * factor));
+                // Uloszoomaus datan reunojen yli: kokonaisnakyyma enintaan 2.5x datan pituus
+                const maxSpan = Number.isFinite(fullSpan) ? fullSpan * 2.5 : span;
+                const nextSpan = Math.max(1, Math.min(maxSpan, span * factor));
                 const ratio = (center - currMin) / span;
                 syncXRange(center - nextSpan * ratio, center - nextSpan * ratio + nextSpan);
             }, { passive: false });
@@ -1464,18 +1659,40 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         function bindPan(chart) {
             let dragging = false;
             let startClientX = 0;
+            let startClientY = 0;
             let startMin = 0;
             let startMax = 0;
+            let startYRange = null;
             const onMove = (e) => {
                 if (!dragging) return;
                 e.preventDefault();
                 const rect = chart.root.getBoundingClientRect();
                 const delta = chart.posToVal(e.clientX - rect.left, 'x') - chart.posToVal(startClientX - rect.left, 'x');
+                // Pystysuuntainen siirto hinta-chartissa: hintaskaala seuraa hiirta
+                // (aktivoi manuaalisen skaalan; kaksoisklikkaus akselilla palauttaa autofitin)
+                if (chart === priceChart && startYRange && Number.isFinite(e.clientY)) {
+                    const vStart = chart.posToVal(startClientY - rect.top, 'y');
+                    const vCur = chart.posToVal(e.clientY - rect.top, 'y');
+                    if (Number.isFinite(vStart) && Number.isFinite(vCur) && vCur !== vStart) {
+                        if (currentPriceScale === 'log') {
+                            const ratio = Math.max(1e-12, vStart) / Math.max(1e-12, vCur);
+                            if (Number.isFinite(ratio) && ratio > 0) {
+                                applyYRange(chart, startYRange.min * ratio, startYRange.max * ratio);
+                            }
+                        } else {
+                            const dy = vStart - vCur;
+                            if (Number.isFinite(dy)) {
+                                applyYRange(chart, startYRange.min + dy, startYRange.max + dy);
+                            }
+                        }
+                    }
+                }
                 syncXRange(startMin - delta, startMax - delta);
             };
             const endDrag = () => {
                 if (!dragging) return;
                 dragging = false;
+                startYRange = null;
                 document.body.style.cursor = '';
                 window.removeEventListener('mousemove', onMove);
                 window.removeEventListener('mouseup', endDrag);
@@ -1484,16 +1701,67 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 if (!e || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
                 const rect = chart.root.getBoundingClientRect();
                 if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+                if (chart === priceChart && inYAxisZone(chart, e.clientX)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 dragging = true;
                 startClientX = e.clientX;
+                startClientY = e.clientY;
                 const s = chart.scales.x || {};
                 startMin = Number.isFinite(s.min) ? s.min : currentCandles[0].time;
                 startMax = Number.isFinite(s.max) ? s.max : currentCandles[currentCandles.length - 1].time;
+                if (chart === priceChart) startYRange = currentYRange(chart);
                 document.body.style.cursor = 'grabbing';
                 window.addEventListener('mousemove', onMove);
                 window.addEventListener('mouseup', endDrag, { once: true });
+            });
+        }
+        function bindYAxisDrag(chart) {
+            let dragging = false;
+            let startClientY = 0;
+            let startRange = null;
+            const onMove = (e) => {
+                if (!dragging || !startRange) return;
+                e.preventDefault();
+                const deltaPx = e.clientY - startClientY;
+                if (!Number.isFinite(deltaPx) || deltaPx === 0) return;
+                const factor = Math.exp(deltaPx / 350);
+                const span = startRange.max - startRange.min;
+                const center = (startRange.min + startRange.max) / 2;
+                const nextSpan = span * factor;
+                applyYRange(chart, center - nextSpan / 2, center + nextSpan / 2);
+            };
+            const endDrag = () => {
+                if (!dragging) return;
+                dragging = false;
+                startRange = null;
+                document.body.style.cursor = '';
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', endDrag);
+            };
+            chart.root.addEventListener('mousedown', (e) => {
+                if (!e || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+                const rect = chart.root.getBoundingClientRect();
+                if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+                if (chart !== priceChart || !inYAxisZone(chart, e.clientX)) return;
+                const range = currentYRange(chart);
+                if (!range) return;
+                e.preventDefault();
+                e.stopPropagation();
+                dragging = true;
+                startClientY = e.clientY;
+                startRange = range;
+                document.body.style.cursor = 'ns-resize';
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', endDrag, { once: true });
+            });
+        }
+        function bindYAxisReset(chart) {
+            chart.root.addEventListener('dblclick', (e) => {
+                if (chart !== priceChart || !inYAxisZone(chart, e.clientX)) return;
+                manualYRange = null;
+                const vis = visiblePriceRange(chart);
+                if (vis) chart.setScale('y', { min: vis[0], max: vis[1] });
             });
         }
         function refreshLegend() {
@@ -1521,6 +1789,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             const oldRange = keepRange && priceChart ? priceChart.scales.x : null;
             const needsRebuild = !priceChart || !volumeChart || lastRenderedPriceScale !== currentPriceScale;
             if (needsRebuild) {
+                manualYRange = null;
+                priceMarkerLabel = null;
+                priceMarkerLine = null;
                 if (priceEl) priceEl.innerHTML = '';
                 if (volumeEl) volumeEl.innerHTML = '';
                 priceChart = null;
@@ -1529,6 +1800,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 chartEventsBound = false;
             }
             const data = buildData();
+            computePriceBounds();
             if (needsRebuild) {
                 makeChart();
             } else {
@@ -1541,6 +1813,13 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 charts.forEach((chart) => {
                     bindWheelZoom(chart);
                     bindPan(chart);
+                    if (chart === priceChart) {
+                        bindYAxisDrag(chart);
+                        bindYAxisReset(chart);
+                        chart.root.addEventListener('mousemove', (e) => {
+                            chart.root.style.cursor = inYAxisZone(chart, e.clientX) ? 'ns-resize' : '';
+                        });
+                    }
                     chart.over.addEventListener('mousemove', () => {
                         if (chart.cursor.idx != null) updateLegend(chart.cursor.idx);
                     });
@@ -1584,6 +1863,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         if (pairToggle) {
             pairToggle.addEventListener('click', () => {
                 currentPairMode = currentPairMode === 'inverse' ? 'normal' : 'inverse';
+                manualYRange = null;
                 setControls();
                 rerender(true);
             });
