@@ -719,39 +719,136 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 syncXRange(center - nextSpan * ratio, center - nextSpan * ratio + nextSpan);
             }, { passive: false });
         }
+        function clampRange(min, max) {
+            if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return null;
+            if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+            // Salli tyhjaa tilaa datan molemmin puolin (TradingView-tyyli):
+            // enintaan 75 % datan pituudesta reunapuskurina kummallekin puolelle.
+            const dataSpan = Math.max(1, xMax - xMin);
+            const maxPad = dataSpan * 0.75;
+            const lo = Math.max(xMin - maxPad, min);
+            const hi = Math.min(xMax + maxPad, max);
+            if (hi <= lo) return null;
+            return { min: lo, max: hi };
+        }
+        function syncXRange(min, max) {
+            pendingRange = clampRange(min, max);
+            if (pendingRangeRaf) return;
+            pendingRangeRaf = requestAnimationFrame(() => {
+                const next = pendingRange;
+                pendingRange = null;
+                pendingRangeRaf = 0;
+                if (!next || charts.length === 0) return;
+                charts.forEach((chart) => chart.batch(() => chart.setScale('x', next)));
+            });
+        }
+        function bindPan(chart) {
+            let dragging = false;
+            let startClientX = 0;
+            let startClientY = 0;
+            let startMin = 0;
+            let startMax = 0;
+            let startYRange = null;
+            let panRaf = 0;
+            let pendingPan = null;
+            const applyPendingPan = () => {
+                panRaf = 0;
+                const p = pendingPan;
+                pendingPan = null;
+                if (!dragging || !p) return;
+                // Pystysuuntainen siirto hinta-chartissa: hintaskaala seuraa hiirta
+                // (aktivoi manuaalisen skaalan; kaksoisklikkaus akselilla palauttaa autofitin)
+                if (chart === priceChart && startYRange && Number.isFinite(p.clientY)) {
+                    const vStart = chart.posToVal(p.startY - p.rectTop, 'y');
+                    const vCur = chart.posToVal(p.clientY - p.rectTop, 'y');
+                    if (Number.isFinite(vStart) && Number.isFinite(vCur) && vCur !== vStart) {
+                        if (currentPriceScale === 'log') {
+                            const ratio = Math.max(1e-12, vStart) / Math.max(1e-12, vCur);
+                            if (Number.isFinite(ratio) && ratio > 0) {
+                                applyYRange(chart, startYRange.min * ratio, startYRange.max * ratio);
+                            }
+                        } else {
+                            const dy = vStart - vCur;
+                            if (Number.isFinite(dy)) {
+                                applyYRange(chart, startYRange.min + dy, startYRange.max + dy);
+                            }
+                        }
+                    }
+                }
+                const delta = chart.posToVal(p.clientX - p.rectLeft, 'x') - chart.posToVal(p.startX - p.rectLeft, 'x');
+                syncXRange(startMin - delta, startMax - delta);
+            };
+            const onMove = (e) => {
+                if (!dragging) return;
+                e.preventDefault();
+                const rect = chart.root.getBoundingClientRect();
+                pendingPan = {
+                    clientX: e.clientX, clientY: e.clientY,
+                    startX: startClientX, startY: startClientY,
+                    rectLeft: rect.left, rectTop: rect.top,
+                };
+                if (!panRaf) panRaf = requestAnimationFrame(applyPendingPan);
+            };
+            const endDrag = () => {
+                if (!dragging) return;
+                dragging = false;
+                startYRange = null;
+                pendingPan = null;
+                if (panRaf) { cancelAnimationFrame(panRaf); panRaf = 0; }
+                document.body.style.cursor = '';
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', endDrag);
+            };
+            chart.root.addEventListener('mousedown', (e) => {
+                if (!e || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+                const rect = chart.root.getBoundingClientRect();
+                if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+                if (chart === priceChart && inYAxisZone(chart, e.clientX)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                dragging = true;
+                startClientX = e.clientX;
+                startClientY = e.clientY;
+                const s = chart.scales.x || {};
+                startMin = Number.isFinite(s.min) ? s.min : currentCandles[0].time;
+                startMax = Number.isFinite(s.max) ? s.max : currentCandles[currentCandles.length - 1].time;
+                if (chart === priceChart) startYRange = currentYRange(chart);
+                document.body.style.cursor = 'grabbing';
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', endDrag, { once: true });
+            });
+        }
         function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-        // Significant-digit price formatting (5 "active" digits), matching the
-        // DEXBot order-price style (formatCurrency) but with one extra digit.
-        // Very small values get SI micro-suffixes (m/µ/n/p/...); large values
-        // get comma grouping. Examples: 34.935 -> "34.935", 119.975 -> "119.98",
-        // 3014.9 -> "3,014.9", 0.00567 -> "5.67m".
+        // Plain-decimal price formatting (matches order-price style):
+        // full decimals, never SI suffixes — order levels must read exact.
         function fmtPrice(v) {
             if (v == null || !Number.isFinite(v)) return '-';
-            const num = Number(v);
-            if (num === 0) return '0';
-            const abs = Math.abs(num);
-            if (abs < 0.1) {
-                if (abs >= 0.001) return fmtPrice(num * 1000) + 'm';
-                if (abs >= 0.000001) return fmtPrice(num * 1e6) + 'µ';
-                if (abs >= 1e-9) return fmtPrice(num * 1e9) + 'n';
-                if (abs >= 1e-12) return fmtPrice(num * 1e12) + 'p';
-                if (abs >= 1e-15) return fmtPrice(num * 1e15) + 'f';
-                if (abs >= 1e-18) return fmtPrice(num * 1e18) + 'a';
-                return num.toFixed(6);
-            }
-            const digits = 4;
-            let intDigits = Math.floor(Math.log10(abs)) + 1;
-            if (abs < 1) intDigits = 1;
-            const formatted = intDigits >= digits ? String(Math.round(num)) : num.toFixed(digits - intDigits);
-            return intDigits >= 4 ? formatted.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : formatted;
+            const abs = Math.abs(v);
+            if (abs >= 1000) return v.toFixed(2);
+            if (abs >= 100) return v.toFixed(3);
+            if (abs >= 1) return v.toFixed(4);
+            return v.toPrecision(6);
         }
         function fmtPriceAxis(vals) {
             if (!Array.isArray(vals) || vals.length === 0) return [];
-            return vals.map((v) => (v == null || !Number.isFinite(v)) ? '' : fmtPrice(v));
+            let step = Infinity;
+            for (let i = 1; i < vals.length; i++) {
+                const d = Math.abs(Number(vals[i]) - Number(vals[i - 1]));
+                if (Number.isFinite(d) && d > 0 && d < step) step = d;
+            }
+            let decimals = 4;
+            if (Number.isFinite(step) && step > 0) decimals = Math.ceil(-Math.log10(step));
+            decimals = Math.max(0, Math.min(10, decimals));
+            return vals.map((v) => (v == null || !Number.isFinite(v)) ? '' : Number(v).toFixed(decimals));
         }
         function fmtPriceLabel(v) {
             if (v == null || !Number.isFinite(v)) return '-';
-            return fmtPrice(v);
+            const abs = Math.abs(v);
+            if (abs >= 1000) return v.toFixed(2);
+            if (abs >= 1) return v.toFixed(4);
+            let s = v.toPrecision(6);
+            if (s.indexOf('e') >= 0) s = v.toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
+            return s;
         }
         function logAxisSplits(self, axisIdx, scaleMin, scaleMax, foundIncr, foundSpace) {
             if (!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax) || scaleMin <= 0 || scaleMax <= 0) return [];
