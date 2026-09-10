@@ -494,9 +494,6 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         <button type="button" class="scale-toggle${defaults.priceScale === 'linear' ? ' is-linear' : ''}" id="scale-toggle" data-scale="${escapeHtml(defaults.priceScale)}" aria-label="Toggle price scale" title="Toggle price scale">${defaults.priceScale === 'linear' ? 'Linear' : 'Log'}</button>
                     </div>
                 </div>
-                <div class="group" id="tf-group">
-                    ${timeframes.map((item: any) => `<button class="time-btn${item.label === defaultTimeframe.label ? ' active' : ''}" data-timeframe="${escapeHtml(item.label)}"${item.enabled ? '' : ' disabled'}>${escapeHtml(item.label)}</button>`).join('')}
-                </div>
                 <div class="group">
                     <div class="indicator">
                         <label><input type="checkbox" id="sma-toggle"${defaults.smaEnabled ? ' checked' : ''}> SMA</label>
@@ -519,6 +516,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 </div>
                 </div>
                 <div class="toolbar-row">
+                <div class="group" id="tf-group">
+                    ${timeframes.map((item: any) => `<button class="time-btn${item.label === defaultTimeframe.label ? ' active' : ''}" data-timeframe="${escapeHtml(item.label)}"${item.enabled ? '' : ' disabled'}>${escapeHtml(item.label)}</button>`).join('')}
+                </div>
                 <div class="group">
                     <div class="indicator">
                         <label><input type="checkbox" id="ama-toggle"${defaults.amaEnabled ? ' checked' : ''}> AMA</label>
@@ -2308,7 +2308,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             for (; ti < orderPriceTags.length; ti++) orderPriceTags[ti].style.display = 'none';
             if (buys.length && topBuyY != null) {
                 orderBuyLabel.style.display = 'block';
-                orderBuyLabel.textContent = 'OSTOT (' + buys.length + ') ' + Math.max(...buys).toPrecision(4);
+                orderBuyLabel.textContent = 'BUYS (' + buys.length + ') ' + Math.max(...buys).toPrecision(4);
                 orderBuyLabel.style.left = '8px';
                 orderBuyLabel.style.top = (topBuyY - 16) + 'px';
             } else {
@@ -2316,7 +2316,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             }
             if (sells.length && topSellY != null) {
                 orderSellLabel.style.display = 'block';
-                orderSellLabel.textContent = 'MYYNNIT (' + sells.length + ') ' + Math.max(...sells).toPrecision(4);
+                orderSellLabel.textContent = 'SELLS (' + sells.length + ') ' + Math.max(...sells).toPrecision(4);
                 orderSellLabel.style.left = '8px';
                 orderSellLabel.style.top = (topSellY - 16) + 'px';
             } else {
