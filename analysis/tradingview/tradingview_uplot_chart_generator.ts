@@ -188,10 +188,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         grid: defaults.grid,
         orderBuys: Array.isArray((data as any).orders?.buys) ? (data as any).orders.buys.map(Number).filter(Number.isFinite) : [],
         orderSells: Array.isArray((data as any).orders?.sells) ? (data as any).orders.sells.map(Number).filter(Number.isFinite) : [],
-        orderDeepBuys: Array.isArray((data as any).orders?.deepBuys) ? (data as any).orders.deepBuys.map(Number).filter(Number.isFinite) : [],
         updateMarkerTsSec: Number((data as any).updateMarkerTsSec) > 0 ? Number((data as any).updateMarkerTsSec) : null,
         updateMarkerNewBars: Number((data as any).updateMarkerNewBars) || null,
-        gridLo: Number.isFinite(Number((data as any).gridLo)) && Number((data as any).gridLo) > 0 && Number((data as any).gridLo) < 1 ? Number((data as any).gridLo) : 0.87,
+        gridLo: Number.isFinite(Number((data as any).gridLo)) && Number((data as any).gridLo) > 0 && Number((data as any).gridLo) < 1 ? Number((data as any).gridLo) : null,
         rangeSlope,
         defaultPairMode,
         assetLabelA,
@@ -572,7 +571,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     <span class="legend-item"><span class="legend-label">Time</span> <span class="legend-value" id="legend-time">-</span></span>
                     <span class="legend-item"><span class="legend-label">C</span> <span class="legend-value" id="legend-close">-</span></span>
                     <span class="legend-item"><span class="legend-label">Delta</span> <span class="legend-value" id="legend-delta">-</span></span>
-                    <span class="legend-item"><span class="legend-label">Vol $</span> <span class="legend-value" id="legend-volume">-</span></span>
+                    <span class="legend-item"><span class="legend-label">Vol</span> <span class="legend-value" id="legend-volume">-</span></span>
                     <span class="legend-item"><span class="legend-label">Scale</span> <span class="legend-value" id="legend-scale">-</span></span>
                 </div>
                 <div class="legend-line">
@@ -629,6 +628,11 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             : (Number.isFinite(Number(payload.rangeSpan)) && Number(payload.rangeSpan) > 0 ? Math.min(2, Math.max(1.2, Number(payload.rangeSpan))) : 1.55);
         let currentOrdersVisible = state.ordersVisible ?? true;
         let currentVolumeVisible = state.volumeVisible ?? true;
+        // Static per generation: the overlay (levels, reserve, floor, spread,
+        // gridline suppression) exists only when order data was embedded.
+        // --no-orders or a missing orders file therefore removes the whole
+        // overlay, including the reserve line.
+        const hasOrders = ((payload.orderBuys?.length || 0) + (payload.orderSells?.length || 0)) > 0;
         let currentAmaInitOffsetEnabled = false;
         let currentAmaInitOffset = Number.isFinite(state.amaInitOffset) ? state.amaInitOffset : 0;
         let currentPriceScale = state.priceScale || payload.priceScale || 'log';
@@ -682,7 +686,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         // for this page only, without mutating the shared stack used by other charts.
         function clampXRange(min, max) {
             if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return { min: xMin, max: xMax };
-            // Salli tyhjaa tilaa datan molemmin puolin (TradingView-tyyli):
+            // Allow empty space on both sides of the data (TradingView-style):
             // enintaan 75 % datan pituudesta reunapuskurina kummallekin puolelle.
             const dataSpan = Math.max(1, xMax - xMin);
             const maxPad = dataSpan * 0.75;
@@ -722,7 +726,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         function clampRange(min, max) {
             if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return null;
             if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
-            // Salli tyhjaa tilaa datan molemmin puolin (TradingView-tyyli):
+            // Allow empty space on both sides of the data (TradingView-style):
             // enintaan 75 % datan pituudesta reunapuskurina kummallekin puolelle.
             const dataSpan = Math.max(1, xMax - xMin);
             const maxPad = dataSpan * 0.75;
@@ -756,7 +760,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 const p = pendingPan;
                 pendingPan = null;
                 if (!dragging || !p) return;
-                // Pystysuuntainen siirto hinta-chartissa: hintaskaala seuraa hiirta
+                // Vertical drag inside the price chart: price scale follows the mouse
                 // (aktivoi manuaalisen skaalan; kaksoisklikkaus akselilla palauttaa autofitin)
                 if (chart === priceChart && startYRange && Number.isFinite(p.clientY)) {
                     const vStart = chart.posToVal(p.startY - p.rectTop, 'y');
@@ -921,10 +925,11 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 show: true,
                 size: showLabels ? 24 : 14,
                 stroke: '#ffffff',
-                // No uPlot gridlines: axes + ticks + labels only. Price
-                // structure comes from the custom dashed order levels, so
-                // the default grid would only add visual noise.
-                grid: { show: false },
+                // No uPlot gridlines when the overlay is present: axes +
+                // ticks + labels only. Price structure then comes from the
+                // custom dashed order levels, so the default grid would only
+                // add visual noise. Without orders the grid stays on.
+                grid: hasOrders ? { show: false } : { stroke: '#1c2128' },
                 ticks: { stroke: '#30363d', width: 1 },
                 font: '11px Segoe UI, sans-serif',
                 values: showLabels ? (u, vals) => {
@@ -1467,7 +1472,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             markActiveAmaPreset();
             rerender(false);
         }
-        // AMA-presetit pikanapeille (arvot constants.ts AMAS:sta).
+        // AMA presets for the quick buttons (values from constants.ts AMAS).
         const AMA_PRESETS = {
             AMA1: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA1.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA1.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA1.slowPeriod} },
             AMA2: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA2.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA2.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA2.slowPeriod} },
@@ -1927,7 +1932,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         size: 84,
                         space: isLogScale ? 1 : 45,
                         stroke: '#ffffff',
-                        grid: { show: false },
+                        grid: hasOrders ? { show: false } : { stroke: '#272f3a' },
                         ticks: { stroke: '#414b57', width: 1 },
                         font: '600 13px Segoe UI, sans-serif',
                         splits: isLogScale ? logAxisSplits : undefined,
@@ -1972,7 +1977,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 ],
                 axes: [
                     makeTimeAxis(true),
-                    { scale: 'y', side: 1, size: 84, space: 22, stroke: '#ffffff', grid: { show: false }, ticks: { stroke: '#30363d', width: 1 }, font: '600 12px Segoe UI, sans-serif', values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
+                    { scale: 'y', side: 1, size: 84, space: 22, stroke: '#ffffff', grid: hasOrders ? { show: false } : { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, font: '600 12px Segoe UI, sans-serif', values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
                 ],
                 hooks: {
                     draw: [(u) => positionVolumeMax(u)],
@@ -2064,10 +2069,11 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 priceMarkerLabel.style.width = Math.max(40, rightAxisW - 4) + 'px';
             }
         }
-        // ── Order overlay (ported from the pre-refactor personal overlay) ──
+        // ── Order overlay ──
         // Active grid orders as dashed levels: green = buys, red = sells.
-        // Reserve = last AMA * gridLo (bot minPrice "Nx" -> 1/N, fallback 0.87).
-        // "Ostot loppuvat" = lowest active buy; spread = best buy/best sell gap.
+        // Reserve = last AMA * gridLo (bot relative minPrice "Nx" -> 1/N;
+        // skipped when the bound is absolute/unparseable).
+        // "buys end" = lowest active buy; spread = best buy/best sell gap.
         // Pair-aware: order prices invert (1/p) with the candles so B/A shows
         // the same levels in display units (side colors preserved).
         let reserveLine = null;
@@ -2109,7 +2115,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         }
         function positionReserveLine(u) {
             if (!u || !u.over || !currentCandles.length) return;
-            if (!currentOrdersVisible) return;
+            if (!currentOrdersVisible || !hasOrders) { hideOverlayNodes(); return; }
             try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
             if (!reserveLine || reserveLine.parentNode !== u.root) {
                 if (reserveLine && reserveLine.parentNode) reserveLine.parentNode.removeChild(reserveLine);
@@ -2130,8 +2136,12 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 reserveLabel.style.display = 'none';
                 return;
             }
-            const gridLo = Number(payload.gridLo) > 0 && Number(payload.gridLo) < 1 ? Number(payload.gridLo) : 0.87;
-            const reservePrice = lastAma * gridLo;
+            // Null when the bot bound is absolute/unparseable: no invented
+            // level. -Infinity keeps the buys-end/spread labels working
+            // while the reserve line itself stays hidden (y == null).
+            const gridLoRaw = Number(payload.gridLo);
+            const gridLo = Number.isFinite(gridLoRaw) && gridLoRaw > 0 && gridLoRaw < 1 ? gridLoRaw : null;
+            const reservePrice = gridLo != null ? lastAma * gridLo : -Infinity;
             const ys = u.scales.y || {};
             const rootRect = u.root.getBoundingClientRect();
             const overRect = u.over.getBoundingClientRect();
@@ -2145,7 +2155,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 const lastClose = currentCandles[currentCandles.length - 1].close;
                 const dipPct = Number.isFinite(lastClose) && lastClose > 0 ? ((lastClose - reservePrice) / lastClose * 100).toFixed(1) : '-';
                 reserveLabel.style.display = 'block';
-                reserveLabel.textContent = 'reserve ' + reservePrice.toPrecision(4) + ' (-' + dipPct + '%)';
+                reserveLabel.textContent = 'reserve ' + fmtPriceLabel(reservePrice) + ' (-' + dipPct + '%)';
                 reserveLabel.style.left = '8px';
                 reserveLabel.style.top = (y - 16) + 'px';
             }
@@ -2173,7 +2183,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     buyFloorLine.style.display = 'block';
                     buyFloorLine.style.top = bY + 'px';
                     buyFloorLabel.style.display = 'block';
-                    buyFloorLabel.textContent = 'buys end  ' + buyFloorPrice.toPrecision(4) + '  (-' + buyPct + '%)';
+                    buyFloorLabel.textContent = 'buys end  ' + fmtPriceLabel(buyFloorPrice) + '  (-' + buyPct + '%)';
                     buyFloorLabel.style.left = '8px';
                     buyFloorLabel.style.top = (bY - 16) + 'px';
                     if (realBuys.length && realSells.length) {
@@ -2288,13 +2298,13 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 tag.style.color = lv.c;
                 tag.style.background = lv.bg;
                 tag.style.border = '1px solid ' + lv.c;
-                tag.textContent = Number(lv.p).toPrecision(4);
+                tag.textContent = fmtPriceLabel(lv.p);
                 lastTagY = y;
             }
             for (; ti < orderPriceTags.length; ti++) orderPriceTags[ti].style.display = 'none';
             if (buys.length && topBuyY != null) {
                 orderBuyLabel.style.display = 'block';
-                orderBuyLabel.textContent = 'BUYS (' + buys.length + ') ' + Math.max(...buys).toPrecision(4);
+                orderBuyLabel.textContent = 'BUYS (' + buys.length + ') ' + fmtPriceLabel(Math.max(...buys));
                 orderBuyLabel.style.left = '8px';
                 orderBuyLabel.style.top = (topBuyY - 16) + 'px';
             } else {
@@ -2302,7 +2312,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             }
             if (sells.length && topSellY != null) {
                 orderSellLabel.style.display = 'block';
-                orderSellLabel.textContent = 'SELLS (' + sells.length + ') ' + Math.max(...sells).toPrecision(4);
+                orderSellLabel.textContent = 'SELLS (' + sells.length + ') ' + fmtPriceLabel(Math.max(...sells));
                 orderSellLabel.style.left = '8px';
                 orderSellLabel.style.top = (topSellY - 16) + 'px';
             } else {
@@ -2359,7 +2369,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 const d = new Date(UPDATE_MARKER_SEC * 1000);
                 const hh = String(d.getUTCHours()).padStart(2, '0');
                 const mm = String(d.getUTCMinutes()).padStart(2, '0');
-                tag.textContent = 'update ' + d.toLocaleDateString('fi-FI') + ' ' + hh + ':' + mm + ' →';
+                const bars = Number(payload.updateMarkerNewBars) > 0 ? ' (+' + Math.round(Number(payload.updateMarkerNewBars)) + ')' : '';
+                tag.textContent = 'update ' + d.toLocaleDateString('en-US') + ' ' + hh + ':' + mm + bars + ' →';
                 tag.style.left = (frac > 0.8 ? -(tag.offsetWidth + 8) : 6) + 'px';
             }
         }
@@ -2376,7 +2387,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 volumeMaxLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;top:10px;right:88px;font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.6;padding:8px 12px;border-radius:8px;color:#e6edf3;background:rgba(13,17,23,0.92);border:1px solid #263241;white-space:nowrap;text-align:right;';
                 u.root.appendChild(volumeMaxLabel);
             }
-            // Nakyvan alueen suurin volyymipylvas (USDT)
+            // Largest visible volume bar, in the same base-asset units as
+            // the bars, legend and axis (no quote conversion, so the pair
+            // switch cannot change the meaning).
             const xs = u.data[0];
             const xScale = u.scales.x || {};
             const minX = Number.isFinite(xScale.min) ? xScale.min : xs[0];
@@ -2388,11 +2401,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 const c = currentCandles[i];
                 if (!c) continue;
                 const v = Number(c.volume);
-                const p = Number(c.close);
-                if (Number.isFinite(v) && Number.isFinite(p) && v * p > maxVol) maxVol = v * p;
+                if (Number.isFinite(v) && v > maxVol) maxVol = v;
             }
             volumeMaxLabel.style.display = 'block';
-            volumeMaxLabel.textContent = 'MAX ' + fmtVolume(maxVol) + ' $';
+            volumeMaxLabel.textContent = 'MAX ' + fmtVolume(maxVol);
         }
         function ensureVolumeHoverTip(u) {
             if (volumeHoverTip && volumeHoverTip.parentNode === u.root) return;
@@ -2411,17 +2423,15 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             }
             const c = currentCandles[idx];
             const v = Number(c.volume);
-            const p = Number(c.close);
-            const volUsdt = Number.isFinite(v) && Number.isFinite(p) ? v * p : null;
-            if (volUsdt == null) {
+            if (!Number.isFinite(v)) {
                 volumeHoverTip.style.display = 'none';
                 return;
             }
             const barX = u.valToPos(u.data[0][idx], 'x', true);
             volumeHoverTip.style.display = 'block';
-            volumeHoverTip.textContent = 'Vol ' + fmtVolume(volUsdt) + ' $';
+            volumeHoverTip.textContent = 'Vol ' + fmtVolume(v);
             volumeHoverTip.style.left = Math.max(2, barX - volumeHoverTip.offsetWidth / 2) + 'px';
-            // Kiinnitetty paneelin kattoon — ei peita pylvaita
+            // Pinned to the panel top — never covers the bars
             volumeHoverTip.style.top = '2px';
         }
         function currentYRange(chart) {
@@ -2711,8 +2721,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 }
             });
         }
-        // Volume-toggle: piilota volyymichart, jolloin flex luovuttaa tilan
-        // hintachartille (isompi). Ei rerenderia, vain resize.
+        // Volume toggle: hide the volume chart so flex yields the space to
+        // the price chart (larger). No rerender, resize only.
         const applyVolumeVisibility = () => {
             if (!volumeEl || !priceChart) return;
             volumeEl.style.display = currentVolumeVisible ? '' : 'none';
@@ -2733,7 +2743,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 applyVolumeVisibility();
             });
         }
-        // Alkutila ladattaessa (tallennettu localStorageen aiemmin)
+        // Initial state on load (previously stored in localStorage)
         applyVolumeVisibility();
         document.querySelectorAll('.ama-preset-btn').forEach((b) => {
             b.addEventListener('click', () => applyAmaPreset(b.dataset.amaPreset));
@@ -2873,8 +2883,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             syncInputs();
         });
 
-        // Oikealle tilaa viimeisen palkin jalkeen (~12%): %-paneelille ja
-        // tuleville kynttiloille. Ei taistele kayttajan zoomin kanssa —
+        // Room to the right past the last bar (~12%): for the market panel
+        // and future candles. Does not fight the user zoom —
         // ajetaan vain alustuksessa (myohemmat zoom/pan-kutsut ohittavat).
         function padXRight() {
             if (!priceChart || !currentCandles.length) return;
@@ -2884,10 +2894,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             const span = last - first;
             syncXRange(first - span * 0.02, last + span * 0.12);
         }
-        // Markkinapaneeli oikeaan ylakulmaan: MKT + eka osto/myynti, DEEP-rivi
-        // ja %-erotus markkinahintaan. Pair-tietoinen (samat display-tasot kuin
-        // overlay). Data on staattinen per generointi, joten piirretaan kerran
-        // (ei draw-hookkia); paivittyy parikytkimella rerenderin kautta.
+        // Market panel top-right: MKT + best buy/sell with distance-to-market
+        // %. Pair-aware (same display levels as the overlay). Static per
+        // generation, so drawn once (no draw hook); refreshed on pair flip
+        // via rerender.
         function renderMarketPanel() {
             if (!priceChart) return;
             let panel = document.getElementById('mkt-panel');
@@ -2900,23 +2910,16 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             const last = currentCandles[currentCandles.length - 1];
             const mkt = last ? last.close : NaN;
             const { buys, sells } = getDisplayOrders();
-            const deeps = Array.isArray(payload.orderDeepBuys) ? payload.orderDeepBuys.filter(Number.isFinite).filter((p) => p > 0) : [];
-            const dispDeeps = normalizePairMode(currentPairMode) === 'inverse' ? deeps.map((p) => 1 / p).filter(Number.isFinite).filter((p) => p > 0) : deeps;
             let html = '<div style="color:#e8eef5">MKT ' + (Number.isFinite(mkt) ? fmtPriceLabel(mkt) : '-') + '</div>';
             if (buys.length && Number.isFinite(mkt)) {
                 const b = Math.max(...buys);
                 const p = (b - mkt) / mkt * 100;
-                html += '<div style="color:#26a69a">BUY ' + b.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
-            }
-            if (dispDeeps.length && Number.isFinite(mkt)) {
-                const d = Math.max(...dispDeeps);
-                const p = (d - mkt) / mkt * 100;
-                html += '<div style="color:#f97316">DEEP ' + d.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
+                html += '<div style="color:#26a69a">BUY ' + fmtPriceLabel(b) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
             }
             if (sells.length && Number.isFinite(mkt)) {
                 const s = Math.min(...sells);
                 const p = (s - mkt) / mkt * 100;
-                html += '<div style="color:#ef5350">SELL ' + s.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
+                html += '<div style="color:#ef5350">SELL ' + fmtPriceLabel(s) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
             }
             panel.innerHTML = html;
         }
