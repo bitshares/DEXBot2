@@ -822,7 +822,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 show: true,
                 size: showLabels ? 24 : 14,
                 stroke: '#ffffff',
-                grid: { stroke: '#1c2128' },
+                // No uPlot gridlines: axes + ticks + labels only. Price
+                // structure comes from the custom dashed order levels, so
+                // the default grid would only add visual noise.
+                grid: { show: false },
                 ticks: { stroke: '#30363d', width: 1 },
                 font: '11px Segoe UI, sans-serif',
                 values: showLabels ? (u, vals) => {
@@ -1825,7 +1828,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         size: 84,
                         space: isLogScale ? 1 : 45,
                         stroke: '#ffffff',
-                        grid: { stroke: '#272f3a' },
+                        grid: { show: false },
                         ticks: { stroke: '#414b57', width: 1 },
                         font: '600 13px Segoe UI, sans-serif',
                         splits: isLogScale ? logAxisSplits : undefined,
@@ -1870,7 +1873,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 ],
                 axes: [
                     makeTimeAxis(true),
-                    { scale: 'y', side: 1, size: 84, space: 22, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, font: '600 12px Segoe UI, sans-serif', values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
+                    { scale: 'y', side: 1, size: 84, space: 22, stroke: '#ffffff', grid: { show: false }, ticks: { stroke: '#30363d', width: 1 }, font: '600 12px Segoe UI, sans-serif', values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
                 ],
                 hooks: {
                     draw: [(u) => positionVolumeMax(u)],
