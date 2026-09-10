@@ -13,7 +13,13 @@ import { loadBotMeta } from '../bot_key_utils.js';
 import { resolveSource, listAvailableBots } from '../resolve_source.js';
 import { writeChartFile, toFileUrl } from '../chart_utils.js';
 import { PATHS } from '../../modules/paths.js';
-import { isDeepShelfId } from '../../modules/order/utils/math.js';
+
+// Local deep-level predicate (deep-N dip-insurance ids). Kept local so the
+// exporter has no dependency on bot order internals; matches the id scheme
+// the grid uses for below-rail levels.
+function isDeepShelfId(id: any): boolean {
+    return typeof id === 'string' && /^deep-\d+$/.test(id);
+}
 
 
 const DEFAULT_CHART_DIR = PATHS.ANALYSIS.CHARTS_DIR;
