@@ -2004,17 +2004,13 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             return false;
         }
         let priceMarkerLabel = null;
-        let priceMarkerLine = null;
+        let priceMarkerLine = null; // retired: last-price dashed line removed (disturbs reading); axis label kept
         function ensurePriceMarker(u) {
             if (priceMarkerLabel && priceMarkerLabel.parentNode === u.root) return;
             if (priceMarkerLabel && priceMarkerLabel.parentNode) priceMarkerLabel.parentNode.removeChild(priceMarkerLabel);
-            if (priceMarkerLine && priceMarkerLine.parentNode) priceMarkerLine.parentNode.removeChild(priceMarkerLine);
             try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
             priceMarkerLabel = document.createElement('div');
             priceMarkerLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;font:600 12px Segoe UI, sans-serif;line-height:19px;height:19px;padding:0 7px;border-radius:3px;color:#ffffff;white-space:nowrap;box-sizing:border-box;text-align:center;overflow:hidden;';
-            priceMarkerLine = document.createElement('div');
-            priceMarkerLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:1px dashed currentColor;opacity:0.6;';
-            u.root.appendChild(priceMarkerLine);
             u.root.appendChild(priceMarkerLabel);
         }
         function positionPriceMarker(u) {
@@ -2025,7 +2021,6 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             const price = last.close;
             if (!Number.isFinite(price)) {
                 priceMarkerLabel.style.display = 'none';
-                priceMarkerLine.style.display = 'none';
                 return;
             }
             const up = price >= (Number.isFinite(prev.close) ? prev.close : price);
@@ -2035,7 +2030,6 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             const sMax = Number.isFinite(s.max) ? s.max : null;
             if (sMin == null || sMax == null || sMax <= sMin) {
                 priceMarkerLabel.style.display = 'none';
-                priceMarkerLine.style.display = 'none';
                 return;
             }
             let frac;
@@ -2052,7 +2046,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             if (!overRect || overRect.height <= 0) return;
             const plotTop = overRect.top - rootRect.top;
             const yRel = (1 - frac) * overRect.height;
-            const inRange = frac >= 0 && frac <= 1;
+            // No full-width dashed line by design (disturbs reading) — the
+            // axis label above carries the last price on its own.
             priceMarkerLabel.style.display = 'block';
             priceMarkerLabel.textContent = fmtPriceLabel(price);
             priceMarkerLabel.style.background = color;
@@ -2067,15 +2062,6 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 priceMarkerLabel.style.left = '';
                 priceMarkerLabel.style.right = '0px';
                 priceMarkerLabel.style.width = Math.max(40, rightAxisW - 4) + 'px';
-            }
-            if (inRange) {
-                priceMarkerLine.style.display = 'block';
-                priceMarkerLine.style.color = color;
-                priceMarkerLine.style.top = (plotTop + yRel) + 'px';
-                priceMarkerLine.style.left = (overRect.left - rootRect.left) + 'px';
-                priceMarkerLine.style.width = overRect.width + 'px';
-            } else {
-                priceMarkerLine.style.display = 'none';
             }
         }
         // ── Order overlay (ported from the pre-refactor personal overlay) ──
