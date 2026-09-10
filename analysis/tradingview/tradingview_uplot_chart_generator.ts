@@ -2387,7 +2387,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 if (volumeMaxLabel && volumeMaxLabel.parentNode) volumeMaxLabel.parentNode.removeChild(volumeMaxLabel);
                 try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
                 volumeMaxLabel = document.createElement('div');
-                volumeMaxLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;top:2px;right:2px;font:600 10px Segoe UI, sans-serif;line-height:16px;height:16px;padding:0 6px;border-radius:3px;color:#e6edf3;background:#30363d;white-space:nowrap;';
+                volumeMaxLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;top:10px;right:88px;font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.6;padding:8px 12px;border-radius:8px;color:#e6edf3;background:rgba(13,17,23,0.92);border:1px solid #263241;white-space:nowrap;text-align:right;';
                 u.root.appendChild(volumeMaxLabel);
             }
             // Nakyvan alueen suurin volyymipylvas (USDT)
@@ -2406,7 +2406,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 if (Number.isFinite(v) && Number.isFinite(p) && v * p > maxVol) maxVol = v * p;
             }
             volumeMaxLabel.style.display = 'block';
-            volumeMaxLabel.textContent = 'max ' + fmtVolume(maxVol) + ' $';
+            volumeMaxLabel.textContent = 'MAX ' + fmtVolume(maxVol) + ' $';
         }
         function ensureVolumeHoverTip(u) {
             if (volumeHoverTip && volumeHoverTip.parentNode === u.root) return;
