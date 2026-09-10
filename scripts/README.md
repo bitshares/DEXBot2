@@ -387,7 +387,7 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 
 ### TradingView (`dexbot tv`)
 **File:** `tv.ts`
-**Purpose:** One-step TradingView-style 1h chart for a bot (with AMA overlay), pool, or pair. Fetches candles in monthly Kibana chunks (pool-first with order-book fallback; `--feed` for MPA price-feed history), then renders via `analysis/tradingview/`.
+**Purpose:** One-step TradingView-style 1h chart for a bot (with AMA + order overlay), pool, or pair. Fetches candles in monthly Kibana chunks (pool-first with order-book fallback; `--feed` for MPA price-feed history), then renders via `analysis/tradingview/`. Bot charts pick up the order overlay from `profiles/orders/<botKey>.json` automatically.
 **Output:** `analysis/charts/tv_<bot|pool_<id>|<a>_<b>>_1h_<N>m.html` (`_feed` suffix for feed charts)
 ```bash
 # Bot chart (default: 3 months)

@@ -37,10 +37,13 @@ The sections below cover manual usage (explicit candle files, direct runner flag
 - Candle timeframe buttons: `1h`, `4h`, `1d`, `1w`
 - Pair-orientation switcher for `A/B` and `B/A`
 - SMA overlay
+- AMA preset buttons `1–4` (one-click AMA1–4, active preset highlighted); numeric inputs kept
 - Bot-grid range highlight, off by default (the bot's min/max around AMA with live asymmetric tilt; red above AMA, green below)
 - Range-scale switch: fit the price axis to the range band
 - VWMA overlay
-- Bottom volume panel
+- Order overlay for bot charts (active grid buys/sells as dashed levels, reserve line at the lowest grid buy, ceiling line at the highest grid sell, spread label; pair-aware, toggle in-chart)
+- Market panel (top-right): `Market` + best `BUY`/`SELL` levels with distance-to-market %
+- Bottom volume panel with `Volume` toggle and per-bar hover tooltip
 - Crosshair legend with current candle values
 
 ## Quick Start
@@ -176,6 +179,7 @@ market_adapter/data/lp/<pair>/lp_pool_<id>_<interval>.json
 | `--bot-key <key>` | Bot key for `market_adapter` source | — |
 | `--chart <path>` | Output HTML file | `analysis/charts/tradingview_chart.html` |
 | `--title <text>` | Chart title | auto-generated from meta |
+| `--price-scale <log\|linear>` | Price-axis scale | `log` |
 | `--sma-period <n>` | SMA period | `500` |
 | `--ama-er-period <n>` | AMA ER period | `781` |
 | `--ama-fast-period <n>` | AMA fast period | `5.2` |
@@ -188,6 +192,11 @@ market_adapter/data/lp/<pair>/lp_pool_<id>_<interval>.json
 | `--no-range` | Disable range highlight | — |
 | `--range-scale` | Range Scaling: size the band by AMA slope like the grid build + fit price axis to it | — |
 | `--range-span <mult>` | x-range around AMA, 1.2–2 (default: bot grid setting) | bot grid |
+| `--orders-file <path>` | Order-grid JSON override for the overlay (default: `profiles/orders/<botKey>.json`) | bot orders |
+| `--no-orders` | Disable the order overlay (levels, reserve/ceiling lines, spread label) | — |
+| `--update-marker-ts <sec>` | Draw an "updated from here" line at the given unix timestamp | — |
+| `--update-marker-bars <n>` | Bar count shown in the update-marker tag (e.g. `(+12)`) | — |
+| `--no-update-marker` | Suppress the update marker even when the candle file has stamped meta | — |
 | `--quiet` | Suppress progress logs | — |
 
 ## Notes
@@ -199,9 +208,12 @@ market_adapter/data/lp/<pair>/lp_pool_<id>_<interval>.json
 - VWMA is disabled by default.
 - AMA is auto-enabled when the bot has `gridPrice: "ama"` (or ama1-4), otherwise disabled by default.
 - The AMA controls start with the bot-specific AMA, then pair-specific entry from `profiles/market_profiles.json` when available, falling back to AMA3 values from `modules/constants.ts`.
-- The AMA `Reset` button restores the HTML defaults, not the browser-stored overrides.
-- The pair switcher inverts the candles client-side, so you can inspect both `A/B` and `B/A` views from one export.
-- Indicator, timeframe, and scale changes are persisted in browser `localStorage` per pool/pair chart (`dexbot2-tradingview-uplot-v3:<pool>:<A>_<B>:<baseSecs|base>`); cursor sync between the price/volume panes uses a separate constant key.
+- The AMA preset buttons `1–4` select the AMA1–4 defaults (active preset highlighted); numeric inputs remain for fine-tuning.
+- The pair switcher inverts the candles client-side, so you can inspect both `A/B` and `B/A` views from one export. The order overlay inverts with it (same levels in display units, side colors preserved).
+- The order overlay resolves from `profiles/orders/<botKey>.json` (same files `scripts/analyze-orders.ts` reads): active/partial grid orders only. Pool/pair charts without a bot key render without it, silently. `--no-orders` removes the whole overlay (levels, reserve/ceiling lines, spread label); the in-chart `Orders` checkbox does the same when orders are present. Grid bounds span the full grid, never calculated: the reserve line sits on the lowest grid buy, the ceiling line on the highest grid sell — live (active/partial) and planned (virtual) slots alike; a missing side hides its line instead of drawing an invented level. Bounds render even when no live levels exist yet (levels, spread, and panel BUY/SELL rows need live orders).
+- The update marker falls back to `prevUpdateLastCandleSec` / `prevUpdateNewBars` stamped in the candle-file `meta` when the flags are absent; those fields are written by external incremental-fetch tooling, not by anything in this repo.
+- `Ctrl+0` (or `Cmd+0`) resets the time-axis zoom to the full dataset.
+- Indicator, timeframe, scale, and overlay-visibility changes are persisted in browser `localStorage` per pool/pair chart (`dexbot2-tradingview-uplot-v3:<pool>:<A>_<B>:<baseSecs|base>`); cursor sync between the price/volume panes uses a separate constant key.
 - The price axis defaults to log base `10`, with a toolbar switch for `Log` / `Linear`.
 - If you regenerate the HTML and then open it later, no CDN access is needed — `uPlot` is loaded from the vendored local copy at `analysis/uplot/`.
 

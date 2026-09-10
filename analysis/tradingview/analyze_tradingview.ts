@@ -38,6 +38,11 @@ function parseArgs() {
         rangeEnabled: boolean;
         rangeScaleEnabled: boolean;
         rangeSpan: number | undefined;
+        ordersFile: string | null;
+        noOrders: boolean;
+        noUpdateMarker: boolean;
+        updateMarkerTsSec: number | null;
+        updateMarkerNewBars: number | null;
         quiet: boolean;
         listBots: boolean;
     } = {
@@ -56,6 +61,11 @@ function parseArgs() {
         rangeEnabled: false,
         rangeScaleEnabled: false,
         rangeSpan: undefined,
+        ordersFile: null,
+        noOrders: false,
+        noUpdateMarker: false,
+        updateMarkerTsSec: null,
+        updateMarkerNewBars: null,
         quiet: false,
         listBots: false,
     };
@@ -70,6 +80,7 @@ function parseArgs() {
         else if (arg === '--bot-key') config.source.config.botKey = args[++i];
         else if (arg === '--chart') config.chartFile = args[++i];
         else if (arg === '--title') config.title = args[++i];
+        else if (arg === '--price-scale' || arg === '--scale') config.priceScale = String(args[++i] || 'log');
         else if (arg === '--sma-period') config.smaPeriod = Math.max(1, parseInt(args[++i], 10) || 500);
         else if (arg === '--ama-er-period') config.amaErPeriod = Math.max(1, parseInt(args[++i], 10) || DEFAULT_AMA.erPeriod);
         else if (arg === '--ama-fast-period') config.amaFastPeriod = Math.max(0.1, parseFloat(args[++i]) || DEFAULT_AMA.fastPeriod);
@@ -77,10 +88,16 @@ function parseArgs() {
         else if (arg === '--no-sma') config.smaEnabled = false;
         else if (arg === '--no-ama') config.amaEnabled = false;
         else if (arg === '--no-vwap') config.vwapEnabled = false;
+        else if (arg === '--vwap-bars') config.vwapBars = Math.max(5, parseInt(args[++i], 10) || 500);
         else if (arg === '--range') config.rangeEnabled = true;
         else if (arg === '--no-range') config.rangeEnabled = false;
         else if (arg === '--range-scale') config.rangeScaleEnabled = true;
         else if (arg === '--range-span') config.rangeSpan = parseFloat(args[++i]);
+        else if (arg === '--orders-file') config.ordersFile = String(args[++i] || '');
+        else if (arg === '--no-orders') config.noOrders = true;
+        else if (arg === '--no-update-marker') config.noUpdateMarker = true;
+        else if (arg === '--update-marker-ts') config.updateMarkerTsSec = Math.max(0, parseInt(args[++i], 10) || 0) || null;
+        else if (arg === '--update-marker-bars') config.updateMarkerNewBars = Math.max(0, parseInt(args[++i], 10) || 0) || null;
         else if (arg === '--list-bots') config.listBots = true;
         else if (arg === '--quiet') config.quiet = true;
     }
@@ -91,6 +108,61 @@ function parseArgs() {
 function loadJsonMeta(filePath: any) {
     if (!filePath || !fs.existsSync(filePath)) return { meta: null, candles: null };
     return loadCandleFile(filePath);
+}
+
+// ── Order overlay: live grid levels (buys/sells) + full-grid bounds ──
+// Canonical source is profiles/orders/<botKey>.json (same files
+// scripts/analyze-orders.ts reads); --orders-file overrides, --no-orders
+// disables. Pool/pair charts without a bot key render without overlay,
+// silently — no hardcoded personal paths.
+function resolveOrdersFile(botKey: string | null | undefined, explicit: string | null | undefined, disabled: boolean): string | null {
+    if (disabled) return null;
+    if (explicit) {
+        try { if (fs.existsSync(explicit)) return explicit; } catch { /* fall through to warning */ }
+        console.warn(`[TradingView] --orders-file not found: ${explicit} (rendering without order overlay)`);
+        return null;
+    }
+    if (!botKey) return null;
+    try {
+        const ordersDir = (PATHS as any).ORDERS_DIR || path.join(path.dirname(PATHS.PROFILES.BOTS_JSON), 'orders');
+        const direct = path.join(ordersDir, `${botKey}.json`);
+        if (fs.existsSync(direct)) return direct;
+    } catch { /* silent when absent */ }
+    return null;
+}
+
+// Single-pass read of the order grid, like the runtime sees it: live
+// (active/partial) levels for the overlay plus full-grid bounds (live +
+// planned/virtual slots). Virtual slots carry the same slot geometry
+// without an on-chain order, so excluding them would shrink the shown
+// grid to the live extremes. Spread-type slots are neither buys nor
+// sells and stay out of both.
+function loadOrdersData(filePath: string | null): { buys: number[]; sells: number[]; low: number | null; high: number | null } {
+    if (!filePath) return { buys: [], sells: [], low: null, high: null };
+    try {
+        const od = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const grid = Array.isArray(od?.grid) ? od.grid : (Array.isArray(od?.orders) ? od.orders : []);
+        const buys: number[] = [];
+        const sells: number[] = [];
+        let low: number | null = null;
+        let high: number | null = null;
+        for (const s of grid) {
+            const price = Number((s as any)?.price);
+            if (!Number.isFinite(price) || price <= 0) continue;
+            const st = (s as any)?.state;
+            if (st !== 'active' && st !== 'partial' && st !== 'virtual') continue;
+            if ((s as any)?.type === 'buy') {
+                if (low == null || price < low) low = price;
+                if (st !== 'virtual') buys.push(price);
+            } else if ((s as any)?.type === 'sell') {
+                if (high == null || price > high) high = price;
+                if (st !== 'virtual') sells.push(price);
+            }
+        }
+        buys.sort((a, b) => a - b);
+        sells.sort((a, b) => a - b);
+        return { buys, sells, low, high };
+    } catch { return { buys: [], sells: [], low: null, high: null }; }
 }
 
 function inferTitle(meta: any, fallback: string) {
@@ -149,6 +221,13 @@ async function main() {
                 ? Number(botMeta.asymmetricBounds.minScaleSlots)
                 : null,
         } : null;
+        // Order overlay (canonical profiles/orders/<botKey>.json; silent when absent)
+        const ordersFile = resolveOrdersFile(botKey, config.ordersFile, config.noOrders);
+        const ordersData = loadOrdersData(ordersFile);
+        const orderBuys = ordersData.buys;
+        const orderSells = ordersData.sells;
+        const gridBounds = { low: ordersData.low, high: ordersData.high };
+        if (!config.quiet && ordersFile) console.log(`[TradingView] Order overlay: ${orderBuys.length} buys + ${orderSells.length} sells from ${ordersFile}`);
         const html = generateHTML({
             candles,
             meta: jsonMeta || {
@@ -172,6 +251,14 @@ async function main() {
             priceScale: config.priceScale === 'linear' ? 'linear' : 'log',
             defaultTimeframe: '1h',
             marketAdapter: MARKET_ADAPTER,
+            orders: { buys: orderBuys, sells: orderSells },
+            gridBounds,
+            // Update marker ("updated from here" line): explicit CLI flags win,
+            // otherwise fall back to stamped data-file meta when present.
+            updateMarkerTsSec: config.noUpdateMarker ? null : (config.updateMarkerTsSec
+                ?? (Number((jsonMeta as any)?.prevUpdateLastCandleSec) > 0 ? Number((jsonMeta as any).prevUpdateLastCandleSec) : null)),
+            updateMarkerNewBars: config.noUpdateMarker ? null : (config.updateMarkerNewBars
+                ?? (Number((jsonMeta as any)?.prevUpdateNewBars) || null)),
         }, title);
 
         writeChartFile(config.chartFile, html);
