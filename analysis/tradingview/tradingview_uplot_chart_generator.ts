@@ -103,6 +103,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         { label: '4h', seconds: 14400 },
         { label: '1d', seconds: 86400 },
         { label: '1w', seconds: 604800 },
+        { label: '1M', seconds: 2592000 },
     ].map((item: any) => ({ ...item, enabled: item.seconds >= baseIntervalSeconds }));
 
     const defaultTimeframe = timeframes.find((item: any) => item.label === data.defaultTimeframe && item.enabled)
@@ -185,6 +186,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         rangeWidthPct: defaults.rangeWidthPct,
         rangeSpan: defaults.rangeSpan,
         grid: defaults.grid,
+        orderBuys: Array.isArray((data as any).orders?.buys) ? (data as any).orders.buys.map(Number).filter(Number.isFinite) : [],
+        orderSells: Array.isArray((data as any).orders?.sells) ? (data as any).orders.sells.map(Number).filter(Number.isFinite) : [],
+        orderDeepBuys: Array.isArray((data as any).orders?.deepBuys) ? (data as any).orders.deepBuys.map(Number).filter(Number.isFinite) : [],
+        gridLo: Number.isFinite(Number((data as any).gridLo)) && Number((data as any).gridLo) > 0 && Number((data as any).gridLo) < 1 ? Number((data as any).gridLo) : 0.87,
         rangeSlope,
         defaultPairMode,
         assetLabelA,
@@ -255,6 +260,11 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             background: linear-gradient(180deg, rgba(35,53,79,0.95), rgba(22,32,47,0.98));
         }
         .time-btn:disabled { opacity: 0.35; cursor: not-allowed; text-decoration: line-through; }
+        .ama-preset-btn.active {
+            color: #fff;
+            border-color: rgba(250,204,21,0.85);
+            background: linear-gradient(180deg, rgba(79,66,22,0.95), rgba(47,40,18,0.98));
+        }
         .indicator {
             display: inline-flex;
             align-items: center;
@@ -529,6 +539,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                             <button type="button" class="step-btn" id="ama-slow-dec">▼</button>
                         </span>
                         <button type="button" class="reset-btn" id="ama-reset">Reset</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA1" title="AMA1 (slow 62.1)">1</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA2" title="AMA2 (slow 72.0)">2</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA3" title="AMA3 (slow 83.6)">3</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA4" title="AMA4 (slow 96.9)">4</button>
                     </div>
                     <div class="indicator" title="Range min/max built only from the live AMA price (red above, green below); Scale sizes it by AMA slope like the grid build">
                         <label><input type="checkbox" id="range-toggle"${defaults.rangeEnabled ? ' checked' : ''}> Range</label>
@@ -544,6 +558,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         <input type="range" id="ama-init-offset" min="-50" max="50" value="0" step="1" style="width:120px;vertical-align:middle" disabled>
                         <span id="ama-init-offset-val" style="font-size:11px;color:#8b949e;width:32px;display:inline-block;text-align:right">0%</span>
                     </div>
+                    ${((payload.orderBuys?.length || payload.orderSells?.length) ? '<div class="indicator"><label><input type="checkbox" id="orders-toggle" checked> Orders</label> <span class="tag">' + (payload.orderBuys?.length || 0) + 'B/' + (payload.orderSells?.length || 0) + 'S</span></div>' : '')}
+                    <div class="indicator"><label><input type="checkbox" id="volume-toggle" checked> Volume</label></div>
                 </div>
                 </div>
             </div>
@@ -554,7 +570,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     <span class="legend-item"><span class="legend-label">Time</span> <span class="legend-value" id="legend-time">-</span></span>
                     <span class="legend-item"><span class="legend-label">C</span> <span class="legend-value" id="legend-close">-</span></span>
                     <span class="legend-item"><span class="legend-label">Delta</span> <span class="legend-value" id="legend-delta">-</span></span>
-                    <span class="legend-item"><span class="legend-label">Vol</span> <span class="legend-value" id="legend-volume">-</span></span>
+                    <span class="legend-item"><span class="legend-label">Vol $</span> <span class="legend-value" id="legend-volume">-</span></span>
                     <span class="legend-item"><span class="legend-label">Scale</span> <span class="legend-value" id="legend-scale">-</span></span>
                 </div>
                 <div class="legend-line">
@@ -609,6 +625,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         let currentRangeSpan = Number.isFinite(state.rangeSpan) && Number(state.rangeSpan) > 0
             ? Math.min(2, Math.max(1.2, Number(state.rangeSpan)))
             : (Number.isFinite(Number(payload.rangeSpan)) && Number(payload.rangeSpan) > 0 ? Math.min(2, Math.max(1.2, Number(payload.rangeSpan))) : 1.55);
+        let currentOrdersVisible = state.ordersVisible ?? true;
+        let currentVolumeVisible = state.volumeVisible ?? true;
         let currentAmaInitOffsetEnabled = false;
         let currentAmaInitOffset = Number.isFinite(state.amaInitOffset) ? state.amaInitOffset : 0;
         let currentPriceScale = state.priceScale || payload.priceScale || 'log';
@@ -835,6 +853,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     rangeScaleEnabled: currentRangeScaleEnabled,
                     rangeWidthPct: currentRangeWidthPct,
                     rangeSpan: currentRangeSpan,
+                    ordersVisible: currentOrdersVisible,
+                    volumeVisible: currentVolumeVisible,
                     amaInitOffset: currentAmaInitOffset,
                     priceScale: currentPriceScale,
                     pairMode: currentPairMode,
@@ -1342,7 +1362,32 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             currentAmaFastPeriod = Number(payload.amaDefaults?.fastPeriod || ${MARKET_ADAPTER.AMAS.AMA3.fastPeriod});
             currentAmaSlowPeriod = Number(payload.amaDefaults?.slowPeriod || ${MARKET_ADAPTER.AMAS.AMA3.slowPeriod});
             setControls();
+            markActiveAmaPreset();
             rerender(false);
+        }
+        // AMA-presetit pikanapeille (arvot constants.ts AMAS:sta).
+        const AMA_PRESETS = {
+            AMA1: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA1.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA1.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA1.slowPeriod} },
+            AMA2: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA2.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA2.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA2.slowPeriod} },
+            AMA3: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA3.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA3.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA3.slowPeriod} },
+            AMA4: { erPeriod: ${MARKET_ADAPTER.AMAS.AMA4.erPeriod}, fastPeriod: ${MARKET_ADAPTER.AMAS.AMA4.fastPeriod}, slowPeriod: ${MARKET_ADAPTER.AMAS.AMA4.slowPeriod} },
+        };
+        function markActiveAmaPreset() {
+            const cur = { e: Math.round(Number(currentAmaErPeriod)), f: Number(currentAmaFastPeriod), s: Number(currentAmaSlowPeriod) };
+            document.querySelectorAll('.ama-preset-btn').forEach((b) => {
+                const p = AMA_PRESETS[b.dataset.amaPreset];
+                const match = p && Math.round(p.erPeriod) === cur.e && Number(p.fastPeriod) === cur.f && Number(p.slowPeriod) === cur.s;
+                b.classList.toggle('active', !!match);
+            });
+        }
+        function applyAmaPreset(key) {
+            const p = AMA_PRESETS[key];
+            if (!p) return;
+            document.getElementById('ama-er').value = String(p.erPeriod);
+            document.getElementById('ama-fast').value = String(p.fastPeriod);
+            document.getElementById('ama-slow').value = String(p.slowPeriod);
+            document.getElementById('ama-toggle').checked = true;
+            syncInputs();
         }
         function setIndicatorSeriesVisible(seriesIndex, visible) {
             if (!priceChart) return;
@@ -1790,7 +1835,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     },
                 ],
                 hooks: {
-                    draw: [(u) => positionPriceMarker(u)],
+                    draw: [(u) => { positionPriceMarker(u); positionReserveLine(u); positionOrderLines(u); }],
                 },
             };
 
@@ -1827,6 +1872,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     makeTimeAxis(true),
                     { scale: 'y', side: 1, size: 84, space: 22, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, font: '600 12px Segoe UI, sans-serif', values: (u, vals) => vals.map((v) => (v == null ? '' : fmtVolume(v))) },
                 ],
+                hooks: {
+                    draw: [(u) => positionVolumeMax(u)],
+                },
             };
 
             const volumePluginInst = volumePlugin();
@@ -1927,6 +1975,327 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             } else {
                 priceMarkerLine.style.display = 'none';
             }
+        }
+        // ── Order overlay (ported from the pre-refactor personal overlay) ──
+        // Active grid orders as dashed levels: green = buys, red = sells.
+        // Reserve = last AMA * gridLo (bot minPrice "Nx" -> 1/N, fallback 0.87).
+        // "Ostot loppuvat" = lowest active buy; spread = best buy/best sell gap.
+        // Pair-aware: order prices invert (1/p) with the candles so B/A shows
+        // the same levels in display units (side colors preserved).
+        let reserveLine = null;
+        let reserveLabel = null;
+        let buyFloorLine = null;
+        let buyFloorLabel = null;
+        let spreadMidLabel = null;
+        let orderLineDivs = [];
+        let orderBuyLabel = null;
+        let orderSellLabel = null;
+        let orderPriceTags = [];
+        let lastOverlayKey = '';
+        function getDisplayOrders() {
+            const rawBuys = Array.isArray(payload.orderBuys) ? payload.orderBuys.filter(Number.isFinite).filter((p) => p > 0) : [];
+            const rawSells = Array.isArray(payload.orderSells) ? payload.orderSells.filter(Number.isFinite).filter((p) => p > 0) : [];
+            if (normalizePairMode(currentPairMode) !== 'inverse') return { buys: rawBuys, sells: rawSells };
+            const inv = (arr) => arr.map((p) => 1 / p).filter(Number.isFinite).filter((p) => p > 0);
+            return { buys: inv(rawBuys), sells: inv(rawSells) };
+        }
+        function yForPriceCached(ys, overRect, rootRect, price) {
+            const sMin = Number.isFinite(ys.min) ? ys.min : null;
+            const sMax = Number.isFinite(ys.max) ? ys.max : null;
+            if (sMin == null || sMax == null || sMax <= sMin) return null;
+            let frac;
+            if (currentPriceScale === 'log') {
+                if (!(sMin > 0) || !(price > 0)) return null;
+                const lmin = Math.log10(sMin), lmax = Math.log10(sMax);
+                frac = (Math.log10(price) - lmin) / (lmax - lmin);
+            } else {
+                frac = (price - sMin) / (sMax - sMin);
+            }
+            if (frac < 0 || frac > 1) return null;
+            return (overRect.top - rootRect.top) + (1 - frac) * overRect.height;
+        }
+        function hideOverlayNodes() {
+            [reserveLine, reserveLabel, buyFloorLine, buyFloorLabel, spreadMidLabel, orderBuyLabel, orderSellLabel].forEach((n) => { if (n) n.style.display = 'none'; });
+            orderLineDivs.forEach((d) => { d.style.display = 'none'; });
+            orderPriceTags.forEach((t) => { t.style.display = 'none'; });
+        }
+        function positionReserveLine(u) {
+            if (!u || !u.over || !currentCandles.length) return;
+            if (!currentOrdersVisible) return;
+            try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
+            if (!reserveLine || reserveLine.parentNode !== u.root) {
+                if (reserveLine && reserveLine.parentNode) reserveLine.parentNode.removeChild(reserveLine);
+                if (reserveLabel && reserveLabel.parentNode) reserveLabel.parentNode.removeChild(reserveLabel);
+                reserveLine = document.createElement('div');
+                reserveLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:2px dashed #f97316;opacity:0.7;left:0;right:0;display:none;';
+                reserveLabel = document.createElement('div');
+                reserveLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#f97316;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
+                u.root.appendChild(reserveLine);
+                u.root.appendChild(reserveLabel);
+            }
+            let lastAma = null;
+            for (let i = currentAma.length - 1; i >= 0; i--) {
+                if (currentAma[i] != null && Number.isFinite(currentAma[i]) && currentAma[i] > 0) { lastAma = currentAma[i]; break; }
+            }
+            if (lastAma == null || lastAma <= 0) {
+                reserveLine.style.display = 'none';
+                reserveLabel.style.display = 'none';
+                return;
+            }
+            const gridLo = Number(payload.gridLo) > 0 && Number(payload.gridLo) < 1 ? Number(payload.gridLo) : 0.87;
+            const reservePrice = lastAma * gridLo;
+            const ys = u.scales.y || {};
+            const rootRect = u.root.getBoundingClientRect();
+            const overRect = u.over.getBoundingClientRect();
+            const y = yForPriceCached(ys, overRect, rootRect, reservePrice);
+            if (y == null) {
+                reserveLine.style.display = 'none';
+                reserveLabel.style.display = 'none';
+            } else {
+                reserveLine.style.display = 'block';
+                reserveLine.style.top = y + 'px';
+                const lastClose = currentCandles[currentCandles.length - 1].close;
+                const dipPct = Number.isFinite(lastClose) && lastClose > 0 ? ((lastClose - reservePrice) / lastClose * 100).toFixed(1) : '-';
+                reserveLabel.style.display = 'block';
+                reserveLabel.textContent = 'reserve ' + reservePrice.toPrecision(4) + ' (-' + dipPct + '%)';
+                reserveLabel.style.left = '8px';
+                reserveLabel.style.top = (y - 16) + 'px';
+            }
+            const { buys: realBuys, sells: realSells } = getDisplayOrders();
+            const buyFloorPrice = realBuys.length ? Math.min(...realBuys) : null;
+            if (!buyFloorLine || buyFloorLine.parentNode !== u.root) {
+                if (buyFloorLine && buyFloorLine.parentNode) buyFloorLine.parentNode.removeChild(buyFloorLine);
+                if (buyFloorLabel && buyFloorLabel.parentNode) buyFloorLabel.parentNode.removeChild(buyFloorLabel);
+                if (spreadMidLabel && spreadMidLabel.parentNode) spreadMidLabel.parentNode.removeChild(spreadMidLabel);
+                buyFloorLine = document.createElement('div');
+                buyFloorLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:1.5px dashed #26a69a;opacity:0.6;left:0;right:0;display:none;';
+                buyFloorLabel = document.createElement('div');
+                buyFloorLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#26a69a;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
+                spreadMidLabel = document.createElement('div');
+                spreadMidLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:700 11px Segoe UI, sans-serif;line-height:16px;height:16px;padding:0 6px;border-radius:3px;color:#0b0f14;background:#facc15;white-space:nowrap;display:none;';
+                u.root.appendChild(buyFloorLine);
+                u.root.appendChild(buyFloorLabel);
+                u.root.appendChild(spreadMidLabel);
+            }
+            if (buyFloorPrice != null && buyFloorPrice > reservePrice) {
+                const bY = yForPriceCached(ys, overRect, rootRect, buyFloorPrice);
+                if (bY != null) {
+                    const lastClose = currentCandles[currentCandles.length - 1].close;
+                    const buyPct = Number.isFinite(lastClose) && lastClose > 0 ? ((lastClose - buyFloorPrice) / lastClose * 100).toFixed(1) : '-';
+                    buyFloorLine.style.display = 'block';
+                    buyFloorLine.style.top = bY + 'px';
+                    buyFloorLabel.style.display = 'block';
+                    buyFloorLabel.textContent = 'ostot loppuvat  ' + buyFloorPrice.toPrecision(4) + '  (-' + buyPct + '%)';
+                    buyFloorLabel.style.left = '8px';
+                    buyFloorLabel.style.top = (bY - 16) + 'px';
+                    if (realBuys.length && realSells.length) {
+                        const bestBuy = Math.max(...realBuys);
+                        const bestSell = Math.min(...realSells);
+                        const yB = yForPriceCached(ys, overRect, rootRect, bestBuy);
+                        const yS = yForPriceCached(ys, overRect, rootRect, bestSell);
+                        if (yB != null && yS != null && bestBuy > 0) {
+                            const spr = (bestSell - bestBuy) / bestBuy * 100;
+                            spreadMidLabel.style.display = 'block';
+                            spreadMidLabel.textContent = 'spread ' + spr.toFixed(2) + '%';
+                            spreadMidLabel.style.left = '8px';
+                            spreadMidLabel.style.top = ((yB + yS) / 2 - 8) + 'px';
+                        } else {
+                            spreadMidLabel.style.display = 'none';
+                        }
+                    } else {
+                        spreadMidLabel.style.display = 'none';
+                    }
+                } else {
+                    buyFloorLine.style.display = 'none';
+                    buyFloorLabel.style.display = 'none';
+                    spreadMidLabel.style.display = 'none';
+                }
+            } else {
+                buyFloorLine.style.display = 'none';
+                buyFloorLabel.style.display = 'none';
+                if (spreadMidLabel) spreadMidLabel.style.display = 'none';
+            }
+        }
+        function positionOrderLines(u) {
+            if (!u || !u.over) return;
+            if (!currentOrdersVisible) {
+                orderLineDivs.forEach((d) => { d.style.display = 'none'; });
+                orderPriceTags.forEach((t) => { t.style.display = 'none'; });
+                if (orderBuyLabel) orderBuyLabel.style.display = 'none';
+                if (orderSellLabel) orderSellLabel.style.display = 'none';
+                return;
+            }
+            try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
+            const { buys, sells } = getDisplayOrders();
+            const total = buys.length + sells.length;
+            if (orderLineDivs.length && orderLineDivs[0].parentNode !== u.root) {
+                orderLineDivs.forEach((d) => u.root.appendChild(d));
+                orderPriceTags.forEach((t) => u.root.appendChild(t));
+                lastOverlayKey = '';
+            }
+            while (orderLineDivs.length < total) {
+                const d = document.createElement('div');
+                d.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;left:0;right:0;display:none;';
+                u.root.appendChild(d);
+                orderLineDivs.push(d);
+            }
+            const ys = u.scales.y || {};
+            const overlayKey = (ys.min || 0) + '|' + (ys.max || 0) + '|' + (u.root.clientWidth || 0) + '|' + (u.root.clientHeight || 0) + '|' + currentPriceScale + '|' + currentPairMode;
+            if (overlayKey === lastOverlayKey) return;
+            lastOverlayKey = overlayKey;
+            const rootRect = u.root.getBoundingClientRect();
+            const overRect = u.over.getBoundingClientRect();
+            if (!orderBuyLabel || orderBuyLabel.parentNode !== u.root) {
+                if (orderBuyLabel && orderBuyLabel.parentNode) orderBuyLabel.parentNode.removeChild(orderBuyLabel);
+                orderBuyLabel = document.createElement('div');
+                orderBuyLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#26a69a;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
+                u.root.appendChild(orderBuyLabel);
+            }
+            if (!orderSellLabel || orderSellLabel.parentNode !== u.root) {
+                if (orderSellLabel && orderSellLabel.parentNode) orderSellLabel.parentNode.removeChild(orderSellLabel);
+                orderSellLabel = document.createElement('div');
+                orderSellLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#ef5350;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
+                u.root.appendChild(orderSellLabel);
+            }
+            let idx = 0;
+            const place = (price, color) => {
+                const d = orderLineDivs[idx++];
+                const y = yForPriceCached(ys, overRect, rootRect, price);
+                if (y == null) { d.style.display = 'none'; return null; }
+                d.style.display = 'block';
+                d.style.top = y + 'px';
+                d.style.borderTop = '1.5px dashed ' + color;
+                d.style.opacity = '0.55';
+                return y;
+            };
+            let topBuyY = null;
+            buys.forEach((p) => { const y = place(p, '#26a69a'); if (y != null && (topBuyY == null || y < topBuyY)) topBuyY = y; });
+            let topSellY = null;
+            sells.forEach((p) => { const y = place(p, '#ef5350'); if (y != null && (topSellY == null || y < topSellY)) topSellY = y; });
+            for (; idx < orderLineDivs.length; idx++) orderLineDivs[idx].style.display = 'none';
+            if (orderPriceTags.length && orderPriceTags[0].parentNode !== u.root) {
+                orderPriceTags.forEach((t) => u.root.appendChild(t));
+            }
+            const levels = [
+                ...buys.map((p) => ({ p, c: '#26a69a', bg: 'rgba(20,30,28,0.92)' })),
+                ...sells.map((p) => ({ p, c: '#ef5350', bg: 'rgba(30,20,22,0.92)' })),
+            ].sort((a, b) => a.p - b.p);
+            let ti = 0, lastTagY = -Infinity;
+            const ensureTag = () => {
+                if (ti >= orderPriceTags.length) {
+                    const t = document.createElement('div');
+                    t.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 9px Segoe UI, sans-serif;line-height:14px;height:14px;padding:0 4px;border-radius:3px;white-space:nowrap;display:none;';
+                    u.root.appendChild(t);
+                    orderPriceTags.push(t);
+                }
+                return orderPriceTags[ti++];
+            };
+            for (const lv of levels) {
+                const tag = ensureTag();
+                const y = yForPriceCached(ys, overRect, rootRect, lv.p);
+                if (y == null || Math.abs(y - lastTagY) < 13) { tag.style.display = 'none'; continue; }
+                tag.style.display = 'block';
+                tag.style.top = (y - 7) + 'px';
+                tag.style.right = '4px';
+                tag.style.color = lv.c;
+                tag.style.background = lv.bg;
+                tag.style.border = '1px solid ' + lv.c;
+                tag.textContent = Number(lv.p).toPrecision(4);
+                lastTagY = y;
+            }
+            for (; ti < orderPriceTags.length; ti++) orderPriceTags[ti].style.display = 'none';
+            if (buys.length && topBuyY != null) {
+                orderBuyLabel.style.display = 'block';
+                orderBuyLabel.textContent = 'OSTOT (' + buys.length + ') ' + Math.max(...buys).toPrecision(4);
+                orderBuyLabel.style.left = '8px';
+                orderBuyLabel.style.top = (topBuyY - 16) + 'px';
+            } else {
+                orderBuyLabel.style.display = 'none';
+            }
+            if (sells.length && topSellY != null) {
+                orderSellLabel.style.display = 'block';
+                orderSellLabel.textContent = 'MYYNNIT (' + sells.length + ') ' + Math.max(...sells).toPrecision(4);
+                orderSellLabel.style.left = '8px';
+                orderSellLabel.style.top = (topSellY - 16) + 'px';
+            } else {
+                orderSellLabel.style.display = 'none';
+            }
+        }
+        function resetOverlayNodes() {
+            reserveLine = null;
+            reserveLabel = null;
+            buyFloorLine = null;
+            buyFloorLabel = null;
+            spreadMidLabel = null;
+            orderLineDivs = [];
+            orderBuyLabel = null;
+            orderSellLabel = null;
+            orderPriceTags = [];
+            lastOverlayKey = '';
+        }
+        // ── Volume panel extras: max-label + hover tooltip ──
+        let volumeMaxLabel = null;
+        let volumeHoverTip = null;
+        function positionVolumeMax(u) {
+            if (!u || !u.over || !currentCandles.length) return;
+            if (!currentVolumeVisible) {
+                if (volumeMaxLabel) volumeMaxLabel.style.display = 'none';
+                return;
+            }
+            if (!volumeMaxLabel || volumeMaxLabel.parentNode !== u.root) {
+                if (volumeMaxLabel && volumeMaxLabel.parentNode) volumeMaxLabel.parentNode.removeChild(volumeMaxLabel);
+                try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
+                volumeMaxLabel = document.createElement('div');
+                volumeMaxLabel.style.cssText = 'position:absolute;z-index:30;pointer-events:none;top:2px;right:2px;font:600 10px Segoe UI, sans-serif;line-height:16px;height:16px;padding:0 6px;border-radius:3px;color:#e6edf3;background:#30363d;white-space:nowrap;';
+                u.root.appendChild(volumeMaxLabel);
+            }
+            // Nakyvan alueen suurin volyymipylvas (USDT)
+            const xs = u.data[0];
+            const xScale = u.scales.x || {};
+            const minX = Number.isFinite(xScale.min) ? xScale.min : xs[0];
+            const maxX = Number.isFinite(xScale.max) ? xScale.max : xs[xs.length - 1];
+            let start = Math.max(0, lowerBound(xs, minX) - 1);
+            let end = Math.min(xs.length, lowerBound(xs, maxX) + 2);
+            let maxVol = 0;
+            for (let i = start; i < end; i++) {
+                const c = currentCandles[i];
+                if (!c) continue;
+                const v = Number(c.volume);
+                const p = Number(c.close);
+                if (Number.isFinite(v) && Number.isFinite(p) && v * p > maxVol) maxVol = v * p;
+            }
+            volumeMaxLabel.style.display = 'block';
+            volumeMaxLabel.textContent = 'max ' + fmtVolume(maxVol) + ' $';
+        }
+        function ensureVolumeHoverTip(u) {
+            if (volumeHoverTip && volumeHoverTip.parentNode === u.root) return;
+            if (volumeHoverTip && volumeHoverTip.parentNode) volumeHoverTip.parentNode.removeChild(volumeHoverTip);
+            volumeHoverTip = document.createElement('div');
+            volumeHoverTip.style.cssText = 'position:absolute;z-index:31;pointer-events:none;display:none;font:600 11px Segoe UI, sans-serif;line-height:18px;height:18px;padding:0 8px;border-radius:4px;color:#ffffff;background:rgba(48,54,61,0.95);border:1px solid #6e7681;white-space:nowrap;box-sizing:border-box;';
+            u.root.appendChild(volumeHoverTip);
+        }
+        function showVolumeHover(u) {
+            if (!u || !u.over || !currentCandles.length) return;
+            ensureVolumeHoverTip(u);
+            const idx = u.cursor.idx;
+            if (idx == null || idx < 0 || idx >= currentCandles.length) {
+                volumeHoverTip.style.display = 'none';
+                return;
+            }
+            const c = currentCandles[idx];
+            const v = Number(c.volume);
+            const p = Number(c.close);
+            const volUsdt = Number.isFinite(v) && Number.isFinite(p) ? v * p : null;
+            if (volUsdt == null) {
+                volumeHoverTip.style.display = 'none';
+                return;
+            }
+            const barX = u.valToPos(u.data[0][idx], 'x', true);
+            volumeHoverTip.style.display = 'block';
+            volumeHoverTip.textContent = 'Vol ' + fmtVolume(volUsdt) + ' $';
+            volumeHoverTip.style.left = Math.max(2, barX - volumeHoverTip.offsetWidth / 2) + 'px';
+            // Kiinnitetty paneelin kattoon — ei peita pylvaita
+            volumeHoverTip.style.top = '2px';
         }
         function currentYRange(chart) {
             const s = chart.scales.y || {};
@@ -2045,6 +2414,11 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         function setControls() {
             setActivePairMode(currentPairMode);
             setActivePriceScale(currentPriceScale);
+            const ordersToggle = document.getElementById('orders-toggle');
+            if (ordersToggle) ordersToggle.checked = currentOrdersVisible;
+            const volumeToggleEl = document.getElementById('volume-toggle');
+            if (volumeToggleEl) volumeToggleEl.checked = currentVolumeVisible;
+            markActiveAmaPreset();
             document.getElementById('sma-toggle').checked = currentSmaEnabled;
             document.getElementById('sma-period').value = String(currentSmaPeriod);
             document.getElementById('ama-toggle').checked = currentAmaEnabled;
@@ -2072,6 +2446,9 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 manualYRange = null;
                 priceMarkerLabel = null;
                 priceMarkerLine = null;
+                resetOverlayNodes();
+                volumeMaxLabel = null;
+                volumeHoverTip = null;
                 if (priceEl) priceEl.innerHTML = '';
                 if (volumeEl) volumeEl.innerHTML = '';
                 priceChart = null;
@@ -2112,6 +2489,12 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     chart.root.addEventListener('mousemove', () => {
                         if (chart.cursor.idx != null) updateLegend(chart.cursor.idx);
                     });
+                    if (chart === volumeChart) {
+                        chart.over.addEventListener('mousemove', () => showVolumeHover(chart));
+                        chart.over.addEventListener('mouseleave', () => {
+                            if (volumeHoverTip) volumeHoverTip.style.display = 'none';
+                        });
+                    }
                     chart.root.addEventListener('mouseleave', refreshLegend);
                     chart.root.addEventListener('mouseenter', () => chart.root.classList.add('is-hovered'));
                     chart.root.addEventListener('mouseleave', () => chart.root.classList.remove('is-hovered'));
@@ -2123,6 +2506,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 if (next) charts.forEach((chart) => chart.batch(() => chart.setScale('x', next)));
             }
             refreshLegend();
+            renderMarketPanel();
             saveState();
         }
 
@@ -2151,10 +2535,52 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             pairToggle.addEventListener('click', () => {
                 currentPairMode = currentPairMode === 'inverse' ? 'normal' : 'inverse';
                 manualYRange = null;
+                lastOverlayKey = '';
                 setControls();
                 rerender(true);
             });
         }
+        const ordersToggle = document.getElementById('orders-toggle');
+        if (ordersToggle) {
+            ordersToggle.addEventListener('change', () => {
+                currentOrdersVisible = ordersToggle.checked;
+                lastOverlayKey = '';
+                if (!currentOrdersVisible && priceChart) hideOverlayNodes();
+                setControls();
+                saveState();
+                if (priceChart) {
+                    positionReserveLine(priceChart);
+                    positionOrderLines(priceChart);
+                }
+            });
+        }
+        // Volume-toggle: piilota volyymichart, jolloin flex luovuttaa tilan
+        // hintachartille (isompi). Ei rerenderia, vain resize.
+        const applyVolumeVisibility = () => {
+            if (!volumeEl || !priceChart) return;
+            volumeEl.style.display = currentVolumeVisible ? '' : 'none';
+            requestAnimationFrame(() => {
+                if (!priceChart) return;
+                priceChart.setSize({ width: priceEl.clientWidth, height: priceEl.clientHeight });
+                if (currentVolumeVisible && volumeChart && volumeEl.clientWidth > 0) {
+                    volumeChart.setSize({ width: volumeEl.clientWidth, height: volumeEl.clientHeight });
+                }
+            });
+        };
+        const volumeToggleInit = document.getElementById('volume-toggle');
+        if (volumeToggleInit) {
+            volumeToggleInit.checked = currentVolumeVisible;
+            volumeToggleInit.addEventListener('change', () => {
+                currentVolumeVisible = volumeToggleInit.checked;
+                saveState();
+                applyVolumeVisibility();
+            });
+        }
+        // Alkutila ladattaessa (tallennettu localStorageen aiemmin)
+        applyVolumeVisibility();
+        document.querySelectorAll('.ama-preset-btn').forEach((b) => {
+            b.addEventListener('click', () => applyAmaPreset(b.dataset.amaPreset));
+        });
 
         const syncInputs = () => {
             currentSmaEnabled = document.getElementById('sma-toggle').checked;
@@ -2173,7 +2599,10 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             currentRangeEnabled = document.getElementById('range-toggle').checked;
             currentRangeScaleEnabled = document.getElementById('range-scale-toggle').checked;
             currentRangeSpan = Math.min(2, Math.max(1.2, Math.round((Number(document.getElementById('range-span').value) || 1.55) * 20) / 20));
+            const ordersEl = document.getElementById('orders-toggle');
+            if (ordersEl) currentOrdersVisible = ordersEl.checked;
             setControls();
+            markActiveAmaPreset();
             rerender(false);
         };
 
@@ -2287,12 +2716,71 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
             syncInputs();
         });
 
+        // Oikealle tilaa viimeisen palkin jalkeen (~12%): %-paneelille ja
+        // tuleville kynttiloille. Ei taistele kayttajan zoomin kanssa —
+        // ajetaan vain alustuksessa (myohemmat zoom/pan-kutsut ohittavat).
+        function padXRight() {
+            if (!priceChart || !currentCandles.length) return;
+            const first = currentCandles[0]?.time;
+            const last = currentCandles[currentCandles.length - 1]?.time;
+            if (!Number.isFinite(first) || !Number.isFinite(last) || last <= first) return;
+            const span = last - first;
+            syncXRange(first - span * 0.02, last + span * 0.12);
+        }
+        // Markkinapaneeli oikeaan ylakulmaan: MKT + eka osto/myynti, DEEP-rivi
+        // ja %-erotus markkinahintaan. Pair-tietoinen (samat display-tasot kuin
+        // overlay). Data on staattinen per generointi, joten piirretaan kerran
+        // (ei draw-hookkia); paivittyy parikytkimella rerenderin kautta.
+        function renderMarketPanel() {
+            if (!priceChart) return;
+            let panel = document.getElementById('mkt-panel');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'mkt-panel';
+                panel.style.cssText = 'position:absolute;z-index:26;top:10px;right:88px;pointer-events:none;font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.6;padding:8px 12px;border-radius:8px;background:rgba(13,17,23,0.85);border:1px solid #263241;white-space:nowrap;text-align:right;';
+                priceChart.root.appendChild(panel);
+            }
+            const last = currentCandles[currentCandles.length - 1];
+            const mkt = last ? last.close : NaN;
+            const { buys, sells } = getDisplayOrders();
+            const deeps = Array.isArray(payload.orderDeepBuys) ? payload.orderDeepBuys.filter(Number.isFinite).filter((p) => p > 0) : [];
+            const dispDeeps = normalizePairMode(currentPairMode) === 'inverse' ? deeps.map((p) => 1 / p).filter(Number.isFinite).filter((p) => p > 0) : deeps;
+            let html = '<div style="color:#e8eef5">MKT ' + (Number.isFinite(mkt) ? fmtPriceLabel(mkt) : '-') + '</div>';
+            if (buys.length && Number.isFinite(mkt)) {
+                const b = Math.max(...buys);
+                const p = (b - mkt) / mkt * 100;
+                html += '<div style="color:#26a69a">BUY ' + b.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
+            }
+            if (dispDeeps.length && Number.isFinite(mkt)) {
+                const d = Math.max(...dispDeeps);
+                const p = (d - mkt) / mkt * 100;
+                html += '<div style="color:#f97316">DEEP ' + d.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
+            }
+            if (sells.length && Number.isFinite(mkt)) {
+                const s = Math.min(...sells);
+                const p = (s - mkt) / mkt * 100;
+                html += '<div style="color:#ef5350">SELL ' + s.toPrecision(4) + ' ' + (p >= 0 ? '+' : '') + p.toFixed(1) + '%</div>';
+            }
+            panel.innerHTML = html;
+        }
+        padXRight();
+        renderMarketPanel();
+
         window.addEventListener('resize', () => {
             if (!charts.length) return;
             charts.forEach((chart) => {
                 const el = chart === priceChart ? priceEl : volumeEl;
+                if (el.clientWidth <= 0 || el.clientHeight <= 0) return;
                 chart.setSize({ width: el.clientWidth, height: el.clientHeight });
             });
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === '0' && charts.length) {
+                const first = currentCandles[0]?.time;
+                const last = currentCandles[currentCandles.length - 1]?.time;
+                if (Number.isFinite(first) && Number.isFinite(last)) syncXRange(first, last);
+            }
         });
 
         ${zoomResetScript()}
