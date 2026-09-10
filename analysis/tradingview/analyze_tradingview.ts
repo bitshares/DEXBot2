@@ -13,13 +13,7 @@ import { loadBotMeta } from '../bot_key_utils.js';
 import { resolveSource, listAvailableBots } from '../resolve_source.js';
 import { writeChartFile, toFileUrl } from '../chart_utils.js';
 import { PATHS } from '../../modules/paths.js';
-
-// Local deep-level predicate (deep-N dip-insurance ids). Kept local so the
-// exporter has no dependency on bot order internals; matches the id scheme
-// the grid uses for below-rail levels.
-function isDeepShelfId(id: any): boolean {
-    return typeof id === 'string' && /^deep-\d+$/.test(id);
-}
+import { parseRelativeMultiplier } from '../../modules/order/utils/math.js';
 
 
 const DEFAULT_CHART_DIR = PATHS.ANALYSIS.CHARTS_DIR;
@@ -122,7 +116,8 @@ function loadJsonMeta(filePath: any) {
 function resolveOrdersFile(botKey: string | null | undefined, explicit: string | null | undefined, disabled: boolean): string | null {
     if (disabled) return null;
     if (explicit) {
-        try { if (explicit && fs.existsSync(explicit)) return explicit; } catch { /* fall through */ }
+        try { if (explicit && fs.existsSync(explicit)) return explicit; } catch { /* fall through to warning */ }
+        console.warn(`[TradingView] --orders-file not found: ${explicit} (rendering without order overlay)`);
         return null;
     }
     if (!botKey) return null;
@@ -134,31 +129,28 @@ function resolveOrdersFile(botKey: string | null | undefined, explicit: string |
     return null;
 }
 
-function loadActiveOrders(filePath: string | null): { buys: number[]; sells: number[]; deepBuys: number[] } {
-    if (!filePath) return { buys: [], sells: [], deepBuys: [] };
+function loadActiveOrders(filePath: string | null): { buys: number[]; sells: number[] } {
+    if (!filePath) return { buys: [], sells: [] };
     try {
         const od = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         const grid = Array.isArray(od?.grid) ? od.grid : (Array.isArray(od?.orders) ? od.orders : []);
         const live = (s: any) => (s?.state === 'active' || s?.state === 'partial') && Number(s?.price) > 0;
         const buys = grid.filter((s: any) => s?.type === 'buy' && live(s)).map((s: any) => Number(s.price)).filter(Number.isFinite).sort((a: number, b: number) => a - b);
         const sells = grid.filter((s: any) => s?.type === 'sell' && live(s)).map((s: any) => Number(s.price)).filter(Number.isFinite).sort((a: number, b: number) => a - b);
-        // Deep shelf: dip-insurance buys above the reserve floor (canonical id scheme).
-        const deepBuys = grid.filter((s: any) => s?.type === 'buy' && live(s) && isDeepShelfId(s?.id)).map((s: any) => Number(s.price)).filter(Number.isFinite).sort((a: number, b: number) => a - b);
-        return { buys, sells, deepBuys };
-    } catch { return { buys: [], sells: [], deepBuys: [] }; }
+        return { buys, sells };
+    } catch { return { buys: [], sells: [] }; }
 }
 
-// Grid LO factor from bot minPrice ("1.15x" -> 1/1.15). Fallback 0.87
-// (matches the pre-refactor personal overlay default).
-function resolveGridLo(botMeta: any): number {
+// Grid LO factor from bot minPrice ("1.15x" -> 1/1.15) via the canonical
+// multiplier parser. Returns null when the bound is absolute/numeric or
+// unparseable — the chart then skips the reserve line instead of drawing
+// it at an invented level.
+function resolveGridLo(botMeta: any): number | null {
     try {
-        const mp = botMeta?.minPrice;
-        if (typeof mp === 'string' && mp.trim().toLowerCase().endsWith('x')) {
-            const n = parseFloat(mp);
-            if (Number.isFinite(n) && n > 0) return 1 / n;
-        }
-    } catch { /* fallback below */ }
-    return 0.87;
+        const mult = parseRelativeMultiplier(botMeta?.minPrice);
+        if (mult != null && mult > 0) return 1 / mult;
+    } catch { /* fall through to null */ }
+    return null;
 }
 
 function inferTitle(meta: any, fallback: string) {
@@ -217,9 +209,9 @@ async function main() {
         } : null;
         // Order overlay (canonical profiles/orders/<botKey>.json; silent when absent)
         const ordersFile = resolveOrdersFile(botKey, config.ordersFile, config.noOrders);
-        const { buys: orderBuys, sells: orderSells, deepBuys: orderDeepBuys } = loadActiveOrders(ordersFile);
+        const { buys: orderBuys, sells: orderSells } = loadActiveOrders(ordersFile);
         const gridLo = resolveGridLo(botMeta);
-        if (!config.quiet && ordersFile) console.log(`[TradingView] Order overlay: ${orderBuys.length} buys + ${orderSells.length} sells + ${orderDeepBuys.length} deep from ${ordersFile}`);
+        if (!config.quiet && ordersFile) console.log(`[TradingView] Order overlay: ${orderBuys.length} buys + ${orderSells.length} sells from ${ordersFile}`);
         const html = generateHTML({
             candles,
             meta: jsonMeta || {
@@ -243,7 +235,7 @@ async function main() {
             priceScale: config.priceScale === 'linear' ? 'linear' : 'log',
             defaultTimeframe: '1h',
             marketAdapter: MARKET_ADAPTER,
-            orders: { buys: orderBuys, sells: orderSells, deepBuys: orderDeepBuys },
+            orders: { buys: orderBuys, sells: orderSells },
             gridLo,
             // Update marker ("updated from here" line): explicit CLI flags win,
             // otherwise fall back to stamped data-file meta when present.
