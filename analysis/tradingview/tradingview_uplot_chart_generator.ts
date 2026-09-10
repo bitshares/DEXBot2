@@ -189,6 +189,8 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         orderBuys: Array.isArray((data as any).orders?.buys) ? (data as any).orders.buys.map(Number).filter(Number.isFinite) : [],
         orderSells: Array.isArray((data as any).orders?.sells) ? (data as any).orders.sells.map(Number).filter(Number.isFinite) : [],
         orderDeepBuys: Array.isArray((data as any).orders?.deepBuys) ? (data as any).orders.deepBuys.map(Number).filter(Number.isFinite) : [],
+        updateMarkerTsSec: Number((data as any).updateMarkerTsSec) > 0 ? Number((data as any).updateMarkerTsSec) : null,
+        updateMarkerNewBars: Number((data as any).updateMarkerNewBars) || null,
         gridLo: Number.isFinite(Number((data as any).gridLo)) && Number((data as any).gridLo) > 0 && Number((data as any).gridLo) < 1 ? Number((data as any).gridLo) : 0.87,
         rangeSlope,
         defaultPairMode,
@@ -1838,7 +1840,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     },
                 ],
                 hooks: {
-                    draw: [(u) => { positionPriceMarker(u); positionReserveLine(u); positionOrderLines(u); }],
+                    draw: [(u) => { positionPriceMarker(u); positionReserveLine(u); positionOrderLines(u); positionUpdateMarker(u, true); }],
                 },
             };
 
@@ -2239,6 +2241,45 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         // ── Volume panel extras: max-label + hover tooltip ──
         let volumeMaxLabel = null;
         let volumeHoverTip = null;
+        // ── Update marker ("updated from here"): vertical line where the
+        // latest incremental fetch started, with a date label. Shown only
+        // when the generator was given a marker timestamp.
+        const UPDATE_MARKER_SEC = Number(payload.updateMarkerTsSec) > 0 ? Number(payload.updateMarkerTsSec) : null;
+        function positionUpdateMarker(u, withLabel) {
+            if (!UPDATE_MARKER_SEC || !u || !u.over || !currentCandles.length) return;
+            let wrap = u.root.querySelector(':scope > .um-wrap');
+            if (!wrap) {
+                try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
+                wrap = document.createElement('div');
+                wrap.style.cssText = 'position:absolute;z-index:24;pointer-events:none;';
+                wrap.innerHTML =
+                    '<div class="um-line" style="position:absolute;top:0;height:100%;width:0;border-left:2px dashed #22d3ee;opacity:0.75;"></div>' +
+                    '<div class="um-tag" style="position:absolute;top:2px;left:6px;font:600 10px Segoe UI, sans-serif;line-height:15px;color:#22d3ee;white-space:nowrap;"></div>';
+                u.root.appendChild(wrap);
+            }
+            const s = u.scales.x || {};
+            const sMin = Number.isFinite(s.min) ? s.min : null;
+            const sMax = Number.isFinite(s.max) ? s.max : null;
+            if (sMin == null || sMax == null || sMax <= sMin) { wrap.style.display = 'none'; return; }
+            const frac = (UPDATE_MARKER_SEC - sMin) / (sMax - sMin);
+            const inView = frac >= 0 && frac <= 1;
+            if (!inView) { wrap.style.display = 'none'; return; }
+            const rootRect = u.root.getBoundingClientRect();
+            const overRect = u.over.getBoundingClientRect();
+            const xRoot = (overRect.left - rootRect.left) + frac * overRect.width;
+            wrap.style.display = 'block';
+            wrap.style.left = xRoot + 'px';
+            wrap.style.top = (overRect.top - rootRect.top) + 'px';
+            wrap.style.height = overRect.height + 'px';
+            if (withLabel) {
+                const tag = wrap.querySelector('.um-tag');
+                const d = new Date(UPDATE_MARKER_SEC * 1000);
+                const hh = String(d.getUTCHours()).padStart(2, '0');
+                const mm = String(d.getUTCMinutes()).padStart(2, '0');
+                tag.textContent = 'update ' + d.toLocaleDateString('fi-FI') + ' ' + hh + ':' + mm + ' →';
+                tag.style.left = (frac > 0.8 ? -(tag.offsetWidth + 8) : 6) + 'px';
+            }
+        }
         function positionVolumeMax(u) {
             if (!u || !u.over || !currentCandles.length) return;
             if (!currentVolumeVisible) {
@@ -2487,6 +2528,36 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                         bindYAxisReset(chart);
                         chart.root.addEventListener('mousemove', (e) => {
                             chart.root.style.cursor = inYAxisZone(chart, e.clientX) ? 'ns-resize' : '';
+                        });
+                        // Cursor price tag: floating label next to the mouse
+                        // showing the price under the cursor (price chart only).
+                        let cursorPriceTag = null;
+                        const ensureCursorPriceTag = () => {
+                            if (!cursorPriceTag || cursorPriceTag.parentNode !== chart.root) {
+                                if (cursorPriceTag && cursorPriceTag.parentNode) cursorPriceTag.parentNode.removeChild(cursorPriceTag);
+                                cursorPriceTag = document.createElement('div');
+                                cursorPriceTag.style.cssText = 'position:absolute;z-index:30;pointer-events:none;font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace;line-height:16px;height:16px;padding:0 6px;border-radius:3px;color:#0b0f14;background:#e8eef5;white-space:nowrap;display:none;';
+                                chart.root.appendChild(cursorPriceTag);
+                            }
+                            return cursorPriceTag;
+                        };
+                        chart.over.addEventListener('mousemove', (e) => {
+                            const tag = ensureCursorPriceTag();
+                            const rect = chart.root.getBoundingClientRect();
+                            const overRect = chart.over.getBoundingClientRect();
+                            const price = chart.posToVal(e.clientY - overRect.top, 'y');
+                            if (!Number.isFinite(price)) { tag.style.display = 'none'; return; }
+                            tag.style.display = 'block';
+                            tag.textContent = fmtPriceLabel(price);
+                            let x = e.clientX - rect.left + 14;
+                            const y = e.clientY - rect.top - 8;
+                            const maxX = rect.width - tag.offsetWidth - 6;
+                            if (x > maxX) x = e.clientX - rect.left - tag.offsetWidth - 14;
+                            tag.style.left = Math.max(2, x) + 'px';
+                            tag.style.top = Math.max(2, y) + 'px';
+                        });
+                        chart.over.addEventListener('mouseleave', () => {
+                            if (cursorPriceTag) cursorPriceTag.style.display = 'none';
                         });
                     }
                     chart.root.addEventListener('mousemove', () => {

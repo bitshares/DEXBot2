@@ -41,6 +41,8 @@ function parseArgs() {
         rangeSpan: number | undefined;
         ordersFile: string | null;
         noOrders: boolean;
+        updateMarkerTsSec: number | null;
+        updateMarkerNewBars: number | null;
         quiet: boolean;
         listBots: boolean;
     } = {
@@ -61,6 +63,8 @@ function parseArgs() {
         rangeSpan: undefined,
         ordersFile: null,
         noOrders: false,
+        updateMarkerTsSec: null,
+        updateMarkerNewBars: null,
         quiet: false,
         listBots: false,
     };
@@ -90,6 +94,8 @@ function parseArgs() {
         else if (arg === '--range-span') config.rangeSpan = parseFloat(args[++i]);
         else if (arg === '--orders-file') config.ordersFile = String(args[++i] || '');
         else if (arg === '--no-orders') config.noOrders = true;
+        else if (arg === '--update-marker-ts') config.updateMarkerTsSec = Math.max(0, parseInt(args[++i], 10) || 0) || null;
+        else if (arg === '--update-marker-bars') config.updateMarkerNewBars = Math.max(0, parseInt(args[++i], 10) || 0) || null;
         else if (arg === '--list-bots') config.listBots = true;
         else if (arg === '--quiet') config.quiet = true;
     }
@@ -233,6 +239,12 @@ async function main() {
             marketAdapter: MARKET_ADAPTER,
             orders: { buys: orderBuys, sells: orderSells, deepBuys: orderDeepBuys },
             gridLo,
+            // Update marker ("updated from here" line): explicit CLI flags win,
+            // otherwise fall back to stamped data-file meta when present.
+            updateMarkerTsSec: config.updateMarkerTsSec
+                ?? (Number((jsonMeta as any)?.prevUpdateLastCandleSec) > 0 ? Number((jsonMeta as any).prevUpdateLastCandleSec) : null),
+            updateMarkerNewBars: config.updateMarkerNewBars
+                ?? (Number((jsonMeta as any)?.prevUpdateNewBars) || null),
         }, title);
 
         writeChartFile(config.chartFile, html);
