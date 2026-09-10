@@ -586,7 +586,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     <span class="legend-item"><span class="legend-dot" id="legend-range-dot" style="background:#8b949e"></span><span class="legend-label">Range</span> <span class="legend-value" id="legend-range">-</span></span>
                 </div>
             </div>
-            <div id="price-chart" title="Wheel: zoom time (ulos = tyhjaa tilaa datan ymparilla) · Drag: siirra aika- ja hintanakymaa · Wheel/drag hinta-akselilla: zoomaa hintaa · Double-click hinta-akselia: autofit"></div>
+            <div id="price-chart" title="Wheel: zoom time (out = empty space around data) · Drag: move time and price view · Wheel/drag on price axis: zoom price · Double-click price axis: autofit"></div>
             <div id="volume-chart"></div>
         </div>
     </div>
@@ -897,7 +897,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
         function fmtTime(ts) {
             if (!Number.isFinite(ts)) return '-';
             const d = new Date(ts * 1000);
-            return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
         function pad2(n) {
             return String(n).padStart(2, '0');
@@ -909,12 +909,12 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                 return String(d.getUTCFullYear());
             }
             if (spanSec >= 90 * 24 * 3600) {
-                return d.toLocaleString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
+                return d.toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
             }
             if (spanSec >= 14 * 24 * 3600) {
-                return d.toLocaleString(undefined, { month: 'short', day: '2-digit', timeZone: 'UTC' });
+                return d.toLocaleString('en-US', { month: 'short', day: '2-digit', timeZone: 'UTC' });
             }
-            return d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
+            return d.toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
         }
         function makeTimeAxis(showLabels) {
             return {
@@ -2187,7 +2187,7 @@ function generateHTML(data: any, title: any = 'TradingView Style Research') {
                     buyFloorLine.style.display = 'block';
                     buyFloorLine.style.top = bY + 'px';
                     buyFloorLabel.style.display = 'block';
-                    buyFloorLabel.textContent = 'ostot loppuvat  ' + buyFloorPrice.toPrecision(4) + '  (-' + buyPct + '%)';
+                    buyFloorLabel.textContent = 'buys end  ' + buyFloorPrice.toPrecision(4) + '  (-' + buyPct + '%)';
                     buyFloorLabel.style.left = '8px';
                     buyFloorLabel.style.top = (bY - 16) + 'px';
                     if (realBuys.length && realSells.length) {
