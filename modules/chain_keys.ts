@@ -899,6 +899,30 @@ function saveAccounts(data: AccountsData) {
 }
 
 /**
+ * Prompt for, validate, and encrypt a private key for the keymanager's add
+ * and modify flows. Centralized so key validation and vault encryption cannot
+ * drift between the two paths.
+ * @param secret - Vault secret used for encryption
+ * @returns The encrypted key, or null when cancelled (ESC) or invalid
+ *          (the reason has already been printed)
+ */
+async function promptEncryptedPrivateKey(secret: unknown): Promise<string | null> {
+    const privateKeyRaw = await readPassword('Enter private key:  ');
+    if (privateKeyRaw === '\x1b') return null;
+
+    const privateKey = privateKeyRaw.replace(/\s+/g, '');
+
+    const validation = validatePrivateKey(privateKey);
+    if (!validation.valid) {
+        console.log(`Invalid private key: ${validation.reason}`);
+        console.log('Accepted formats: WIF (51/52 chars), PVT_* keys, or 64-hex');
+        return null;
+    }
+
+    return encrypt(privateKey, secret);
+}
+
+/**
  * Launch the interactive key management CLI.
  * Provides menu for: add/modify/remove keys, test decryption,
  * change master password.
@@ -978,19 +1002,8 @@ async function main(): Promise<boolean> {
                 continue;
             }
 
-            const privateKeyRaw = await readPassword('Enter private key:  ');
-            if (privateKeyRaw === ESC) continue;
-
-            const privateKey = privateKeyRaw.replace(/\s+/g, '');
-
-            const validation = validatePrivateKey(privateKey);
-            if (!validation.valid) {
-                console.log(`Invalid private key: ${validation.reason}`);
-                console.log('Accepted formats: WIF (51/52 chars), PVT_* keys, or 64-hex');
-                continue;
-            }
-
-            const encryptedKey = encrypt(privateKey, vaultSecret);
+            const encryptedKey = await promptEncryptedPrivateKey(vaultSecret);
+            if (!encryptedKey) continue;
 
             accountsData.accounts[accountName] = { encryptedKey };
             saveAccounts(accountsData);
@@ -999,19 +1012,9 @@ async function main(): Promise<boolean> {
             const accountName = await selectKeyName(accountsData.accounts, 'Select key to modify');
             if (!accountName) continue;
             
-            const privateKeyRaw = await readPassword('Enter private key:   ');
-            if (privateKeyRaw === ESC) continue;
-            
-            const privateKey = privateKeyRaw.replace(/\s+/g, '');
+            const encryptedKey = await promptEncryptedPrivateKey(vaultSecret);
+            if (!encryptedKey) continue;
 
-            const validation = validatePrivateKey(privateKey);
-            if (!validation.valid) {
-                console.log(`Invalid private key: ${validation.reason}`);
-                console.log('Accepted formats: WIF (51/52 chars), PVT_* keys, or 64-hex');
-                continue;
-            }
-
-            const encryptedKey = encrypt(privateKey, vaultSecret);
             accountsData.accounts[accountName] = { ...accountsData.accounts[accountName], encryptedKey };
             saveAccounts(accountsData);
             console.log(`Account '${accountName}' updated successfully.`);

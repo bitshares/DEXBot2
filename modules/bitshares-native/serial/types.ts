@@ -1,21 +1,9 @@
 'use strict';
 
-import { createRequire } from 'node:module';
 import * as CC from './chain_constants.js';
 import { BufferWriter } from './serializer.js';
+import { Buffer } from './lazy_buffer.js';
 import { OBJECT_TYPE } from './chain_constants.js';
-
-const _require = createRequire(import.meta.url);
-type BufferCtor = typeof import('node:buffer').Buffer;
-let _Buffer: BufferCtor | undefined;
-const Buffer: BufferCtor = new Proxy({} as BufferCtor, {
-    get(_, prop) {
-        if (!_Buffer && _require) _Buffer = _require('buffer').Buffer as BufferCtor;
-        return _Buffer ? (_Buffer as unknown as Record<string | symbol, unknown>)[prop] : undefined;
-    }
-});
-
-
 
 interface BufWriter {
     buf: Buffer;

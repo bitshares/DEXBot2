@@ -1,16 +1,6 @@
 'use strict';
 
-import { createRequire } from 'node:module';
-
-const _require = createRequire(import.meta.url);
-type BufferCtor = typeof import('node:buffer').Buffer;
-let _Buffer: BufferCtor | undefined;
-const Buffer: BufferCtor = new Proxy({} as BufferCtor, {
-    get(_, prop) {
-        if (!_Buffer && _require) _Buffer = _require('buffer').Buffer as BufferCtor;
-        return _Buffer ? (_Buffer as unknown as Record<string | symbol, unknown>)[prop] : undefined;
-    }
-});
+import { Buffer } from './lazy_buffer.js';
 
 class BufferWriter {
     buf: Buffer;

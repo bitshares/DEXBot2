@@ -215,6 +215,27 @@ function evaluateStartupGenesisGate(bot: BotLike, persistedGrid: unknown, persis
 }
 
 /**
+ * Wire up the post-bootstrap subsystem intervals and run the startup dust
+ * health check. Shared by every startup path so the subsystem list stays in
+ * lockstep (add a subsystem once). finishBootstrap() is intentionally left to
+ * each caller — the bootstrap/try-finally ordering differs per path.
+ * @param {import('./dexbot_class.js').DEXBot} bot
+ */
+async function startPostBootstrapSubsystems(bot: BotLike): Promise<void> {
+    await bot._setupTriggerFileDetection();
+    await bot._setupCreditRuntime();
+    await bot._refreshAndSyncCreditRuntime();
+    await bot._runCreditRuntimeMaintenance('startup');
+    bot._setupBlockchainFetchInterval();
+    if (typeof bot._setupBotsConfigPollInterval === 'function') bot._setupBotsConfigPollInterval();
+    bot._setupCreditWatchdogInterval();
+    bot._setupCredentialDaemonWatchdogInterval();
+    bot._setupDustHealthCheckInterval();
+    await bot._runDustHealthCheck();
+    bot._log('[DUST] Startup health check complete');
+}
+
+/**
  * Finish the startup sequence: activate fill listener, reconcile grid, place initial orders.
  * @param {import('./dexbot_class.js').DEXBot} bot
  * @param {Object} startupState
@@ -444,17 +465,7 @@ async function finishStartupSequence(bot: BotLike, startupState: Awaited<ReturnT
                 bot._log('Bootstrap phase complete - fill processing resumed', 'info');
             });
 
-            await bot._setupTriggerFileDetection();
-            await bot._setupCreditRuntime();
-            await bot._refreshAndSyncCreditRuntime();
-            await bot._runCreditRuntimeMaintenance('startup');
-            bot._setupBlockchainFetchInterval();
-            if (typeof bot._setupBotsConfigPollInterval === 'function') bot._setupBotsConfigPollInterval();
-            bot._setupCreditWatchdogInterval();
-            bot._setupCredentialDaemonWatchdogInterval();
-            bot._setupDustHealthCheckInterval();
-            await bot._runDustHealthCheck();
-            bot._log('[DUST] Startup health check complete');
+            await startPostBootstrapSubsystems(bot);
             bot.manager.finishBootstrap();
 
             if (bot._isOpenOrdersSyncLoopEnabled()) {
@@ -784,18 +795,7 @@ async function finishStartupSequence(bot: BotLike, startupState: Awaited<ReturnT
             }
         });
 
-        await bot._setupTriggerFileDetection();
-        await bot._setupCreditRuntime();
-        await bot._refreshAndSyncCreditRuntime();
-        await bot._runCreditRuntimeMaintenance('startup');
-        bot._setupBlockchainFetchInterval();
-        if (typeof bot._setupBotsConfigPollInterval === 'function') bot._setupBotsConfigPollInterval();
-        bot._setupCreditWatchdogInterval();
-        bot._setupCredentialDaemonWatchdogInterval();
-
-        bot._setupDustHealthCheckInterval();
-        await bot._runDustHealthCheck();
-        bot._log('[DUST] Startup health check complete');
+        await startPostBootstrapSubsystems(bot);
 
         if (bot._isOpenOrdersSyncLoopEnabled()) {
             bot._startOpenOrdersSyncLoop();

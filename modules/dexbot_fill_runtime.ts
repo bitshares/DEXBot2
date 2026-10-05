@@ -362,6 +362,28 @@ async function applyReplaySafeFillAccounting(bot: BotLike, fill: unknown, fillOp
     }
 }
 
+/** Shared options for the replay-safe accounting wrappers. */
+interface ReplaySafeFillAccountingOptions {
+    context?: string;
+    logger?: Partial<ManagerLogger>;
+    replayMessage?: ReplayMessageFn;
+    persistenceMode?: string;
+}
+
+/**
+ * Resolve wrapper options with shared defaults (logger falls back to the
+ * manager's logger, persistence mode to batched). Centralized so both
+ * wrappers apply identical defaults.
+ */
+function resolveReplaySafeFillOptions(bot: BotLike, {
+    context,
+    logger = bot.manager?.logger,
+    replayMessage,
+    persistenceMode = PROCESSED_FILL_PERSISTENCE_MODES.BATCHED,
+}: ReplaySafeFillAccountingOptions = {}) {
+    return { context, logger, replayMessage, persistenceMode };
+}
+
 /**
  * Apply replay-safe fill accounting for tracked fills (with fill history id).
  * Wraps applyReplaySafeFillAccounting with context and default message builders.
@@ -375,17 +397,8 @@ async function applyReplaySafeFillAccounting(bot: BotLike, fill: unknown, fillOp
  * @param {string} [options.persistenceMode='batched'] - Processed fill persistence mode
  * @returns {Promise<any>}
  */
-async function applyReplaySafeTrackedFillAccounting(bot: BotLike, fill: unknown, fillOp: FillOpLike, {
-    context,
-    logger = bot.manager?.logger,
-    replayMessage,
-    persistenceMode = PROCESSED_FILL_PERSISTENCE_MODES.BATCHED
-}: {
-    context?: string;
-    logger?: Partial<ManagerLogger>;
-    replayMessage?: ReplayMessageFn;
-    persistenceMode?: string;
-} = {}) {
+async function applyReplaySafeTrackedFillAccounting(bot: BotLike, fill: unknown, fillOp: FillOpLike, options: ReplaySafeFillAccountingOptions = {}) {
+    const { context, logger, replayMessage, persistenceMode } = resolveReplaySafeFillOptions(bot, options);
     return applyReplaySafeFillAccounting(bot, fill, fillOp, {
         logger,
         missingKeyMessage: (op: FillOpLike) => `[${context}] Missing fill history id for ${op.order_id}; deferring to open-orders sync`,
@@ -408,17 +421,8 @@ async function applyReplaySafeTrackedFillAccounting(bot: BotLike, fill: unknown,
  * @param {string} [options.persistenceMode='batched'] - Processed fill persistence mode
  * @returns {Promise<any>}
  */
-async function applyReplaySafeOrphanFillAccounting(bot: BotLike, fill: unknown, fillOp: FillOpLike, {
-    context,
-    logger = bot.manager?.logger,
-    replayMessage,
-    persistenceMode = PROCESSED_FILL_PERSISTENCE_MODES.BATCHED
-}: {
-    context?: string;
-    logger?: Partial<ManagerLogger>;
-    replayMessage?: ReplayMessageFn;
-    persistenceMode?: string;
-} = {}) {
+async function applyReplaySafeOrphanFillAccounting(bot: BotLike, fill: unknown, fillOp: FillOpLike, options: ReplaySafeFillAccountingOptions = {}) {
+    const { context, logger, replayMessage, persistenceMode } = resolveReplaySafeFillOptions(bot, options);
     return applyReplaySafeFillAccounting(bot, fill, fillOp, {
         logger,
         missingKeyMessage: (op: FillOpLike) => `[${context}] Missing fill history id and orphan fallback key for ${op.order_id}; deferring to open-orders sync`,

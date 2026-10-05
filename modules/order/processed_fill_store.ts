@@ -181,29 +181,7 @@ class ProcessedFillStore {
 
         const batch = new Map(this.pendingWrites);
         this.pendingWrites.clear();
-        let flushError = null;
-
-        const flushWork = async () => {
-            try {
-                await this._accountOrders!.updateProcessedFillsBatch(batch);
-            } catch (err) {
-                flushError = err;
-                for (const [fillKey, timestamp] of batch) {
-                    const queuedTimestamp = this.pendingWrites.get(fillKey);
-                    if (queuedTimestamp === undefined || timestamp > queuedTimestamp) {
-                        this.pendingWrites.set(fillKey, timestamp);
-                    }
-                }
-                this._warn(`[FILL-DEDUP] Failed to flush ${batch.size} processed fill record(s) (${reason}): ${getErrorMessage(err)}`);
-                this._schedule();
-            }
-        };
-
-        this._flushPromise = this._flushPromise.then(flushWork, flushWork);
-        await this._flushPromise;
-        if (flushError && throwOnError) {
-            throw flushError;
-        }
+        await this._flushBatch(batch, reason, throwOnError, 'processed');
     }
 
     /**
@@ -229,12 +207,27 @@ class ProcessedFillStore {
             this.pendingWrites.delete(fillKey);
         }
 
+        await this._flushBatch(batch, reason, throwOnError, 'selected processed');
+    }
+
+    /**
+     * Persist a batch of already-dequeued fills, re-queuing entries when the
+     * write fails. Shared by flush() and flushKeys() so the retry/back-off
+     * path cannot drift apart.
+     * @param {Map<string, number>} batch - Dequeued fill keys to persist
+     * @param {string} reason - Reason label for logging
+     * @param {boolean} throwOnError - Re-throw on flush failure
+     * @param {string} descriptor - Noun describing the batch in the failure log
+     * @returns {Promise<void>}
+     */
+    async _flushBatch(batch: Map<string, number>, reason: string, throwOnError: boolean, descriptor: string): Promise<void> {
         if (batch.size === 0) {
             await this._flushPromise;
             return;
         }
 
-        let flushError = null;
+        let flushError: unknown = null;
+
         const flushWork = async () => {
             try {
                 await this._accountOrders!.updateProcessedFillsBatch(batch);
@@ -246,7 +239,7 @@ class ProcessedFillStore {
                         this.pendingWrites.set(fillKey, timestamp);
                     }
                 }
-                this._warn(`[FILL-DEDUP] Failed to flush ${batch.size} selected processed fill record(s) (${reason}): ${getErrorMessage(err)}`);
+                this._warn(`[FILL-DEDUP] Failed to flush ${batch.size} ${descriptor} fill record(s) (${reason}): ${getErrorMessage(err)}`);
                 this._schedule();
             }
         };

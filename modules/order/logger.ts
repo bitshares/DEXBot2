@@ -56,6 +56,44 @@ function getGlobalConsoleLevel(): string | null {
 }
 
 /**
+ * Read the manager's fund buckets with zero defaults. Single accessor for the
+ * funds shape used by every display path.
+ */
+function readFundFields(manager: OrderManagerLike) {
+    return {
+        totalChainBuy: manager.funds?.total?.chain?.buy ?? 0,
+        totalChainSell: manager.funds?.total?.chain?.sell ?? 0,
+        totalGridBuy: manager.funds?.total?.grid?.buy ?? 0,
+        totalGridSell: manager.funds?.total?.grid?.sell ?? 0,
+        virtualBuy: manager.funds?.virtual?.buy ?? 0,
+        virtualSell: manager.funds?.virtual?.sell ?? 0,
+        committedGridBuy: manager.funds?.committed?.grid?.buy ?? 0,
+        committedGridSell: manager.funds?.committed?.grid?.sell ?? 0,
+        committedChainBuy: manager.funds?.committed?.chain?.buy ?? 0,
+        committedChainSell: manager.funds?.committed?.chain?.sell ?? 0,
+        btsFeesOwed: manager.funds?.btsFeesOwed ?? 0,
+    };
+}
+
+/**
+ * Format the available buy/sell balances as precision-aware strings, or 'N/A'
+ * when the value or precision is missing. Shared by all funds displays.
+ */
+function formatAvailableFunds(
+    manager: OrderManagerLike,
+    buyPrecision: number | undefined,
+    sellPrecision: number | undefined,
+): { availableBuy: string; availableSell: string } {
+    const availableBuy = (Number.isFinite(Number(manager.funds?.available?.buy)) && buyPrecision !== undefined)
+        ? Format.formatAmountByPrecision(manager.funds.available.buy, buyPrecision)
+        : 'N/A';
+    const availableSell = (Number.isFinite(Number(manager.funds?.available?.sell)) && sellPrecision !== undefined)
+        ? Format.formatAmountByPrecision(manager.funds.available.sell, sellPrecision)
+        : 'N/A';
+    return { availableBuy, availableSell };
+}
+
+/**
  * Color-coded console logger with structured output, optional file logging,
  * batched async writes, log rotation, JSON output, and correlation ID tracing.
  *
@@ -493,12 +531,7 @@ class Logger {
 
         const buyPrecision = (manager.config?.assetB as unknown as { precision?: number } | undefined)?.precision;
         const sellPrecision = (manager.config?.assetA as unknown as { precision?: number } | undefined)?.precision;
-        const availableBuy = (Number.isFinite(Number(manager.funds?.available?.buy)) && buyPrecision !== undefined)
-            ? Format.formatAmountByPrecision(manager.funds.available.buy, buyPrecision)
-            : 'N/A';
-        const availableSell = (Number.isFinite(Number(manager.funds?.available?.sell)) && sellPrecision !== undefined)
-            ? Format.formatAmountByPrecision(manager.funds.available.sell, sellPrecision)
-            : 'N/A';
+        const { availableBuy, availableSell } = formatAvailableFunds(manager, buyPrecision, sellPrecision);
 
         const c = this.colors;
         const buy = c.buy;
@@ -528,24 +561,12 @@ class Logger {
         const buy = c.buy;
         const sell = c.sell;
 
-        const availableBuy = Number.isFinite(Number(manager.funds?.available?.buy))
-            ? Format.formatAmountByPrecision(manager.funds.available.buy, buyPrecision)
-            : 'N/A';
-        const availableSell = Number.isFinite(Number(manager.funds?.available?.sell))
-            ? Format.formatAmountByPrecision(manager.funds.available.sell, sellPrecision)
-            : 'N/A';
-
-        const totalChainBuy = manager.funds?.total?.chain?.buy ?? 0;
-        const totalChainSell = manager.funds?.total?.chain?.sell ?? 0;
-        const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
-        const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
-        const virtualBuy = manager.funds?.virtual?.buy ?? 0;
-        const virtualSell = manager.funds?.virtual?.sell ?? 0;
-        const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
-        const committedGridSell = manager.funds?.committed?.grid?.sell ?? 0;
-        const committedChainBuy = manager.funds?.committed?.chain?.buy ?? 0;
-        const committedChainSell = manager.funds?.committed?.chain?.sell ?? 0;
-        const btsFeesOwed = manager.funds?.btsFeesOwed ?? 0;
+        const { availableBuy, availableSell } = formatAvailableFunds(manager, buyPrecision, sellPrecision);
+        const {
+            totalChainBuy, totalChainSell, totalGridBuy, totalGridSell,
+            virtualBuy, virtualSell, committedGridBuy, committedGridSell,
+            committedChainBuy, committedChainSell, btsFeesOwed,
+        } = readFundFields(manager);
 
         const lines = [
             `\n${debug}=== DETAILED FUNDS STATUS${headerContext} ===${reset}`,
@@ -592,23 +613,12 @@ class Logger {
             return;
         }
 
-        const gridBuy = Number.isFinite(Number(manager.funds?.available?.buy))
-            ? Format.formatAmountByPrecision(manager.funds.available.buy, buyPrecision)
-            : 'N/A';
-        const gridSell = Number.isFinite(Number(manager.funds?.available?.sell))
-            ? Format.formatAmountByPrecision(manager.funds.available.sell, sellPrecision)
-            : 'N/A';
-
-        const totalChainBuy = manager.funds?.total?.chain?.buy ?? 0;
-        const totalChainSell = manager.funds?.total?.chain?.sell ?? 0;
-        const totalGridBuy = manager.funds?.total?.grid?.buy ?? 0;
-        const totalGridSell = manager.funds?.total?.grid?.sell ?? 0;
-        const virtualBuy = manager.funds?.virtual?.buy ?? 0;
-        const virtualSell = manager.funds?.virtual?.sell ?? 0;
-        const committedGridBuy = manager.funds?.committed?.grid?.buy ?? 0;
-        const committedGridSell = manager.funds?.committed?.grid?.sell ?? 0;
-        const committedChainBuy = manager.funds?.committed?.chain?.buy ?? 0;
-        const committedChainSell = manager.funds?.committed?.chain?.sell ?? 0;
+        const { availableBuy: gridBuy, availableSell: gridSell } = formatAvailableFunds(manager, buyPrecision, sellPrecision);
+        const {
+            totalChainBuy, totalChainSell, totalGridBuy, totalGridSell,
+            virtualBuy, virtualSell, committedGridBuy, committedGridSell,
+            committedChainBuy, committedChainSell,
+        } = readFundFields(manager);
 
         const c = this.colors;
         const reset = c.reset;

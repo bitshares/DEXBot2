@@ -365,12 +365,15 @@ async function askLogLevel(promptText: string, defaultValue: string): Promise<st
 }
 
 /**
- * Prompts the user for an asset symbol.
- * @param {string} promptText - The prompt text to display.
- * @param {string} [defaultValue] - The default value to use if input is empty.
- * @returns {Promise<string>} The asset symbol in uppercase.
+ * Shared asset-symbol input loop: handles ESC, the empty-input default, and
+ * normalizeAssetSymbol. An optional `validate` callback may reject a
+ * normalized symbol by returning a message to print.
  */
-async function askAsset(promptText: string, defaultValue?: string): Promise<string> {
+async function askAssetSymbol(
+    promptText: string,
+    defaultValue?: string,
+    validate?: (asset: string) => string | null,
+): Promise<string> {
     while (true) {
         const displayDefault = defaultValue ? normalizeAssetSymbol(defaultValue) : undefined;
         const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
@@ -384,8 +387,24 @@ async function askAsset(promptText: string, defaultValue?: string): Promise<stri
             continue;
         }
 
-        return normalizeAssetSymbol(answer);
+        const asset = normalizeAssetSymbol(answer);
+        const reason = validate ? validate(asset) : null;
+        if (reason) {
+            console.log(reason);
+            continue;
+        }
+        return asset;
     }
+}
+
+/**
+ * Prompts the user for an asset symbol.
+ * @param {string} promptText - The prompt text to display.
+ * @param {string} [defaultValue] - The default value to use if input is empty.
+ * @returns {Promise<string>} The asset symbol in uppercase.
+ */
+async function askAsset(promptText: string, defaultValue?: string): Promise<string> {
+    return askAssetSymbol(promptText, defaultValue);
 }
 
 /**
@@ -396,29 +415,36 @@ async function askAsset(promptText: string, defaultValue?: string): Promise<stri
  * @returns {Promise<string>} The asset symbol in uppercase.
  */
 async function askAssetB(promptText: string, defaultValue?: string, assetA?: string): Promise<string> {
-    while (true) {
-        const displayDefault = defaultValue ? normalizeAssetSymbol(defaultValue) : undefined;
-        const suffix = displayDefault !== undefined && displayDefault !== null ? ` [${displayDefault}]` : '';
+    return askAssetSymbol(promptText, defaultValue, (assetB) =>
+        assetB === assetA ? `Invalid: Asset B cannot be the same as Asset A (${assetA})` : null);
+}
 
-        const answer = await readInput(`${promptText}${suffix}: `);
-        if (answer === '\x1b') return '\x1b';
-
-        if (!answer) {
-            if (displayDefault) return displayDefault;
-            console.log('Asset name is required.');
-            continue;
-        }
-
-        const assetB = normalizeAssetSymbol(answer);
-
-        // Validate that Asset B is different from Asset A
-        if (assetB === assetA) {
-            console.log(`Invalid: Asset B cannot be the same as Asset A (${assetA})`);
-            continue;
-        }
-
-        return assetB;
+/**
+ * Prompts the user for a weight distribution value with a legend.
+ * @param {string} promptText - The prompt text to display.
+ * @param {number} [defaultValue] - The default value to use if input is empty.
+ * @returns {Promise<number|string>} The numeric value or '\x1b' if ESC.
+ */
+async function askWeightDistributionValue(promptText: string, defaultValue: number | undefined, showLegend: boolean): Promise<number | string | undefined> {
+    const MIN_WEIGHT = -1;
+    const MAX_WEIGHT = 2;
+    if (showLegend) {
+        console.log(`  ${COLORS.cyan}-1=SuperValley${COLORS.reset} ←→ ${COLORS.blue}0=Valley${COLORS.reset} ←→ ${COLORS.gray}0.5=Neutral${COLORS.reset} ←→ ${COLORS.bold}${COLORS.orange}1=Mountain${COLORS.reset} ←→ ${COLORS.redStrong}2=SuperMountain${COLORS.reset}`);
     }
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askWeightDistributionValue(promptText, defaultValue, showLegend);
+    }
+    if (parsed < MIN_WEIGHT || parsed > MAX_WEIGHT) {
+        console.log(`Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
+        return askWeightDistributionValue(promptText, defaultValue, showLegend);
+    }
+    return parsed;
 }
 
 /**
@@ -428,23 +454,7 @@ async function askAssetB(promptText: string, defaultValue?: string, assetA?: str
  * @returns {Promise<number|string>} The numeric value or '\x1b' if ESC.
  */
 async function askWeightDistribution(promptText: string, defaultValue?: number): Promise<number | string | undefined> {
-    const MIN_WEIGHT = -1;
-    const MAX_WEIGHT = 2;
-    console.log(`  ${COLORS.cyan}-1=SuperValley${COLORS.reset} ←→ ${COLORS.blue}0=Valley${COLORS.reset} ←→ ${COLORS.gray}0.5=Neutral${COLORS.reset} ←→ ${COLORS.bold}${COLORS.orange}1=Mountain${COLORS.reset} ←→ ${COLORS.redStrong}2=SuperMountain${COLORS.reset}`);
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number.');
-        return askWeightDistribution(promptText, defaultValue);
-    }
-    if (parsed < MIN_WEIGHT || parsed > MAX_WEIGHT) {
-        console.log(`Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
-        return askWeightDistribution(promptText, defaultValue);
-    }
-    return parsed;
+    return askWeightDistributionValue(promptText, defaultValue, true);
 }
 
 /**
@@ -454,22 +464,7 @@ async function askWeightDistribution(promptText: string, defaultValue?: number):
  * @returns {Promise<number|string>} The numeric value or '\x1b' if ESC.
  */
 async function askWeightDistributionNoLegend(promptText: string, defaultValue?: number): Promise<number | string | undefined> {
-    const MIN_WEIGHT = -1;
-    const MAX_WEIGHT = 2;
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number.');
-        return askWeightDistributionNoLegend(promptText, defaultValue);
-    }
-    if (parsed < MIN_WEIGHT || parsed > MAX_WEIGHT) {
-        console.log(`Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
-        return askWeightDistributionNoLegend(promptText, defaultValue);
-    }
-    return parsed;
+    return askWeightDistributionValue(promptText, defaultValue, false);
 }
 
 /**
@@ -726,6 +721,33 @@ function deltaToCron(days: number, time: string): string {
 }
 
 /**
+ * Shared numeric-input loop: handles ESC and the empty-input default, then
+ * delegates domain validation to `validate`. `validate` returns an error
+ * message to print and retry, or null to accept the parsed value.
+ */
+async function askNumeric(
+    promptText: string,
+    defaultValue: number | undefined,
+    validate: (parsed: number) => string | null,
+): Promise<number | string | undefined> {
+    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
+    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
+    if (raw === '\x1b') return '\x1b';
+    if (raw === '') return defaultValue;
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+        console.log('Please enter a valid number.');
+        return askNumeric(promptText, defaultValue, validate);
+    }
+    const reason = validate(parsed);
+    if (reason) {
+        console.log(reason);
+        return askNumeric(promptText, defaultValue, validate);
+    }
+    return parsed;
+}
+
+/**
  * Prompts the user for a number within specified bounds.
  * @param {string} promptText - The prompt text to display.
  * @param {number} [defaultValue] - The default value to use if input is empty.
@@ -734,30 +756,14 @@ function deltaToCron(days: number, time: string): string {
  * @returns {Promise<number|string>} The numeric value or '\x1b' if ESC.
  */
 async function askNumberWithBounds(promptText: string, defaultValue?: number, minVal: number = 0, maxVal: number = 100): Promise<number | string | undefined> {
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number.');
-        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
-    }
-    // Validate that number is finite (not Infinity, -Infinity, or NaN)
-    if (!Number.isFinite(parsed)) {
-        console.log('Please enter a valid finite number.');
-        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
-    }
-    // Validate bounds
-    if (parsed < minVal) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be >= ${minVal}`);
-        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
-    }
-    if (parsed > maxVal) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be <= ${maxVal}`);
-        return askNumberWithBounds(promptText, defaultValue, minVal, maxVal);
-    }
-    return parsed;
+    return askNumeric(promptText, defaultValue, (parsed) => {
+        // Validate that number is finite (not Infinity, -Infinity, or NaN)
+        if (!Number.isFinite(parsed)) return 'Please enter a valid finite number.';
+        // Validate bounds
+        if (parsed < minVal) return `Invalid ${promptText}: ${parsed}. Must be >= ${minVal}`;
+        if (parsed > maxVal) return `Invalid ${promptText}: ${parsed}. Must be <= ${maxVal}`;
+        return null;
+    });
 }
 
 /**
@@ -812,26 +818,35 @@ async function askTargetSpreadPercent(promptText: string, defaultValue?: number,
  * @returns {Promise<number|string>} The integer or '\x1b' if ESC.
  */
 async function askIntegerInRange(promptText: string, defaultValue?: number, minVal: number = 0, maxVal: number = 100): Promise<number | string | undefined> {
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number.');
-        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
+    return askNumeric(promptText, defaultValue, (parsed) => {
+        // Validate that number is integer (not float)
+        if (!Number.isInteger(parsed)) return `Invalid ${promptText}: ${parsed}. Must be an integer (no decimals)`;
+        // Validate bounds
+        if (parsed < minVal || parsed > maxVal) return `Invalid ${promptText}: ${parsed}. Must be between ${minVal} and ${maxVal}`;
+        return null;
+    });
+}
+
+/**
+ * Validate a relative-multiplier input ("1.5x") for the price-bound prompts.
+ * Returns the trimmed multiplier string when accepted, or the error message to
+ * print when rejected. Single source of truth for the min/max direction rule.
+ */
+function validateMultiplierInput(promptText: string, raw: string): { value: string } | { error: string } {
+    const trimmed = raw.trim();
+    const multiplier = parseFloat(trimmed);
+    if (multiplier <= 0) {
+        return { error: `Invalid ${promptText}: "${trimmed}". Multiplier must be > 0. No "0x" or negative values` };
     }
-    // Validate that number is integer (not float)
-    if (!Number.isInteger(parsed)) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be an integer (no decimals)`);
-        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
+    if (multiplier < 1) {
+        // A sub-1x bound multiplier ("0.7x") resolves to the wrong side of the
+        // grid. Reject so the rail can't land across the book (issue #15).
+        const directionNote = /max/i.test(promptText)
+            ? 'For maxPrice, "Nx" means center*N, so a multiplier < 1 places the bound BELOW the center. Use a value > 1.'
+            : 'For minPrice, "Nx" means center/N, so a multiplier < 1 places the bound ABOVE the center. Use a value > 1 (e.g. "1.43x" for 70% of center).';
+        return { error: `Invalid ${promptText}: "${trimmed}". ${directionNote}` };
     }
-    // Validate bounds
-    if (parsed < minVal || parsed > maxVal) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be between ${minVal} and ${maxVal}`);
-        return askIntegerInRange(promptText, defaultValue, minVal, maxVal);
-    }
-    return parsed;
+    return { value: trimmed };
 }
 
 /**
@@ -850,22 +865,12 @@ async function askNumberOrMultiplier(promptText: string, defaultValue?: number |
     if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     if (isMultiplierString(raw)) {
-        const trimmed = raw.trim();
-        const multiplier = parseFloat(trimmed);
-        if (multiplier <= 0) {
-            console.log(`Invalid ${promptText}: "${trimmed}". Multiplier must be > 0. No "0x" or negative values`);
+        const result = validateMultiplierInput(promptText, raw);
+        if ('error' in result) {
+            console.log(result.error);
             return askNumberOrMultiplier(promptText, defaultValue);
         }
-        // A sub-1x bound multiplier ("0.7x") resolves to the wrong side of
-        // the grid. Reject so the rail can't land across the book (issue #15).
-        const directionNote = /max/i.test(promptText)
-            ? 'For maxPrice, "Nx" means center*N, so a multiplier < 1 places the bound BELOW the center. Use a value > 1.'
-            : 'For minPrice, "Nx" means center/N, so a multiplier < 1 places the bound ABOVE the center. Use a value > 1 (e.g. "1.43x" for 70% of center).';
-        if (multiplier < 1) {
-            console.log(`Invalid ${promptText}: "${trimmed}". ${directionNote}`);
-            return askNumberOrMultiplier(promptText, defaultValue);
-        }
-        return trimmed;
+        return result.value;
     }
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {
@@ -894,19 +899,12 @@ async function askMaxPrice(promptText: string, defaultValue?: number | string, m
     if (raw === '\x1b') return '\x1b';
     if (raw === '') return defaultValue;
     if (isMultiplierString(raw)) {
-        const trimmed = raw.trim();
-        const multiplier = parseFloat(trimmed);
-        if (multiplier <= 0) {
-            console.log(`Invalid ${promptText}: "${trimmed}". Multiplier must be > 0. No "0x" or negative values`);
+        const result = validateMultiplierInput(promptText, raw);
+        if ('error' in result) {
+            console.log(result.error);
             return askMaxPrice(promptText, defaultValue, minPrice);
         }
-        // For maxPrice a multiplier < 1 ("0.7x") resolves to center*0.7 — a
-        // bound BELOW the center. Reject so the rail can't land across the book.
-        if (multiplier < 1) {
-            console.log(`Invalid ${promptText}: "${trimmed}". For maxPrice, "Nx" means center*N, so a multiplier < 1 places the bound BELOW the center. Use a value > 1.`);
-            return askMaxPrice(promptText, defaultValue, minPrice);
-        }
-        return trimmed;
+        return result.value;
     }
     const parsed = Number(raw);
     if (Number.isNaN(parsed)) {

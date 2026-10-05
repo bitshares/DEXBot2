@@ -65,6 +65,21 @@ function writeJsonFileAtomic(targetPath: string, data: unknown) {
 const botsFileLock = new AsyncLock();
 
 /**
+ * Parse a bots.json payload, applying the shared empty-file fallback. Both the
+ * locked async read and the startup sync read go through this so the
+ * empty-file default cannot drift between them.
+ * @param {string} content - Raw file content
+ * @param {Function} parseFunction - JSON parser function
+ * @returns {{content: string, config: Object}} Content and parsed config
+ */
+function parseBotsContent<T>(content: string, parseFunction: (content: string) => T): { content: string; config: T } {
+    if (!content || !content.trim()) {
+        return { content: '', config: { bots: [] } as unknown as T };
+    }
+    return { content, config: parseFunction(content) };
+}
+
+/**
  * Safely read bots.json with lock protection (re-entrant safe).
  * @param {string} botsJsonPath - Path to bots.json file
  * @param {Function} parseFunction - JSON parser function (e.g., parseJsonWithComments)
@@ -77,13 +92,7 @@ async function readBotsFileWithLock<T>(botsJsonPath: string, parseFunction: (con
             throw new Error(`bots.json not found at ${botsJsonPath}`);
         }
 
-        const content = storage.readFile(botsJsonPath);
-        if (!content || !content.trim()) {
-            return { content: '', config: { bots: [] } as unknown as T };
-        }
-
-        const config = parseFunction(content);
-        return { content, config };
+        return parseBotsContent(storage.readFile(botsJsonPath), parseFunction);
     });
 }
 
@@ -119,13 +128,7 @@ function readBotsFileSync<T>(botsJsonPath: string, parseFunction: (content: stri
         throw new Error(`bots.json not found at ${botsJsonPath}`);
     }
 
-    const content = storage.readFile(botsJsonPath);
-    if (!content || !content.trim()) {
-        return { content: '', config: { bots: [] } as unknown as T };
-    }
-
-    const config = parseFunction(content);
-    return { content, config };
+    return parseBotsContent(storage.readFile(botsJsonPath), parseFunction);
 }
 
 export { readBotsFileWithLock, writeBotsFileWithLock, readBotsFileSync, writeJsonFileAtomic }

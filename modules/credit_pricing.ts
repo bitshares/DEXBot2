@@ -162,6 +162,31 @@ function collateralValueFromOfferPrice(
 }
 
 /**
+ * Shared orientation resolution for the borrow/collateral conversion pair.
+ * Validates the offer price amounts and returns the base/quote factors plus
+ * the price orientation, so both directions cannot disagree on which way the
+ * factor applies. Null when the price is missing or unusable.
+ */
+function resolvePriceFactors(
+    collateralPrice: OfferPrice | null | undefined,
+    debtAssetId: string | null,
+    collateralAssetId: string | null,
+): { baseAmount: number; quoteAmount: number; orientation: 'core' | 'legacy-reversed' } | null {
+    const baseAmount = toFiniteOrNull(collateralPrice?.base?.amount);
+    const quoteAmount = toFiniteOrNull(collateralPrice?.quote?.amount);
+    if (baseAmount === null || quoteAmount === null || baseAmount <= 0 || quoteAmount <= 0) {
+        return null;
+    }
+    const orientation = creditPriceOrientation(
+        String(collateralPrice?.base?.asset_id || ''),
+        String(collateralPrice?.quote?.asset_id || ''),
+        String(debtAssetId || ''),
+        String(collateralAssetId || ''),
+    );
+    return { baseAmount, quoteAmount, orientation };
+}
+
+/**
  * Minimum raw collateral required to borrow a raw debt amount at a price.
  * Integer ceil so the borrow is never under-collateralized by rounding.
  */
@@ -172,17 +197,9 @@ function requiredCollateralForBorrow(
     collateralAssetId: string | null = null,
 ): number | null {
     const borrowRaw = toFiniteOrNull(borrowAmountInt);
-    const baseAmount = toFiniteOrNull(collateralPrice?.base?.amount);
-    const quoteAmount = toFiniteOrNull(collateralPrice?.quote?.amount);
-    if (borrowRaw === null || borrowRaw <= 0 || baseAmount === null || quoteAmount === null || baseAmount <= 0 || quoteAmount <= 0) {
-        return null;
-    }
-    const orientation = creditPriceOrientation(
-        String(collateralPrice?.base?.asset_id || ''),
-        String(collateralPrice?.quote?.asset_id || ''),
-        String(debtAssetId || ''),
-        String(collateralAssetId || ''),
-    );
+    const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
+    if (borrowRaw === null || borrowRaw <= 0 || factors === null) return null;
+    const { baseAmount, quoteAmount, orientation } = factors;
     if (orientation === 'legacy-reversed') {
         return Math.ceil((Number(borrowAmountInt) * baseAmount) / quoteAmount);
     }
@@ -200,17 +217,9 @@ function borrowAmountForCollateral(
     collateralAssetId: string | null = null,
 ): number | null {
     const collRaw = toFiniteOrNull(collateralAmountInt);
-    const baseAmount = toFiniteOrNull(collateralPrice?.base?.amount);
-    const quoteAmount = toFiniteOrNull(collateralPrice?.quote?.amount);
-    if (collRaw === null || collRaw <= 0 || baseAmount === null || quoteAmount === null || baseAmount <= 0 || quoteAmount <= 0) {
-        return null;
-    }
-    const orientation = creditPriceOrientation(
-        String(collateralPrice?.base?.asset_id || ''),
-        String(collateralPrice?.quote?.asset_id || ''),
-        String(debtAssetId || ''),
-        String(collateralAssetId || ''),
-    );
+    const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
+    if (collRaw === null || collRaw <= 0 || factors === null) return null;
+    const { baseAmount, quoteAmount, orientation } = factors;
     if (orientation === 'legacy-reversed') {
         return Math.floor((Number(collateralAmountInt) * quoteAmount) / baseAmount);
     }

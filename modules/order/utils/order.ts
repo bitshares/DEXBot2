@@ -1434,6 +1434,24 @@ function parseSlotIndex(id: string | null | undefined): number | null {
     return parseSlotIndexShared(id);
 }
 /**
+ * Precision governing both price and size comparison for a parsed chain
+ * order: base (assetA) for sells, quote (assetB) for buys.
+ */
+function slotMatchPrecision(type: string, assets: AssetPair): number {
+    return type === ORDER_TYPES.SELL ? assets.assetA.precision : assets.assetB.precision;
+}
+
+/**
+ * Whether a parsed chain order's size matches a slot's, within the shared
+ * 1%-of-size tolerance (min 2 quanta). Single source of truth for adoption
+ * size matching so the strict and tolerant matchers cannot disagree.
+ */
+function slotSizeMatches(parsed: ParsedChainOrder, slot: ManagedOrder, precision: number): boolean {
+    const sizeTolerance = Math.max(2, Math.floor(floatToBlockchainInt(slot.size, precision) * 0.01));
+    return Math.abs(floatToBlockchainInt(parsed.size, precision) - floatToBlockchainInt(slot.size, precision)) <= sizeTolerance;
+}
+
+/**
  * Whether a parsed chain order matches a grid slot exactly:
  * type-compatible (slot may be SPREAD), price strictly equal via integer
  * round-trip (single epsilon), size within 1% quantum tolerance (floor 2
@@ -1451,14 +1469,9 @@ function chainOrderMatchesSlot(parsed: ParsedChainOrder, slot: ManagedOrder, ass
     if (!parsed || !slot || !assets) return false;
     if (parsed.type !== slot.type && slot.type !== ORDER_TYPES.SPREAD) return false;
     // Genesis-frozen: price equality via integer round-trip (single epsilon); slot id is handled by caller via slotIndexForPrice
-    {
-        const precision = parsed.type === ORDER_TYPES.SELL ? assets.assetA.precision : assets.assetB.precision;
-        if (!priceSlotEqual(parsed.price, slot.price, precision)) return false;
-    }
-    const precision = parsed.type === ORDER_TYPES.SELL ? assets.assetA.precision : assets.assetB.precision;
-    const sizeTolerance = Math.max(2, Math.floor(floatToBlockchainInt(slot.size, precision) * 0.01));
-    if (Math.abs(floatToBlockchainInt(parsed.size, precision) - floatToBlockchainInt(slot.size, precision)) > sizeTolerance) return false;
-    return true;
+    const precision = slotMatchPrecision(parsed.type, assets);
+    if (!priceSlotEqual(parsed.price, slot.price, precision)) return false;
+    return slotSizeMatches(parsed, slot, precision);
 }
 /**
  * Whether a parsed chain order matches a grid slot within price tolerance:
@@ -1478,7 +1491,7 @@ function chainOrderMatchesSlot(parsed: ParsedChainOrder, slot: ManagedOrder, ass
 function chainOrderMatchesSlotWithTolerance(parsed: ParsedChainOrder, slot: ManagedOrder, assets: AssetPair): boolean {
     if (!parsed || !slot || !assets) return false;
     if (parsed.type !== slot.type && slot.type !== ORDER_TYPES.SPREAD) return false;
-    const precision = parsed.type === ORDER_TYPES.SELL ? assets.assetA.precision : assets.assetB.precision;
+    const precision = slotMatchPrecision(parsed.type, assets);
     let tolerance: number | null = null;
     try {
         tolerance = MathUtils.calculatePriceTolerance(
@@ -1497,9 +1510,7 @@ function chainOrderMatchesSlotWithTolerance(parsed: ParsedChainOrder, slot: Mana
     if (tolerance == null || !Number.isFinite(tolerance)) tolerance = quantumCap;
     else tolerance = Math.min(tolerance, quantumCap);
     if (Math.abs(parsed.price - slot.price) > tolerance) return false;
-    const sizeTolerance = Math.max(2, Math.floor(floatToBlockchainInt(slot.size, precision) * 0.01));
-    if (Math.abs(floatToBlockchainInt(parsed.size, precision) - floatToBlockchainInt(slot.size, precision)) > sizeTolerance) return false;
-    return true;
+    return slotSizeMatches(parsed, slot, precision);
 }
 /**
  * Identity of a crossing-check candidate. Master orders carry orderId,

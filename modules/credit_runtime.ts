@@ -245,6 +245,36 @@ interface IncreaseOfferCandidate extends FallbackOfferCandidate {
     capped: boolean;
 }
 
+/**
+ * Shared ranking fields for a credit-offer candidate. Every selector scores
+ * offers through this helper so the ranking inputs cannot drift apart.
+ */
+function offerRankingFields(
+    dailyRate: number,
+    offer: UnknownRecord,
+): Pick<FallbackOfferCandidate, 'dailyRate' | 'feeRate' | 'balance' | 'duration'> {
+    return {
+        dailyRate,
+        feeRate: toFiniteNumber(offer.fee_rate, Number.MAX_SAFE_INTEGER),
+        balance: toFiniteNumber(offer.current_balance, 0),
+        duration: toFiniteNumber(offer.max_duration_seconds, 0),
+    };
+}
+
+/**
+ * Canonical credit-offer ranking policy: cheapest daily rate first, then the
+ * lowest fee rate, then the longest duration, then the largest remaining
+ * balance, then a stable tie-break on offer id. Single source of truth for
+ * all offer selectors.
+ */
+function compareCreditOfferCandidates(a: FallbackOfferCandidate, b: FallbackOfferCandidate): number {
+    return a.dailyRate - b.dailyRate
+        || a.feeRate - b.feeRate
+        || b.duration - a.duration
+        || b.balance - a.balance
+        || String(a.offer.id).localeCompare(String(b.offer.id));
+}
+
 interface DealSummary {
     id: unknown;
     borrower: unknown;
@@ -2394,23 +2424,14 @@ class CreditRuntime {
                 candidates.push({
                     offer,
                     op,
-                    dailyRate: this._calculateDailyFeeRate(offer),
-                    feeRate: toFiniteNumber(offer.fee_rate, Number.MAX_SAFE_INTEGER),
-                    balance: toFiniteNumber(offer.current_balance, 0),
-                    duration: toFiniteNumber(offer.max_duration_seconds, 0),
+                    ...offerRankingFields(this._calculateDailyFeeRate(offer), offer),
                 });
             } catch (_) {
                 // Candidate does not satisfy amount, ratio, balance, or duration policy.
             }
         }
 
-        candidates.sort((a, b) => (
-            a.dailyRate - b.dailyRate
-            || a.feeRate - b.feeRate
-            || b.duration - a.duration
-            || b.balance - a.balance
-            || String(a.offer.id).localeCompare(String(b.offer.id))
-        ));
+        candidates.sort(compareCreditOfferCandidates);
         return candidates[0] || null;
     }
 
@@ -2526,23 +2547,14 @@ class CreditRuntime {
                     borrowAmount: opBorrowAmount,
                     collateralAmount: opCollateralAmount,
                     capped,
-                    dailyRate: this._calculateDailyFeeRate(offer),
-                    feeRate: toFiniteNumber(offer.fee_rate, Number.MAX_SAFE_INTEGER),
-                    balance: toFiniteNumber(offer.current_balance, 0),
-                    duration: toFiniteNumber(offer.max_duration_seconds, 0),
+                    ...offerRankingFields(this._calculateDailyFeeRate(offer), offer),
                 });
             } catch (_) {
                 // Candidate does not satisfy amount, ratio, balance, or duration policy.
             }
         }
 
-        candidates.sort((a, b) => (
-            a.dailyRate - b.dailyRate
-            || a.feeRate - b.feeRate
-            || b.duration - a.duration
-            || b.balance - a.balance
-            || String(a.offer.id).localeCompare(String(b.offer.id))
-        ));
+        candidates.sort(compareCreditOfferCandidates);
         return candidates[0] || null;
     }
 
