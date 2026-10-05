@@ -410,11 +410,6 @@ class AccountOrders {
         this.data.btsBalance = debugSnapshot.btsBalance as Record<string, unknown>;
       }
 
-      // Initialize processedFills if missing (backward compat)
-      if (!this.data.processedFills) {
-        this.data.processedFills = {};
-      }
-
       // Persist recent fill keys for crash-durable dedup window
       if (recentFillKeys) {
         this.data.recentFillKeys = recentFillKeys;

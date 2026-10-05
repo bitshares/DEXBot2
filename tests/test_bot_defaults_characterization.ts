@@ -103,14 +103,14 @@ function testDraftSnapshot() {
     assert.notStrictEqual(draft, DEFAULT_CONFIG, 'draft must be a new object');
 }
 
-function testDraftDoesNotMutateInputAndStripsLegacy() {
-    console.log(' - draft: input untouched, legacy offset fields stripped...');
+function testDraftDoesNotMutateInputAndPassesThroughExtraKeys() {
+    console.log(' - draft: input untouched, extra keys pass through...');
     const input = { name: 'probe', gridPriceOffsetPct: 0.35, gridPriceOffsetClampToBounds: true };
     const pristine = JSON.parse(JSON.stringify(input));
     const draft = normalizeBotDraft(input);
     assert.deepStrictEqual(input, pristine, 'normalizeBotDraft must not mutate its input');
-    assert.ok(!('gridPriceOffsetPct' in draft), 'legacy gridPriceOffsetPct must be stripped');
-    assert.ok(!('gridPriceOffsetClampToBounds' in draft), 'legacy gridPriceOffsetClampToBounds must be stripped');
+    assert.strictEqual(draft.gridPriceOffsetPct, 0.35, 'unknowable extra keys pass through unchanged');
+    assert.strictEqual(draft.gridPriceOffsetClampToBounds, true, 'unknowable extra keys pass through unchanged');
     assert.strictEqual(draft.name, 'probe', 'unrelated keys pass through');
 }
 
@@ -313,7 +313,7 @@ function testWhitelistFlagDefaults() {
 
 function main() {
     testDraftSnapshot();
-    testDraftDoesNotMutateInputAndStripsLegacy();
+    testDraftDoesNotMutateInputAndPassesThroughExtraKeys();
     testDraftPreservesNullsAndPartials();
     testDraftReserveOrdersMigrations();
     testDraftGridPriceFollowsDefaultConfig();

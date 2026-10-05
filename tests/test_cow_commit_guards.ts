@@ -257,7 +257,7 @@ async function testRejectsVersionMismatchWithoutCommit() {
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 4 });
     workingGrid.set('slot-1', createOrder('slot-1', { price: 2 }));
 
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._rebalanceState = 'BROADCASTING';
 
     await manager._commitWorkingGrid(workingGrid, workingGrid.getIndexes(), 0);
@@ -265,7 +265,7 @@ async function testRejectsVersionMismatchWithoutCommit() {
     assert.strictEqual(manager.orders.get('slot-1').price, 1, 'master order must remain unchanged');
     assert.strictEqual(manager._gridVersion, 5, 'grid version must not advance');
     assert.strictEqual(getRecalcCount(), 0, 'fund recalculation must be skipped for rejected commit');
-    assert.strictEqual(manager._currentWorkingGrid, null, 'working grid reference should be cleared');
+    assert.strictEqual(manager._peekWorkingGrid(), null, 'working grid reference should be cleared');
     assert.strictEqual(manager._rebalanceState, 'NORMAL', 'rebalance state should be reset');
     assert(logs.some(l => String(l.msg).includes('base version')), 'should log base version mismatch');
     assert(!logs.some(l => String(l.msg).includes('Grid committed in')), 'must not log successful commit');
@@ -279,7 +279,7 @@ async function testNoPostCommitSideEffectsWhenDeltaEmpty() {
     const { manager, logs, getRecalcCount } = createManagerFixture();
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 5 });
 
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._rebalanceState = 'BROADCASTING';
 
     await manager._commitWorkingGrid(workingGrid, workingGrid.getIndexes(), 0);
@@ -287,7 +287,7 @@ async function testNoPostCommitSideEffectsWhenDeltaEmpty() {
     assert.strictEqual(manager.orders.get('slot-1').price, 1, 'master order must remain unchanged');
     assert.strictEqual(manager._gridVersion, 5, 'grid version must not advance');
     assert.strictEqual(getRecalcCount(), 0, 'fund recalculation must be skipped for empty delta');
-    assert.strictEqual(manager._currentWorkingGrid, null, 'working grid reference should be cleared');
+    assert.strictEqual(manager._peekWorkingGrid(), null, 'working grid reference should be cleared');
     assert.strictEqual(manager._rebalanceState, 'NORMAL', 'rebalance state should be reset');
     assert(logs.some(l => String(l.msg).includes('Delta empty at commit')), 'should log empty delta refusal');
     assert(!logs.some(l => String(l.msg).includes('Grid committed in')), 'must not log successful commit');

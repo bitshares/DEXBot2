@@ -49,7 +49,7 @@
  *      Includes GRID_COMPARISON sub-object for grid divergence metrics
  *
  *   6. INCREMENT_BOUNDS - Price increment percentage validation
- *      MIN_PERCENT, MAX_PERCENT, MIN_FACTOR, MAX_FACTOR
+ *      MIN_PERCENT, MAX_PERCENT
  *
  * FEE CONFIGURATION:
  *   7. FEE_PARAMETERS - Fee calculation and reservation parameters
@@ -786,11 +786,7 @@ let INCREMENT_BOUNDS = {
     // Minimum increment percentage allowed (0.01%)
     MIN_PERCENT: 0.01,
     // Maximum increment percentage allowed (10%)
-    MAX_PERCENT: 10,
-    // Minimum increment as decimal factor (0.01% = 0.0001)
-    MIN_FACTOR: 0.0001,
-    // Maximum increment as decimal factor (10% = 0.10)
-    MAX_FACTOR: 0.10
+    MAX_PERCENT: 10
 };
 
 // Fee-related parameters for order operations
@@ -1799,7 +1795,6 @@ let COW_PERFORMANCE = {
 // Structure:
 //   NATIVE_CLIENT.CHAIN          - Graphene chain parameters
 //   NATIVE_CLIENT.OPERATIONS     - Operation type IDs
-//   NATIVE_CLIENT.OBJECT_TYPES   - Object space/type IDs
 //   NATIVE_CLIENT.TRANSACTION    - Transaction builder limits
 //   NATIVE_CLIENT.TRANSPORT      - WebSocket transport tuning
 //   NATIVE_CLIENT.SUBSCRIPTIONS  - Fill-detection subscription settings
@@ -1807,7 +1802,7 @@ let COW_PERFORMANCE = {
 //   NATIVE_CLIENT.ECC            - Cryptographic constants (reference only)
 //
 // Source files:
-//   modules/bitshares-native/serial/chain_constants.ts  (CHAIN, OPERATIONS, OBJECT_TYPES)
+//   modules/bitshares-native/serial/chain_constants.ts  (CHAIN, OPERATIONS)
 //   modules/bitshares-native/tx/builder.ts               (TRANSACTION)
 //   modules/bitshares-native/transport.ts                (TRANSPORT)
 //   modules/bitshares-native/subscriptions.ts             (SUBSCRIPTIONS)
@@ -1862,37 +1857,6 @@ let NATIVE_CLIENT = {
         CREDIT_DEAL_UPDATE:   76,
         LIMIT_ORDER_UPDATE:   77,
         LIQUIDITY_POOL_EXCHANGE: 63,
-    },
-
-    // -------------------------------------------------------------------------
-    // OBJECT_TYPES — Graphene object space/type IDs
-    // -------------------------------------------------------------------------
-    // Space 1 (protocol), used for blockchain entity identification.
-    // Object IDs follow the format "space.type.instance" (e.g. "1.2.12345" = account).
-    OBJECT_TYPES: {
-        NULL:                  0,
-        BASE:                  1,
-        ACCOUNT:               2,
-        ASSET:                 3,
-        FORCE_SETTLEMENT:      4,
-        COMMITTEE_MEMBER:      5,
-        WITNESS:               6,
-        LIMIT_ORDER:           7,
-        CALL_ORDER:            8,
-        CUSTOM:                9,
-        PROPOSAL:              10,
-        OPERATION_HISTORY:     11,
-        WITHDRAW_PERMISSION:   12,
-        VESTING_BALANCE:       13,
-        WORKER:                14,
-        BALANCE:               15,
-        HTLC:                  16,
-        CUSTOM_AUTHORITY:      17,
-        TICKET:                18,
-        LIQUIDITY_POOL:        19,
-        SAMET_FUND:            20,
-        CREDIT_OFFER:          21,
-        CREDIT_DEAL:           22,
     },
 
     // -------------------------------------------------------------------------
@@ -1974,12 +1938,6 @@ let NATIVE_CLIENT = {
         // node failure. 1000 = normal closure, 1001 = going away (server
         // shutdown/deploy). Any other code, or wasClean === false, is abnormal.
         BENIGN_CLOSE_CODES: [1000, 1001],
-
-        // NOTE: These constants are informational but not imported by transport.ts
-        // Reconnection backoff parameters (ms).
-        // Reconnect delay = min(base × 2^attempt + random(0..1000), max).
-        RECONNECT_BASE_MS: 1000,
-        RECONNECT_MAX_MS:  30000,
     },
 
     // -------------------------------------------------------------------------
@@ -2270,7 +2228,6 @@ Object.freeze(COW_PERFORMANCE);
 Object.freeze(LOGGING_CONFIG);
 Object.freeze(NATIVE_CLIENT.CHAIN);
 Object.freeze(NATIVE_CLIENT.OPERATIONS);
-Object.freeze(NATIVE_CLIENT.OBJECT_TYPES);
 Object.freeze(NATIVE_CLIENT.TRANSACTION);
 Object.freeze(NATIVE_CLIENT.TRANSPORT);
 Object.freeze(NATIVE_CLIENT.SUBSCRIPTIONS);

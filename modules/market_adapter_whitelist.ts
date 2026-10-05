@@ -243,5 +243,5 @@ function removeWhitelistEntry(botKey: string): boolean {
     return true;
 }
 
-export { whitelistFile, resetMarketAdapterWhitelistCache, getWhitelistFlags, isBotWhitelisted, isBotDynamicWeightWhitelisted, isBotAsymmetricBoundsWhitelisted, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, DEFAULT_WHITELIST_FLAGS, AMA_ONLY_WHITELIST_FLAGS, ALL_ENABLED_WHITELIST_FLAGS }
+export { whitelistFile, resetMarketAdapterWhitelistCache, getWhitelistFlags, isBotWhitelisted, isBotDynamicWeightWhitelisted, isBotAsymmetricBoundsWhitelisted, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, DEFAULT_WHITELIST_FLAGS }
 

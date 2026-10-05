@@ -495,8 +495,8 @@ check('resolveProfilesDir returns a string',
     process.env.XDG_CONFIG_HOME = xdgBase;
     try {
         const p19 = freshPaths();
-        const gotHome = (typeof p19.getHomeProfilesDir === 'function' ? p19.getHomeProfilesDir() : p19.HOME_PROFILES_DIR);
-        check('XDG_CONFIG_HOME redirects HOME_PROFILES_DIR',
+        const gotHome = p19.getHomeProfilesDir();
+        check('XDG_CONFIG_HOME redirects getHomeProfilesDir()',
             gotHome === path.join(xdgBase, 'dexbot2', 'profiles'),
             gotHome);
     } finally {

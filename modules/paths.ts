@@ -85,12 +85,6 @@ function getHomeConfigDir(): string {
 function getHomeProfilesDir(): string {
     return path.join(getHomeConfigDir(), 'profiles');
 }
-// Snapshot constants — prefer getHomeConfigDir()/getHomeProfilesDir() for live values.
-// ESM named imports capture the snapshot; CJS require() interop is patched below via
-// Object.defineProperty to return live values (see bottom of file). Future ESM code
-// should call getHome*() directly; HOME_* remains for backward compat only.
-const HOME_CONFIG_DIR = getHomeConfigDir();
-const HOME_PROFILES_DIR = getHomeProfilesDir();
 
 /**
  * Resolve the profiles (user state) directory.
@@ -374,24 +368,5 @@ function getRecalculateTriggerFile(botKey: string): string {
   return path.join(PATHS.PROFILES_DIR, `recalculate.${botKey}.trigger`);
 }
 
-export { PATHS, HOME_PROFILES_DIR, HOME_CONFIG_DIR, getHomeConfigDir, getHomeProfilesDir, resolveProfilesDir, resolveMarketAdapterDirs, resolveClawDirs, resolveAnalysisDirs, isGlobalNpmPackageDir, getNodeBlacklistFile, getNodeHealthCacheFile, getRecalculateTriggerFile, computeRelocationNotices, printRelocationNotices }
-
-// Live getters for CJS require() interop (ESM cache not invalidated via require.cache)
-try {
-    // @ts-ignore - patch CJS wrapper if present
-    const g = globalThis as { module?: { exports?: Record<string, unknown> } };
-    if (g.module && g.module.exports) {
-        Object.defineProperty(g.module.exports, 'HOME_PROFILES_DIR', { get: getHomeProfilesDir, enumerable: true, configurable: true });
-        Object.defineProperty(g.module.exports, 'HOME_CONFIG_DIR', { get: getHomeConfigDir, enumerable: true, configurable: true });
-    }
-} catch {}
-// Also patch this module's own exports object when loaded via require() interop (Node experimental require(esm))
-try {
-    // @ts-ignore
-    const exp = (typeof exports !== 'undefined' ? exports : undefined) as Record<string, unknown> | undefined;
-    if (exp) {
-        Object.defineProperty(exp, 'HOME_PROFILES_DIR', { get: getHomeProfilesDir, enumerable: true, configurable: true });
-        Object.defineProperty(exp, 'HOME_CONFIG_DIR', { get: getHomeConfigDir, enumerable: true, configurable: true });
-    }
-} catch {}
+export { PATHS, getHomeProfilesDir, resolveProfilesDir, resolveMarketAdapterDirs, resolveClawDirs, resolveAnalysisDirs, isGlobalNpmPackageDir, getNodeBlacklistFile, getNodeHealthCacheFile, getRecalculateTriggerFile, computeRelocationNotices, printRelocationNotices }
 

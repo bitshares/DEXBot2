@@ -141,12 +141,14 @@ modules/
 │   └── crypto/                    cryptographic primitives
 │
 └── utils/
+    ├── asset_symbols.ts          asset symbol/object-id canonicalization helpers
     ├── base58check.ts             Base58Check encoding
     ├── build_dir.ts               BUILD_DIR constant helper
     ├── chain_logs.ts              shared chain log helpers
     ├── errors.ts                  getErrorMessage helper
     ├── sanitize_key.ts            shared sanitizeKey helper
-    └── text_width.ts              display-width-aware text measurement (CJK/emoji tables)
+    ├── text_width.ts              display-width-aware text measurement (CJK/emoji tables)
+    └── time_range.ts             month→hour lookback conversion (analysis range flags)
 ```
 
 ## Key Relationships

@@ -157,28 +157,6 @@ const DEFAULTS = Object.freeze({
     assert.strictEqual(r.GRID_LIMITS.GRID_COMPARISON._note, undefined);
 })();
 
-(function testExpertGridComparisonSubMergePreservesPrior() {
-    // EXPERT.GRID_LIMITS replaces the section shallowly; a partial
-    // GRID_COMPARISON override must deep-merge over the prior subtree
-    // instead of dropping untouched comparison keys.
-    const r = mergeSettings({
-        EXPERT: { GRID_LIMITS: { MIN_ORDER_COUNT: 7, GRID_COMPARISON: { RMS_PERCENTAGE: 77 } } }
-    }, DEFAULTS);
-    assert.strictEqual(r.GRID_LIMITS.MIN_ORDER_COUNT, 7);
-    assert.strictEqual(r.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE, 77);
-    assert.strictEqual(r.GRID_LIMITS.GRID_COMPARISON.MEAN_PERCENTAGE, 10, 'prior comparison keys must survive an expert partial override');
-})();
-
-(function testExpertGridComparisonScalarOverrideIgnored() {
-    // A scalar GRID_COMPARISON inside EXPERT.GRID_LIMITS must not wipe the
-    // prior comparison subtree with char-indexed spread garbage.
-    const r = mergeSettings({
-        EXPERT: { GRID_LIMITS: { GRID_COMPARISON: 42 } }
-    }, DEFAULTS);
-    assert.strictEqual(r.GRID_LIMITS.GRID_COMPARISON.MEAN_PERCENTAGE, 10);
-    assert.strictEqual(r.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE, DEFAULTS.GRID_LIMITS.GRID_COMPARISON.RMS_PERCENTAGE);
-})();
-
 (function testDeepMergeRejectsProtoPollution() {
     // A crafted config file with prototype-dangerous own keys (as JSON.parse
     // produces them) must be skipped by the deep merge at every level instead
@@ -250,46 +228,6 @@ const DEFAULTS = Object.freeze({
     assert.strictEqual(r.MARKET_ADAPTER.KIBANA_REQUEST_TIMEOUT_MS, 999999);
     // Nested default preserved
     assert.strictEqual(r.MARKET_ADAPTER.RUNTIME_DEFAULTS.intervalSeconds, 3600);
-})();
-
-// =============================================================================
-// 9. EXPERT second-pass override
-// =============================================================================
-
-(function testExpertOverridesGridLimits() {
-    const r = mergeSettings({
-        GRID_LIMITS: { MIN_ORDER_COUNT: 10 },
-        EXPERT: { GRID_LIMITS: { MIN_ORDER_COUNT: 99 } }
-    }, DEFAULTS);
-    // EXPERT wins over top-level GRID_LIMITS
-    assert.strictEqual(r.GRID_LIMITS.MIN_ORDER_COUNT, 99);
-    // Unchanged key preserved
-    assert.strictEqual(r.GRID_LIMITS.MAX_ORDER_COUNT, 100);
-})();
-
-(function testExpertOverridesTiming() {
-    const r = mergeSettings({
-        TIMING: { SYNC_DELAY_MS: 100 },
-        EXPERT: { TIMING: { SYNC_DELAY_MS: 42 } }
-    }, DEFAULTS);
-    assert.strictEqual(r.TIMING.SYNC_DELAY_MS, 42);
-})();
-
-(function testExpertOnly() {
-    // EXPERT without top-level setting
-    const r = mergeSettings({
-        EXPERT: { GRID_LIMITS: { MIN_ORDER_COUNT: 77 } }
-    }, DEFAULTS);
-    assert.strictEqual(r.GRID_LIMITS.MIN_ORDER_COUNT, 77);
-})();
-
-(function testExpertCommentFiltering() {
-    const r = mergeSettings({
-        EXPERT: { GRID_LIMITS: { MIN_ORDER_COUNT: 55, _comment: 'ignored' } }
-    }, DEFAULTS);
-    assert.strictEqual(r.GRID_LIMITS.MIN_ORDER_COUNT, 55);
-    // _comment filtered (runtime check; return type is Record<string, any>)
-    assert.strictEqual(r.GRID_LIMITS._comment, undefined);
 })();
 
 // =============================================================================

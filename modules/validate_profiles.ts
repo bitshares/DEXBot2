@@ -32,7 +32,6 @@ const PROFILE_AMA_KNOWN_FIELDS = new Set([
 const GENERAL_SETTINGS_KNOWN_FIELDS = new Set([
     ...Object.keys(MERGE_STRATEGIES),
     'NODES',
-    'EXPERT',
 ]);
 
 // Derived from the canonical flag constants so a new flag lands here

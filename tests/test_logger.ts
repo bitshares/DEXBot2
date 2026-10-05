@@ -7,7 +7,7 @@ async function main() {
 console.log('Running logger tests');
 
 const Logger = require('../modules/order/index').default.logger;
-const { createPm2AwareLogger } = require('../modules/order/logger');
+const { createPm2AwareLogger, isPm2LogCaptureActive } = require('../modules/order/logger');
 const { unlink: safeUnlink } = require('../modules/storage').getStorage();
 
 // Capture console output by stream
@@ -84,6 +84,7 @@ process.env.pm_exec_path = 'pm2';
 process.env.pm_out_log_path = '/tmp/dexbot-test.log';
 Config.pm_exec_path = 'pm2';
 Config.pm_out_log_path = '/tmp/dexbot-test.log';
+assert.strictEqual(isPm2LogCaptureActive(), true, 'pm_out_log_path/pm_err_log_path presence must classify PM2 log capture as active');
 assert.strictEqual(createPm2AwareLogger('default').quiet, false, 'PM2-aware logger must NOT auto-quiet: PM2 captures stdout and direct file writes are suppressed');
 assert.strictEqual(createPm2AwareLogger('verbose', { quietUnderPm2: false }).quiet, false, 'explicit quietUnderPm2=false keeps stdout enabled under PM2');
 assert.strictEqual(createPm2AwareLogger('legacy-quiet', { quietUnderPm2: true }).quiet, true, 'explicit quietUnderPm2=true opts back into the legacy silent behaviour');
@@ -106,6 +107,9 @@ assert.strictEqual(fs.existsSync(pm2DirectLogFile), false, 'direct logger file w
 const mgrLogger = new Logger('mgr-pm2', { logFile: path.join(os.tmpdir(), 'mgr-pm2.log') });
 assert.strictEqual(mgrLogger.quiet, false, 'manager-style logger must stay on under PM2');
 
+Config.pm_out_log_path = undefined;
+Config.pm_err_log_path = undefined;
+assert.strictEqual(isPm2LogCaptureActive(), false, 'clearing PM2 log paths must classify PM2 log capture as inactive');
 Config.pm_exec_path = origConfigPmExec;
 Config.pm_out_log_path = origConfigPmOut;
 Config.pm_err_log_path = origConfigPmErr;

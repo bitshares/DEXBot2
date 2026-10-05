@@ -1615,20 +1615,6 @@ class OrderManager implements OrderManagerLike {
         return true;
     }
 
-    /**
-     * Backward-compatible accessor for _currentWorkingGrid.
-     * Returns the top of the working grid stack (null if empty).
-     */
-    get _currentWorkingGrid(): WorkingGrid | null {
-        return this._peekWorkingGrid();
-    }
-
-    set _currentWorkingGrid(val: WorkingGrid | null) {
-        if (val !== null) {
-            this._currentWorkingGridStack.push(val);
-        }
-    }
-
     _peekWorkingGrid(): WorkingGrid | null {
         const stack = this._currentWorkingGridStack;
         return stack.length > 0 ? stack[stack.length - 1] : null;

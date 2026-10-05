@@ -20,19 +20,19 @@ function testNormalizeBotDraftSeedsDefaults() {
   assert.strictEqual(draft.debtPolicy.lending[0].maxFeeRatePerDay, 0.001, 'debtPolicy should survive normalization');
 }
 
-function testNormalizeBotDraftStripsLegacyOffsetFields() {
+function testNormalizeBotDraftPassesThroughUnknownFields() {
   const draft = normalizeBotDraft({
     name: 'test-bot',
     gridPriceOffsetPct: 0.35,
     gridPriceOffsetClampToBounds: true,
   });
-  assert.strictEqual(draft.gridPriceOffsetPct, undefined);
-  assert.strictEqual(draft.gridPriceOffsetClampToBounds, undefined);
+  assert.strictEqual(draft.gridPriceOffsetPct, 0.35);
+  assert.strictEqual(draft.gridPriceOffsetClampToBounds, true);
 }
 
 function main() {
   testNormalizeBotDraftSeedsDefaults();
-  testNormalizeBotDraftStripsLegacyOffsetFields();
+  testNormalizeBotDraftPassesThroughUnknownFields();
   console.log('account bots draft tests passed');
 }
 

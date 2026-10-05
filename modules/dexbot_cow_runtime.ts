@@ -5954,7 +5954,7 @@ async function processBatchResults(bot: BotLike, result: JsonObj, opContexts: Op
         updateOperationCount
     };
 }
-export { isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, executeOperationsWithStrategy, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
+export { isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
 // Exported for regression tests (issue #23 sibling): the uncertain-broadcast
 // discard path must never drop a placement silently when master lost the slot.
 export { restoreDiscardedCreates };
@@ -5980,7 +5980,6 @@ export default {
     executeWithRetryOnUncertain,
     executeChunkedWithRetryOnUncertain,
     formatPartialBroadcastSummary,
-    executeOperationsWithStrategy,
     validateOperationFunds,
     resolveIdealSizeForValidation,
     validateOrderSizeForExecution,

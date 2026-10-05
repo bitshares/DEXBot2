@@ -60,33 +60,10 @@ export interface Deferred<T> {
   reject: (reason?: unknown) => void;
 }
 
-/** Exhaustiveness helper for discriminated unions. */
-export function assertNever(value: never): never {
-  throw new Error(`Unexpected value: ${String(value)}`);
-}
-
 /** Runtime narrowing guard for `UnknownRecord` at I/O boundaries. */
 export function isUnknownRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
-/**
- * An `Error` with optional extra fields attached (error codes, retry
- * metadata, causes). Use this instead of augmenting `any` errors.
- */
-export interface CodedError extends Error {
-  code?: string;
-  [key: string]: unknown;
-}
-
-/**
- * Opt-in branded strings. Brand at the parse/boundary and keep the brand
- * inside the module; do not brand every `string` at once (it cascades).
- */
-declare const __brand: unique symbol;
-export type Brand<T, B extends string> = T & { readonly [__brand]: B };
-export type OrderId = Brand<string, 'OrderId'>;
-export type BotKey = Brand<string, 'BotKey'>;
 
 // ============================================================
 // DOMAIN: BITSHARES CHAIN OBJECTS
@@ -116,15 +93,6 @@ export interface ChainOrder {
   for_sale: number | string;
   expiration?: string;
   [key: string]: unknown;
-}
-
-/** Runtime narrowing guard for chain limit orders. */
-export function isChainOrder(value: unknown): value is ChainOrder {
-  if (typeof value !== 'object' || value === null) return false;
-  const order = value as ChainOrder;
-  return typeof order.id === 'string'
-    && typeof order.sell_price === 'object'
-    && order.sell_price !== null;
 }
 
 /** The result of `parseChainOrder()`: a chain order normalized to grid terms. */

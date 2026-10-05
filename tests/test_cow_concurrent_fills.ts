@@ -78,7 +78,7 @@ async function testFillDuringRebalancingSyncsToWorkingGrid() {
 
     // Simulate entering REBALANCING state
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: manager._gridVersion });
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._setRebalanceState('REBALANCING');
 
     // Simulate a fill arriving (master mutation via _applyOrderUpdate)
@@ -121,7 +121,7 @@ async function testFillDuringBroadcastingSyncsToWorkingGrid() {
 
     // Simulate entering BROADCASTING state (matching production pattern in dexbot_class.ts)
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: manager._gridVersion });
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._setRebalanceState('BROADCASTING');
     manager.startBroadcasting();
 
@@ -163,7 +163,7 @@ async function testCommitRejectedAfterFillDuringBroadcast() {
     // Create working grid and enter BROADCASTING
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: originalVersion });
     workingGrid.set('slot-1', createOrder('slot-1', { price: 1.5, size: 120 }));
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._setRebalanceState('BROADCASTING');
     manager.startBroadcasting();
 
@@ -182,7 +182,7 @@ async function testCommitRejectedAfterFillDuringBroadcast() {
     assert.strictEqual(masterOrder.size, 0, 'master order size should be 0 from fill');
 
     // Verify state was cleaned up
-    assert.strictEqual(manager._currentWorkingGrid, null, 'working grid ref should be cleared');
+    assert.strictEqual(manager._peekWorkingGrid(), null, 'working grid ref should be cleared');
     assert.strictEqual(manager._rebalanceState, 'NORMAL', 'rebalance state should be reset');
 
     // Verify stale commit was logged
@@ -207,7 +207,7 @@ async function testNoSyncWhenNormalState() {
 
     // Simulate having a stale working grid reference but NORMAL state
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: manager._gridVersion });
-    manager._currentWorkingGrid = workingGrid;
+    (manager as any)._currentWorkingGridStack.push(workingGrid);
     manager._rebalanceState = 'NORMAL';
 
     // Apply an update -- should NOT touch working grid
@@ -256,7 +256,7 @@ async function testStalenessIncludesPhaseContext() {
     const orders = [createOrder('slot-1')];
     const { manager: mgr1 } = createManagerFixture(orders);
     const wg1 = new WorkingGrid(mgr1.orders, { baseVersion: mgr1._gridVersion });
-    mgr1._currentWorkingGrid = wg1;
+    (mgr1 as any)._currentWorkingGridStack.push(wg1);
     mgr1._setRebalanceState('REBALANCING');
     await mgr1._applyOrderUpdate({ id: 'slot-1', size: 50 }, 'test');
     assert.ok(wg1.getStaleReason().includes('rebalancing'), 'should include rebalancing');
@@ -265,7 +265,7 @@ async function testStalenessIncludesPhaseContext() {
     // Test BROADCASTING phase
     const { manager: mgr2 } = createManagerFixture(orders);
     const wg2 = new WorkingGrid(mgr2.orders, { baseVersion: mgr2._gridVersion });
-    mgr2._currentWorkingGrid = wg2;
+    (mgr2 as any)._currentWorkingGridStack.push(wg2);
     mgr2._setRebalanceState('BROADCASTING');
     mgr2.startBroadcasting();
     await mgr2._applyOrderUpdate({ id: 'slot-1', size: 50 }, 'test');

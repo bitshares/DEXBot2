@@ -5,7 +5,7 @@
  * Manages multi-bot configuration and metadata.
  *
  * ===============================================================================
- * EXPORTS (5 functions)
+ * EXPORTS (10 functions)
  * ===============================================================================
  *
  * MAIN ENTRY POINT:
@@ -16,11 +16,12 @@
  *   normalizeBotDraft(base) - Normalize a bot configuration draft
  *     Applies defaults and validation to raw bot config entries
  *
- *   parseJsonWithComments(raw) - Parse JSON with comment stripping
- *     (re-exported from ./order/utils/system.js)
+ *   loadGeneralSettings() - Load profiles/general.settings.json
  *
- *   parseCronToDelta(cronString) - Parse a cron expression to { days, time }
- *   deltaToCron(days, time) - Convert { days, time } back to a cron expression
+ * SUPPORTING EXPORTS:
+ *   ensureBotAccountId, parseJsonWithComments, parseBooleanInput,
+ *   colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice,
+ *   isPoolRefClearInput
  *
  * INTERNAL HELPERS (not exported):
  *   ask* prompt family (askString, askNumberWithBounds, askIntegerInRange,
@@ -29,11 +30,12 @@
  *   askMaxPrice, askWeightDistribution, askWeightDistributionNoLegend,
  *   askLogLevel, askUpdaterBranch, askCronSchedule, askBoolean),
  *   loadBotsConfig, saveBotsConfig, listBots, selectBotIndex,
- *   loadGeneralSettings, saveGeneralSettings, isMultiplierString,
+ *   saveGeneralSettings, isMultiplierString,
  *   colorPriceRangeValue, colorMultiplierInput,
  *   isPercentageString, colorPercentageInput,
- *   isDynamicPriceSource, colorStartPriceValue, colorGridPriceValue,
+ *   isDynamicPriceSource, colorStartPriceValue,
  *   colorBooleanFlag,
+ *   parseCronToDelta, deltaToCron,
  *   normalizePercentageInput, promptBotData, promptGeneralSettings
  *
  * ===============================================================================
@@ -1826,5 +1828,5 @@ async function main() {
     console.log('Botmanager closed!');
 }
 
-export { main, normalizeBotDraft, ensureBotAccountId, parseJsonWithComments, parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput, loadGeneralSettings, saveGeneralSettings }
+export { main, normalizeBotDraft, ensureBotAccountId, parseJsonWithComments, parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput, loadGeneralSettings }
 

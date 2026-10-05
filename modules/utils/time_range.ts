@@ -18,4 +18,4 @@ function monthsToHours(months: number): number {
     return Math.max(1, Math.round(months * HOURS_PER_MONTH));
 }
 
-export { HOURS_PER_MONTH, monthsToHours };
+export { monthsToHours };

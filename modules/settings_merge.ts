@@ -289,40 +289,6 @@ function mergeSettings<T extends UnknownRecord>(rawInput: unknown, defaults: T):
         result.NODES = nodesConfig;
     }
 
-    // Backward-compatible EXPERT second-pass overrides (GRID_LIMITS and TIMING only).
-    // These WIN over any top-level setting from the main merge above.
-    const expert = raw.EXPERT;
-    if (isUnknownRecord(expert)) {
-        const expertGridLimits = expert.GRID_LIMITS;
-        if (isUnknownRecord(expertGridLimits)) {
-            const expertGrid = filterCommentKeys(expertGridLimits);
-            const resultGridLimits = result.GRID_LIMITS;
-            const priorComparison = isUnknownRecord(resultGridLimits) ? resultGridLimits.GRID_COMPARISON : undefined;
-            const { GRID_COMPARISON: expertComparison, ...expertRest } = expertGrid;
-            const nextGridLimits: UnknownRecord = {
-                ...(isUnknownRecord(resultGridLimits) ? resultGridLimits : {}),
-                ...expertRest,
-            };
-            if (isUnknownRecord(expertComparison)) {
-                nextGridLimits.GRID_COMPARISON = {
-                    ...(isUnknownRecord(priorComparison) ? priorComparison : {}),
-                    ...expertComparison,
-                };
-            } else if (expertComparison !== undefined && priorComparison !== undefined) {
-                nextGridLimits.GRID_COMPARISON = priorComparison;
-            }
-            result.GRID_LIMITS = nextGridLimits;
-        }
-        const expertTiming = expert.TIMING;
-        if (isUnknownRecord(expertTiming)) {
-            const cleanedTiming = filterCommentKeys(expertTiming);
-            result.TIMING = {
-                ...(isUnknownRecord(result.TIMING) ? result.TIMING : {}),
-                ...cleanedTiming,
-            };
-        }
-    }
-
     return result as T;
 }
 

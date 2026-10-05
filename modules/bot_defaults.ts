@@ -47,9 +47,6 @@ export const DRAFT_SEED_ORDER = [
     'targetSpreadPercent', 'startPrice', 'gridPrice',
 ];
 
-/** Fields with no meaning since the grid-price offset was removed; stripped from drafts. */
-export const LEGACY_DRAFT_KEYS = ['gridPriceOffsetPct', 'gridPriceOffsetClampToBounds'];
-
 /**
  * Spellings that mean "no explicit grid price" — delegate to startPrice.
  * `none`/`null`/`start`/`startprice` are the editor's documented aliases;
@@ -57,7 +54,7 @@ export const LEGACY_DRAFT_KEYS = ['gridPriceOffsetPct', 'gridPriceOffsetClampToB
  * elsewhere in the editor, `s` is shorthand for `startPrice`, and the boolean
  * `false` covers a hand-edited `gridPrice: false`.
  */
-export const GRID_PRICE_UNSET_INPUTS = new Set(['none', 'null', 'start', 'startprice', 's', 'n', 'no', 'false', '0', 'f']);
+const GRID_PRICE_UNSET_INPUTS = new Set(['none', 'null', 'start', 'startprice', 's', 'n', 'no', 'false', '0', 'f']);
 
 /**
  * True when a grid-price value carries no reference and must degrade to the
@@ -130,7 +127,6 @@ export function seedBotDraft(base?: UnknownRecord | null, options: SeedOptions =
             data[key] = def;
         }
     }
-    for (const key of LEGACY_DRAFT_KEYS) delete data[key];
     return data;
 }
 
