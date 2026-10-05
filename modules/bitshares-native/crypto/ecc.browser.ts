@@ -17,31 +17,11 @@
 import { getCrypto } from '../../crypto/index.js';
 import * as pureSecp from '../../crypto/pure_secp256k1.js';
 
-import type { EcPoint } from '../../crypto/provider.js';
-
 import { base58Encode as _base58Encode, base58Decode as _base58Decode, encodeAsync as base58CheckEncode, decodeAsync as base58CheckDecode } from '../../utils/base58check.js';
+import * as core from './ecc_core.js';
 const secp256k1 = pureSecp.secp256k1;
-const pointFromPublicKey = pureSecp.pointFromPublicKey;
-const publicKeyFromPoint = pureSecp.publicKeyFromPoint;
-const ecPointMul = pureSecp.ecPointMul;
-const ecPointAdd = pureSecp.ecPointAdd;
-const ecPointDouble = pureSecp.ecPointDouble;
-const modPow = pureSecp.modPow;
-const modInverse = pureSecp.modInverse;
-const mod = pureSecp.mod;
-const bytesFromHex = pureSecp.bytesFromHex;
 const concatBytes = pureSecp.concatBytes;
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-function equalsBuf(a: Uint8Array, b: Uint8Array): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-    return true;
-}
-
-// ── Curve constants ─────────────────────────────────────────────────
-const SECP256K1_BASE_POINT: EcPoint = { x: secp256k1.Gx, y: secp256k1.Gy };
 // ── Hashing (async, via CryptoProvider) ─────────────────────────────
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
@@ -83,9 +63,7 @@ function bufferFromBigInt(bn: bigint, length = 32): Uint8Array {
 }
 
 function isValidPrivateKey(rawKey: Uint8Array): boolean {
-    if (rawKey.length !== 32) return false;
-    const keyInt = bigIntFromBuffer(rawKey);
-    return keyInt > 0n && keyInt < secp256k1.n;
+    return core.isValidPrivateKeyBytes(rawKey);
 }
 
 async function generatePrivateKey(): Promise<Uint8Array> {
@@ -144,33 +122,7 @@ async function deterministicK(digest: Uint8Array, privateKey: Uint8Array, counte
 // ── Recovery ────────────────────────────────────────────────────────
 
 function recoverPublicKey(digest: Uint8Array, r: Uint8Array, s: Uint8Array, recoveryId: number): Uint8Array {
-    const n = secp256k1.n;
-    const rBig = bigIntFromBuffer(r);
-    const sBig = bigIntFromBuffer(s);
-    const e = bigIntFromBuffer(digest) % n;
-
-    if (rBig < 1n || rBig >= n || sBig < 1n || sBig >= n) throw new Error('Invalid signature parameters');
-
-    const isYOdd = recoveryId & 1;
-    const recoveryGroup = recoveryId >> 1;
-    const x = rBig + BigInt(recoveryGroup) * n;
-    if (x >= secp256k1.p) throw new Error('Invalid recovery point');
-
-    const alpha = (x * x * x + secp256k1.a * x + secp256k1.b) % secp256k1.p;
-    let y = modPow(alpha, (secp256k1.p + 1n) / 4n, secp256k1.p);
-    if ((y & 1n) !== BigInt(isYOdd)) y = secp256k1.p - y;
-
-    const R: EcPoint = { x, y };
-    const rInv = modInverse(rBig, n);
-    const eNeg = (n - (e % n)) % n;
-    const sr = ecPointMul(R, sBig);
-    const eGNeg = ecPointMul(SECP256K1_BASE_POINT, eNeg);
-    if (!sr || !eGNeg) throw new Error('Failed to compute recovery terms');
-    const sum = ecPointAdd(sr, eGNeg);
-    if (!sum) throw new Error('Failed to recover public key point');
-    const Q = ecPointMul(sum, rInv);
-    if (!Q) throw new Error('Failed to recover public key');
-    return publicKeyFromPoint(Q);
+    return core.recoverPublicKeyBytes(digest, r, s, recoveryId);
 }
 
 // ── Sign / Verify ───────────────────────────────────────────────────
@@ -179,69 +131,22 @@ async function sign(digest: Uint8Array, privateKey: Uint8Array): Promise<Uint8Ar
     if (digest.length !== 32) throw new Error('Digest must be 32 bytes');
     if (privateKey.length !== 32) throw new Error('Private key must be 32 bytes');
 
-    const d = bigIntFromBuffer(privateKey);
-    const e = bigIntFromBuffer(digest) % secp256k1.n;
-    const nHalf = secp256k1.n >> 1n;
     const pubKeyKnown = await privateKeyToPublicKey(privateKey, true);
 
     const MAX_SIGN_RETRIES = 256;
     let nonce = 0;
     while (nonce < MAX_SIGN_RETRIES) {
         const k = await deterministicK(digest, privateKey, nonce);
-        if (k === 0n) { nonce++; continue; }
-        const R = ecPointMul(SECP256K1_BASE_POINT, k);
-        const rBig = R ? R.x % secp256k1.n : 0n;
-        if (!R || rBig === 0n) { nonce++; continue; }
-
-        let sBig = mod(modInverse(k, secp256k1.n) * (e + rBig * d), secp256k1.n);
-        if (sBig === 0n) { nonce++; continue; }
-
-        let recoveryId = (R.y & 1n) === 1n ? 1 : 0;
-        if (R.x >= secp256k1.n) recoveryId |= 2;
-        if (sBig > nHalf) { sBig = secp256k1.n - sBig; recoveryId ^= 1; }
-
-        const rBuf = bufferFromBigInt(rBig, 32);
-        const sBuf = bufferFromBigInt(sBig, 32);
-
-        if (!(rBuf[0] < 0x80 && (rBuf[0] !== 0 || rBuf[1] >= 0x80))) { nonce++; continue; }
-        if (!(sBuf[0] < 0x80 && (sBuf[0] !== 0 || sBuf[1] >= 0x80))) { nonce++; continue; }
-
-        for (let i = 0; i < 4; i++) {
-            try {
-                const recovered = recoverPublicKey(digest, rBuf, sBuf, i);
-                if (equalsBuf(recovered, pubKeyKnown)) { recoveryId = i; break; }
-            } catch (_) {}
-        }
-        if (recoveryId < 0 || recoveryId > 3) { nonce++; continue; }
-
-        const compactI = recoveryId + 27 + 4;
-        return concatBytes(new Uint8Array([compactI]), rBuf, sBuf);
+        const signature = core.buildSignatureFromK(digest, privateKey, pubKeyKnown, k);
+        if (signature) return signature;
+        nonce++;
     }
     throw new Error(`Failed to produce valid signature after ${MAX_SIGN_RETRIES} retries`);
 }
 
 async function verify(digest: Uint8Array, signature: Uint8Array, publicKey: Uint8Array | string): Promise<boolean> {
     if (digest.length !== 32) throw new Error('Digest must be 32 bytes');
-
-    let r: Uint8Array;
-    let s: Uint8Array;
-    if (signature.length === 65) { r = signature.slice(1, 33); s = signature.slice(33, 65); }
-    else if (signature.length === 64) { r = signature.slice(0, 32); s = signature.slice(32, 64); }
-    else throw new Error('Invalid signature length: ' + signature.length);
-
-    const rBig = bigIntFromBuffer(r);
-    const sBig = bigIntFromBuffer(s);
-    if (rBig <= 0n || rBig >= secp256k1.n || sBig <= 0n || sBig >= secp256k1.n) return false;
-
-    const pubBuf = typeof publicKey === 'string' ? bytesFromHex(publicKey) : publicKey;
-    const Q = pointFromPublicKey(pubBuf);
-    const e = bigIntFromBuffer(digest) % secp256k1.n;
-    const w = modInverse(sBig, secp256k1.n);
-    const u1 = mod(e * w, secp256k1.n);
-    const u2 = mod(rBig * w, secp256k1.n);
-    const point = ecPointAdd(ecPointMul(SECP256K1_BASE_POINT, u1), ecPointMul(Q, u2));
-    if (!point) return false;
-    return mod(point.x, secp256k1.n) === rBig;
+    return core.verifyBytes(digest, signature, publicKey);
 }
 
 // ── Base58 (wrappers around shared utils) ───────────────────────────
@@ -269,47 +174,17 @@ async function wifEncode(privateKey: Uint8Array, compressed = true): Promise<str
 }
 
 async function wifDecode(wif: string): Promise<WifDecodeResult> {
-    const payload = await base58CheckDecode(wif);
-    if (payload.length < 33) throw new Error('Invalid WIF: too short');
-    if (payload[0] !== 0x80) throw new Error('Invalid WIF: wrong version byte');
-    const compressed = payload.length === 34 && payload[33] === 0x01;
-    const privateKey = payload.slice(1, 33);
-    if (!isValidPrivateKey(privateKey)) throw new Error('Invalid WIF: invalid private key');
-    return { privateKey, compressed };
+    return core.wifDecodePayload(await base58CheckDecode(wif));
 }
 
 // ── DER encoding ────────────────────────────────────────────────────
 
 function buildPublicKeyDer(compressedPub: Uint8Array): Uint8Array {
-    let point: Uint8Array;
-    if (compressedPub.length === 64) {
-        point = concatBytes(new Uint8Array([0x04]), compressedPub);
-    } else if (compressedPub.length === 33) {
-        const prefix = compressedPub[0];
-        const x = bigIntFromBuffer(compressedPub.slice(1, 33));
-        const x3 = x * x * x;
-        const ySq = (x3 + secp256k1.b) % secp256k1.p;
-        let y = modPow(ySq, (secp256k1.p + 1n) / 4n, secp256k1.p);
-        if ((y & 1n) !== BigInt(prefix === 0x03)) y = secp256k1.p - y;
-        point = concatBytes(new Uint8Array([0x04]), bufferFromBigInt(x, 32), bufferFromBigInt(y, 32));
-    } else if (compressedPub.length === 65) {
-        point = compressedPub;
-    } else {
-        throw new Error('Unsupported public key length: ' + compressedPub.length);
-    }
-    const seqHeader = bytesFromHex('3056301006072a8648ce3d020106052b8104000a034200');
-    return concatBytes(seqHeader, point);
+    return core.buildPublicKeyDer(compressedPub);
 }
 
 function buildSignatureDer(r: Uint8Array, s: Uint8Array): Uint8Array {
-    const encodeInt = (buf: Uint8Array): Uint8Array => {
-        let data = buf;
-        if (data[0] & 0x80) data = concatBytes(new Uint8Array([0x00]), data);
-        return concatBytes(new Uint8Array([0x02, data.length]), data);
-    };
-    const rEnc = encodeInt(r);
-    const sEnc = encodeInt(s);
-    return concatBytes(new Uint8Array([0x30, rEnc.length + sEnc.length]), rEnc, sEnc);
+    return core.buildSignatureDer(r, s);
 }
 
 // ── Brain key ───────────────────────────────────────────────────────

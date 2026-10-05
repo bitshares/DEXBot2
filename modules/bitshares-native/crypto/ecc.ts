@@ -2,21 +2,20 @@
 
 import { createHash, createHmac, randomBytes as cryptoRandomBytes, createECDH } from '../../crypto/sync.js';
 import { base58Encode as _base58Encode, base58Decode as _base58Decode, encode as base58CheckEncode, decode as _base58CheckDecode } from '../../utils/base58check.js';
-import { getErrorMessage } from '../../utils/errors.js';
-import type { EcPoint } from '../../crypto/provider.js';
 import {
     secp256k1,
-    SECP256K1_BASE_POINT,
     bigIntFromBuffer,
     bufferFromBigInt,
-    mod,
-    modPow,
-    modInverse,
-    ecPointMul,
-    ecPointAdd,
-    pointFromPublicKey,
-    publicKeyFromPoint as _publicKeyFromPoint,
 } from '../../crypto/pure_secp256k1.js';
+import {
+    isValidPrivateKeyBytes,
+    recoverPublicKeyBytes,
+    verifyBytes,
+    buildSignatureFromK,
+    buildPublicKeyDer as buildPublicKeyDerCore,
+    buildSignatureDer as buildSignatureDerCore,
+    wifDecodePayload,
+} from './ecc_core.js';
 
 interface WifDecodeResult {
     privateKey: Buffer;
@@ -61,8 +60,7 @@ function generatePrivateKey(): Buffer {
 
 function isValidPrivateKey(rawKey: Buffer): boolean {
     if (!Buffer.isBuffer(rawKey) || rawKey.length !== 32) return false;
-    const keyInt = BigInt('0x' + rawKey.toString('hex'));
-    return keyInt > 0n && keyInt < secp256k1.n;
+    return isValidPrivateKeyBytes(rawKey);
 }
 
 function privateKeyToPublicKey(rawKey: Buffer, compressed = true): Buffer {
@@ -79,10 +77,6 @@ function publicKeyFromBuffer(pubKeyBuffer: Buffer): Buffer {
         throw new Error('public key must be a Buffer');
     }
     return pubKeyBuffer;
-}
-
-function publicKeyFromPoint(point: EcPoint): Buffer {
-    return Buffer.from(_publicKeyFromPoint(point));
 }
 
 function deterministicK(digest: Buffer, privateKey: Buffer, counter = 0): bigint {
@@ -124,47 +118,7 @@ function deterministicK(digest: Buffer, privateKey: Buffer, counter = 0): bigint
 }
 
 function recoverPublicKey(digest: Buffer, r: Buffer, s: Buffer, recoveryId: number): Buffer {
-    const n = secp256k1.n;
-    const rBig = bigIntFromBuffer(r);
-    const sBig = bigIntFromBuffer(s);
-    const e = bigIntFromBuffer(digest) % n;
-
-    if (rBig < 1n || rBig >= n || sBig < 1n || sBig >= n) {
-        throw new Error('Invalid signature parameters');
-    }
-
-    const isYOdd = recoveryId & 1;
-    const recoveryGroup = recoveryId >> 1;
-    const x = rBig + BigInt(recoveryGroup) * n;
-    if (x >= secp256k1.p) {
-        throw new Error('Invalid recovery point');
-    }
-
-    const alpha = (x * x * x + secp256k1.a * x + secp256k1.b) % secp256k1.p;
-    let y = modPow(alpha, (secp256k1.p + 1n) / 4n, secp256k1.p);
-
-    if ((y & 1n) !== BigInt(isYOdd)) {
-        y = secp256k1.p - y;
-    }
-
-    const R: EcPoint = { x, y };
-
-    const rInv = modInverse(rBig, n);
-    const eNeg = (n - (e % n)) % n;
-    const sr = ecPointMul(R, sBig);
-    const eGNeg = ecPointMul(SECP256K1_BASE_POINT, eNeg);
-    const sum = ecPointAdd(sr, eGNeg);
-    if (!sum) {
-        throw new Error('Failed to recover public key point');
-    }
-    const Q = ecPointMul(
-        sum,
-        rInv
-    );
-    if (!Q) {
-        throw new Error('Failed to recover public key');
-    }
-    return publicKeyFromPoint(Q);
+    return Buffer.from(recoverPublicKeyBytes(digest, r, s, recoveryId));
 }
 
 function sign(digest: Buffer, privateKey: Buffer): Buffer {
@@ -175,66 +129,15 @@ function sign(digest: Buffer, privateKey: Buffer): Buffer {
         throw new Error('Private key must be 32 bytes');
     }
 
-    const d = bigIntFromBuffer(privateKey);
-    const e = bigIntFromBuffer(digest) % secp256k1.n;
-    const nHalf = secp256k1.n >> 1n;
     const pubKeyKnown = privateKeyToPublicKey(privateKey, true);
 
     const MAX_SIGN_RETRIES = 256;
     let nonce = 0;
     while (nonce < MAX_SIGN_RETRIES) {
         const k = deterministicK(digest, privateKey, nonce);
-        const R = ecPointMul(SECP256K1_BASE_POINT, k);
-        const rBig = R ? R.x % secp256k1.n : 0n;
-
-        if (!R || rBig === 0n) {
-            nonce++;
-            continue;
-        }
-
-        let sBig = mod(modInverse(k, secp256k1.n) * (e + rBig * d), secp256k1.n);
-        if (sBig === 0n) {
-            nonce++;
-            continue;
-        }
-
-        let recoveryId = (R.y & 1n) === 1n ? 1 : 0;
-        if (R.x >= secp256k1.n) {
-            recoveryId |= 2;
-        }
-        if (sBig > nHalf) {
-            sBig = secp256k1.n - sBig;
-            recoveryId ^= 1;
-        }
-
-        const rBuf = Buffer.from(bufferFromBigInt(rBig, 32));
-        const sBuf = Buffer.from(bufferFromBigInt(sBig, 32));
-
-        if (!(rBuf[0] < 0x80 && (rBuf[0] !== 0 || rBuf[1] >= 0x80))) {
-            nonce++;
-            continue;
-        }
-        if (!(sBuf[0] < 0x80 && (sBuf[0] !== 0 || sBuf[1] >= 0x80))) {
-            nonce++;
-            continue;
-        }
-
-        for (let i = 0; i < 4; i++) {
-            try {
-                const recovered = recoverPublicKey(digest, rBuf, sBuf, i);
-                if (Buffer.isBuffer(recovered) && recovered.equals(pubKeyKnown)) {
-                    recoveryId = i;
-                    break;
-                }
-            } catch (err) { console.warn('[ecc]', 'recoverPublicKey failed:', getErrorMessage(err)); }
-        }
-        if (recoveryId < 0 || recoveryId > 3) {
-            nonce++;
-            continue;
-        }
-
-        const compactI = recoveryId + 27 + 4;
-        return Buffer.concat([Buffer.from([compactI]), rBuf, sBuf]);
+        const signature = buildSignatureFromK(digest, privateKey, pubKeyKnown, k);
+        if (signature) return Buffer.from(signature);
+        nonce++;
     }
     throw new Error(`Failed to produce valid signature after ${MAX_SIGN_RETRIES} retries`);
 }
@@ -243,92 +146,15 @@ function verify(digest: Buffer, signature: Buffer, publicKey: Buffer | string): 
     if (!Buffer.isBuffer(digest) || digest.length !== 32) {
         throw new Error('Digest must be 32 bytes');
     }
-
-    let r: Buffer;
-    let s: Buffer;
-    if (signature.length === 65) {
-        r = signature.slice(1, 33);
-        s = signature.slice(33, 65);
-    } else if (signature.length === 64) {
-        r = signature.slice(0, 32);
-        s = signature.slice(32, 64);
-    } else {
-        throw new Error('Invalid signature length: ' + signature.length);
-    }
-
-    const rBig = bigIntFromBuffer(r);
-    const sBig = bigIntFromBuffer(s);
-    if (rBig <= 0n || rBig >= secp256k1.n || sBig <= 0n || sBig >= secp256k1.n) {
-        return false;
-    }
-
-    const pubBuf = Buffer.isBuffer(publicKey) ? publicKey : Buffer.from(publicKey, 'hex');
-    const Q = pointFromPublicKey(pubBuf);
-    const e = bigIntFromBuffer(digest) % secp256k1.n;
-    const w = modInverse(sBig, secp256k1.n);
-    const u1 = mod(e * w, secp256k1.n);
-    const u2 = mod(rBig * w, secp256k1.n);
-    const point = ecPointAdd(
-        ecPointMul(SECP256K1_BASE_POINT, u1),
-        ecPointMul(Q, u2)
-    );
-
-    if (!point) {
-        return false;
-    }
-
-    return mod(point.x, secp256k1.n) === rBig;
+    return verifyBytes(digest, signature, publicKey);
 }
 
 function buildPublicKeyDer(compressedPub: Buffer): Buffer {
-    let point: Buffer;
-    if (compressedPub.length === 64) {
-        point = Buffer.concat([Buffer.from([0x04]), compressedPub]);
-    } else if (compressedPub.length === 33) {
-        const prefix = compressedPub[0];
-        const x = bigIntFromBuffer(compressedPub.slice(1, 33));
-        const x3 = x * x * x;
-        const ySq = (x3 + secp256k1.b) % secp256k1.p;
-        let y = modPow(ySq, (secp256k1.p + 1n) / 4n, secp256k1.p);
-        const isOdd = (prefix === 0x03);
-        if ((y & 1n) !== BigInt(isOdd)) {
-            y = secp256k1.p - y;
-        }
-        point = Buffer.concat([
-            Buffer.from([0x04]),
-            bufferFromBigInt(x, 32),
-            bufferFromBigInt(y, 32),
-        ]);
-    } else if (compressedPub.length === 65) {
-        point = compressedPub;
-    } else {
-        throw new Error('Unsupported public key length: ' + compressedPub.length);
-    }
-
-    const seqHeader = Buffer.from('3056301006072a8648ce3d020106052b8104000a034200', 'hex');
-    return Buffer.concat([seqHeader, point]);
+    return Buffer.from(buildPublicKeyDerCore(compressedPub));
 }
 
 function buildSignatureDer(r: Buffer, s: Buffer): Buffer {
-    const encodeInt = (buf: Buffer): Buffer => {
-        let data = buf;
-        if (data[0] & 0x80) {
-            data = Buffer.concat([Buffer.from([0x00]), data]);
-        }
-        return Buffer.concat([
-            Buffer.from([0x02, data.length]),
-            data,
-        ]);
-    };
-
-    const rEnc = encodeInt(r);
-    const sEnc = encodeInt(s);
-
-    return Buffer.concat([
-        Buffer.from([0x30, rEnc.length + sEnc.length]),
-        rEnc,
-        sEnc,
-    ]);
+    return Buffer.from(buildSignatureDerCore(r, s));
 }
 
 function wifEncode(privateKey: Buffer, compressed = true): string {
@@ -344,19 +170,8 @@ function wifEncode(privateKey: Buffer, compressed = true): string {
 }
 
 function wifDecode(wif: string): WifDecodeResult {
-    const payload = base58CheckDecode(wif);
-    if (!payload || payload.length < 33) {
-        throw new Error('Invalid WIF: too short');
-    }
-    if (payload[0] !== 0x80) {
-        throw new Error('Invalid WIF: wrong version byte');
-    }
-    const compressed = payload.length === 34 && payload[33] === 0x01;
-    const privateKey = payload.slice(1, 33);
-    if (!isValidPrivateKey(privateKey)) {
-        throw new Error('Invalid WIF: invalid private key');
-    }
-    return { privateKey, compressed };
+    const { privateKey, compressed } = wifDecodePayload(base58CheckDecode(wif));
+    return { privateKey: Buffer.from(privateKey), compressed };
 }
 
 function base58Encode(buf: Buffer): string {

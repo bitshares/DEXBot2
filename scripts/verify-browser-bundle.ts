@@ -221,6 +221,14 @@ const TESTS: BundleTest[] = [
     externalizeNodeBuiltins: true,
   },
   {
+    // Guards the shared ECC core and its browser entry now that ecc.browser.ts
+    // delegates its curve math to modules/bitshares-native/crypto/ecc_core.ts.
+    label: 'modules/bitshares-native/crypto/ecc.browser.ts (browser-safe)',
+    entry: 'modules/bitshares-native/crypto/ecc.browser.ts',
+    expectFail: false,
+    externalizeNodeBuiltins: true,
+  },
+  {
     label: 'modules/utils/base58check.ts (browser-safe)',
     entry: 'modules/utils/base58check.ts',
     expectFail: false,
