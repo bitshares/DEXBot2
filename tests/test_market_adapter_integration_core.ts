@@ -50,7 +50,7 @@ console.log('Running market_adapter integration core tests (BitShares Core 7.0.x
         quote_volume: '100000'
     }];
     
-    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB, 3600);
+    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB);
     assert.strictEqual(candles.length, 1);
     const [ts, open, high, low, close, volume] = candles[0];
     
@@ -86,7 +86,7 @@ console.log('Running market_adapter integration core tests (BitShares Core 7.0.x
     const assetA = { id: '1.3.1', precision: 4 };
     const assetB = { id: '1.3.0', precision: 5 };
     
-    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB, 3600);
+    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB);
     assert.strictEqual(candles[0][0], 1778330400000, '10-digit epoch should be converted to ms');
 }
 
@@ -121,7 +121,7 @@ console.log('Running market_adapter integration core tests (BitShares Core 7.0.x
         }
     ];
     
-    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB, 3600);
+    const candles = normalizeNativeMarketHistoryCandles(history, assetA, assetB);
     assert.strictEqual(candles.length, 1, 'Candle with 0 open_base should be skipped');
     assert.strictEqual(candles[0][5], 0, 'Candle with zero volume should be kept with volume 0');
 }

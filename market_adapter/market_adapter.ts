@@ -1226,7 +1226,7 @@ async function fetchNativeMarketHistorySince(assetA: unknown, assetB: unknown, s
         throw new Error('native market history source unavailable');
     }
 
-    let candles = normalizeNativeMarketHistoryCandles(history, a as Parameters<typeof normalizeNativeMarketHistoryCandles>[1], b as Parameters<typeof normalizeNativeMarketHistoryCandles>[2], intervalSeconds);
+    let candles = normalizeNativeMarketHistoryCandles(history, a as Parameters<typeof normalizeNativeMarketHistoryCandles>[1], b as Parameters<typeof normalizeNativeMarketHistoryCandles>[2]);
     if (candles.length > 0 && typeof options.fillCandleGaps === 'function') {
         candles = options.fillCandleGaps(candles, intervalSeconds) as typeof candles;
     }

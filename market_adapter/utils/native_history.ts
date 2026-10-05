@@ -128,7 +128,7 @@ function resolveNativeMarketHistoryRatio(entry: HistoryEntry, field: string, ass
     return Number.NaN;
 }
 
-function normalizeNativeMarketHistoryCandles(history: unknown, assetA: NativeHistoryAssetMeta, assetB: NativeHistoryAssetMeta, _intervalSeconds: unknown): NativeHistoryCandle[] {
+function normalizeNativeMarketHistoryCandles(history: unknown, assetA: NativeHistoryAssetMeta, assetB: NativeHistoryAssetMeta): NativeHistoryCandle[] {
     const historyRecord = isUnknownRecord(history) ? history : undefined;
     const source: unknown[] = Array.isArray(history)
         ? history

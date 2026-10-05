@@ -45,17 +45,17 @@ const MAX_DETAIL_ROWS = 2000;
 /**
  * Numbers go through the shared `formatFundsValue` (4 significant figures,
  * K/M compaction, significant trailing zeros kept) so the report matches
- * `dexbot order` instead of printing 8-decimal tails. The legacy `decimals`
- * argument is retained for call-site compatibility but ignored.
+ * `dexbot order` instead of printing 8-decimal tails. Per-value precision is
+ * fixed by the shared formatter, so callers pass no decimals.
  */
-function num(n: number, _decimals = 4): string {
+function num(n: number): string {
     return Number.isFinite(n) ? formatFundsValue(n) : 'NaN';
 }
 
-function signed(n: number, decimals = 4): string {
+function signed(n: number): string {
     if (!Number.isFinite(n)) return 'NaN';
-    if (n === 0) return num(0, decimals);
-    return (n >= 0 ? '+' : '') + num(n, decimals);
+    if (n === 0) return num(0);
+    return (n >= 0 ? '+' : '') + num(n);
 }
 
 function pct(n: number, decimals = 2): string {
@@ -106,18 +106,18 @@ function renderMetrics(metrics: TradingMetrics, quoteSymbol: string): string {
         metricRow('Profit factor', ratio(metrics.profitFactor)),
         metricRow('Avg win / avg loss', ratio(metrics.avgWinLossRatio)),
         metricRow('Fee drag', metrics.feeDragPct > 0 ? metrics.feeDragPct.toFixed(2) + '% of gross profit' : '—'),
-        metricRow('Expectancy (net)', `${num(metrics.netExpectancyBts, 4)} ${q} / trade`),
-        metricRow('Expectancy (gross)', `${num(metrics.expectancyBts, 4)} ${q} (${pct(metrics.expectancyPct)})`),
+        metricRow('Expectancy (net)', `${num(metrics.netExpectancyBts)} ${q} / trade`),
+        metricRow('Expectancy (gross)', `${num(metrics.expectancyBts)} ${q} (${pct(metrics.expectancyPct)})`),
         metricRow('Expectancy (R)', metrics.expectancyR === Infinity ? '∞' : metrics.expectancyR.toFixed(3) + 'R'),
     ].join('');
 
     const risk = [
         metricRow('Sharpe (annualised)', `${ratio(metrics.sharpeAnn)}${Number.isFinite(metrics.sharpeAnnSE) ? ` ± ${metrics.sharpeAnnSE.toFixed(2)}` : ''}`, `${metrics.periodLabel} bins, n=${metrics.periodCount}`),
         metricRow('Sortino (annualised)', ratio(metrics.sortinoAnn) + (metrics.sortinoAnn === Infinity ? ' (no losing periods)' : '')),
-        metricRow('Projected net PnL', `${num(metrics.projectedNetPnlAnn, 2)} ${q}/yr`, `${num(metrics.projectedNetPnlPerDay, 2)}/day`),
+        metricRow('Projected net PnL', `${num(metrics.projectedNetPnlAnn)} ${q}/yr`, `${num(metrics.projectedNetPnlPerDay)}/day`),
         metrics.mddHadStablePeak
-            ? metricRow('Max drawdown', `${num(metrics.mddAbsBts, 4)} ${q} (${pct(metrics.mddPct)})`)
-            : metricRow('Min equity', `${num(metrics.prePeakMinEquity, 4)} ${q}`),
+            ? metricRow('Max drawdown', `${num(metrics.mddAbsBts)} ${q} (${pct(metrics.mddPct)})`)
+            : metricRow('Min equity', `${num(metrics.prePeakMinEquity)} ${q}`),
         metricRow('Max recovery time', metrics.maxRecoveryDays > 0 ? metrics.maxRecoveryDays.toFixed(1) + ' days' + (metrics.isOngoingRecovery ? ' (ongoing)' : '') : '—'),
         metrics.currentDrawdownDays > 0
             ? metricRow('Current drawdown', metrics.currentDrawdownDays.toFixed(1) + ' days (active)')
@@ -141,7 +141,7 @@ function renderMetrics(metrics: TradingMetrics, quoteSymbol: string): string {
         metricRow('Partial fills / order', `${metrics.fillsPerOrderMean.toFixed(2)} mean, ${metrics.fillsPerOrderMedian.toFixed(1)} med, ${metrics.fillsPerOrderMax} max`),
         metricRow('One-shot orders', `${(metrics.oneShotOrderRatio * 100).toFixed(0)}%`),
         metricRow('Fills / day', metrics.fillsPerDay.toFixed(2)),
-        metricRow('Avg volume / day', `${num(metrics.avgVolumePerDay, 2)} ${q}`),
+        metricRow('Avg volume / day', `${num(metrics.avgVolumePerDay)} ${q}`),
     ].join('');
 
     return `
@@ -165,14 +165,14 @@ function renderPairsTable(pair: PairAnalysis, quoteSymbol: string): string {
             <td class="num">${i + 1}</td>
             <td>${escapeHtml((r.entryTime || '').slice(0, 19).replace('T', ' '))}</td>
             <td>${escapeHtml((r.exitTime || '').slice(0, 19).replace('T', ' '))}</td>
-            <td class="num">${num(r.amount, 4)}</td>
-            <td class="num">${num(r.buyPrice, 8)}</td>
-            <td class="num">${num(r.sellPrice, 8)}</td>
-            <td class="num ${pnlClass(r.pnl)}">${signed(r.pnl, 6)}</td>
+            <td class="num">${num(r.amount)}</td>
+            <td class="num">${num(r.buyPrice)}</td>
+            <td class="num">${num(r.sellPrice)}</td>
+            <td class="num ${pnlClass(r.pnl)}">${signed(r.pnl)}</td>
             <td class="num ${pnlClass(r.pnlPct)}">${pct(r.pnlPct)}</td>
-            <td class="num">${num(r.marketFeeEntry + r.marketFeeExit, 4)}</td>
-            <td class="num">${num(r.feeBts, 4)}</td>
-            <td class="num ${pnlClass(net)}">${signed(net, 6)}</td>
+            <td class="num">${num(r.marketFeeEntry + r.marketFeeExit)}</td>
+            <td class="num">${num(r.feeBts)}</td>
+            <td class="num ${pnlClass(net)}">${signed(net)}</td>
             <td class="num ${pnlClass(r.pnlNetPct)}">${pct(r.pnlNetPct)}</td>
             <td class="center">${legs}</td>
         </tr>`;
@@ -218,27 +218,27 @@ function renderPairSection(entry: PnlReportPair): string {
     const hasMarketFee = pair.totalMarketFees > 0.0001;
     const hasChainFee = pair.totalBlockchainFees > 0.0001;
     const feeCard = hasMarketFee && hasChainFee
-        ? statCard('Fees', `${num(-pair.totalMarketFees, 4)} ${q}`, `op ${num(-pair.totalBlockchainFees, 4)} BTS`, 'neg')
+        ? statCard('Fees', `${num(-pair.totalMarketFees)} ${q}`, `op ${num(-pair.totalBlockchainFees)} BTS`, 'neg')
         : hasChainFee
-            ? statCard('Blockchain fees', `${num(-pair.totalBlockchainFees, 4)} BTS`, '', 'neg')
+            ? statCard('Blockchain fees', `${num(-pair.totalBlockchainFees)} BTS`, '', 'neg')
             : hasMarketFee
-                ? statCard('Market fees', `${num(-pair.totalMarketFees, 4)} ${q}`, '', 'neg')
+                ? statCard('Market fees', `${num(-pair.totalMarketFees)} ${q}`, '', 'neg')
                 : '';
 
     // Two 2x2 blocks: PnL/volume/fees, then position/activity. A 2-column grid
     // keeps each card readable instead of squeezing six across one row.
     const pnlCards = [
-        statCard('Gross PnL', `${signed(pair.totalRealizedPnl, 4)} ${q}`, '', pnlClass(pair.totalRealizedPnl)),
-        statCard('Net PnL', `${signed(pair.totalRealizedPnlNet, 4)} ${q}`, 'after market + op fees', pnlClass(pair.totalRealizedPnlNet)),
-        statCard('Volume', `${num(pair.totalBuyQuote + pair.totalSellQuote, 4)} ${q}`, `${num(pair.totalBuyQuote, 4)} bought · ${num(pair.totalSellQuote, 4)} sold`),
+        statCard('Gross PnL', `${signed(pair.totalRealizedPnl)} ${q}`, '', pnlClass(pair.totalRealizedPnl)),
+        statCard('Net PnL', `${signed(pair.totalRealizedPnlNet)} ${q}`, 'after market + op fees', pnlClass(pair.totalRealizedPnlNet)),
+        statCard('Volume', `${num(pair.totalBuyQuote + pair.totalSellQuote)} ${q}`, `${num(pair.totalBuyQuote)} bought · ${num(pair.totalSellQuote)} sold`),
         feeCard,
     ].filter(Boolean).join('');
 
     const positionCards = [
         statCard('Realized lots', String(pair.realizedPnls.length), `from ${pair.buys.length} buys · ${pair.sells.length} sells`),
-        statCard('Net inventory \u0394', `${num(pair.netPosition, 4)} ${base}`, 'bought \u2212 sold in window'),
-        statCard('Avg buy / sell', `${num(avgBuy, 8)} / ${num(avgSell, 8)}`, `in ${q} per ${base}`),
-        pair.unmatchedSellBase > 0.0001 ? statCard('Unmatched sold', `${num(pair.unmatchedSellBase, 4)} ${base}`, 'inventory predates window', 'muted') : '',
+        statCard('Net inventory \u0394', `${num(pair.netPosition)} ${base}`, 'bought \u2212 sold in window'),
+        statCard('Avg buy / sell', `${num(avgBuy)} / ${num(avgSell)}`, `in ${q} per ${base}`),
+        pair.unmatchedSellBase > 0.0001 ? statCard('Unmatched sold', `${num(pair.unmatchedSellBase)} ${base}`, 'inventory predates window', 'muted') : '',
     ].filter(Boolean).join('');
 
     return `
@@ -273,8 +273,8 @@ function renderTotals(pairs: PnlReportPair[]): string {
         const quote = escapeHtml(assetSymbol(quoteAsset));
         return statCard(
             `Total (${quote}) · ${group.length} pair${group.length === 1 ? '' : 's'}`,
-            `${signed(net, 4)} ${quote}`,
-            `gross ${signed(gross, 4)} · mkt fees ${num(fees, 4)} · ${lots} lots`,
+            `${signed(net)} ${quote}`,
+            `gross ${signed(gross)} · mkt fees ${num(fees)} · ${lots} lots`,
             pnlClass(net),
         );
     }).join('');

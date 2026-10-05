@@ -190,7 +190,7 @@ function findStartLambda(metricCache: MetricEntry[], maxSlow: number, lambdaEnd:
 
 // ── HTML Chart (λ → Slow) ──────────────────────────────────────────────────────
 
-function generateChartHtml(results: BestEntry[], metricCache: MetricEntry[], fixEr: number, fixFast: number, dataLabel: string, _chartOutPath: string): string {
+function generateChartHtml(results: BestEntry[], metricCache: MetricEntry[], fixEr: number, fixFast: number, dataLabel: string): string {
     const xs = results.map((r) => r.lambda);
     const ys = results.map((r) => r.slow);
     const dist = results.map((r) => r.distance);
@@ -246,12 +246,8 @@ ${uplotInlineTags()}
   const slow = ${JSON.stringify(ys)};
   const dist = ${JSON.stringify(dist)};
   const move = ${JSON.stringify(move)};
-  const amaPts = ${JSON.stringify(amaAnnotations)};
   const cacheSlow = ${JSON.stringify(cacheSlow)};
   const cacheMove = ${JSON.stringify(cacheMove)};
-  const revSlow = slow.slice().reverse();
-  const revMove = move.slice().reverse();
-  const revDist = dist.slice().reverse();
 
   const slowOpts = {
     width: 1100, height: 440,
@@ -398,7 +394,7 @@ async function run() {
     );
     const chartPath = path.resolve(chartName);
     ensureDir(path.dirname(chartPath));
-    const html = generateChartHtml(results, metricCache, cfg.fixEr, cfg.fixFast, dataLabel, chartPath);
+    const html = generateChartHtml(results, metricCache, cfg.fixEr, cfg.fixFast, dataLabel);
     fs.writeFileSync(chartPath, html, 'utf8');
     console.log(`\n  Chart: ${path.relative(process.cwd(), chartPath)}`);
     console.log('');

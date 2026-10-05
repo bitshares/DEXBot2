@@ -293,7 +293,7 @@ function analyzeBatching(hits: KibanaHit[]) {
 
 // ─── DEXBot score ─────────────────────────────────────────────────────────────
 
-function dexScore(creates: number, fills: number, _cancels: number, gridScore: number, maxBatch: number): number {
+function dexScore(creates: number, fills: number, gridScore: number, maxBatch: number): number {
     let s = 0;
     s += Math.round(gridScore * 0.4);                        // grid quality  (0–40)
     if (maxBatch >= 4)      s += 20;                         // batch size    (0–20)
@@ -495,7 +495,7 @@ async function run() {
                 r.impliedInc = grid.impliedIncrementPct ?? null;
                 r.cv         = grid.cv ?? null;
                 r.maxBatch   = batch.maxBatch;
-                r.dexScore   = dexScore(r.creates, r.fills, r.cancels, grid.score, batch.maxBatch);
+                r.dexScore   = dexScore(r.creates, r.fills, grid.score, batch.maxBatch);
                 r.ordersFetched = hits.length;
                 r.buyCount   = buyHits.length;
                 r.sellCount  = sellHits.length;

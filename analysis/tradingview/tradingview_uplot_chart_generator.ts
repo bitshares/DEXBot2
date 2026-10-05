@@ -1063,9 +1063,6 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             const d = new Date(ts * 1000);
             return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
-        function pad2(n) {
-            return String(n).padStart(2, '0');
-        }
         function formatTimeLabel(tsSec, spanSec) {
             const d = new Date(tsSec * 1000);
             if (!Number.isFinite(spanSec)) spanSec = 0;

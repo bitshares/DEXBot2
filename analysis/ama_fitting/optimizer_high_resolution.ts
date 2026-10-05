@@ -153,7 +153,7 @@ interface SearchResult {
     validCombos: number;
 }
 
-function buildDimension(_label: string, cfg: Record<string, unknown>) {
+function buildDimension(cfg: Record<string, unknown>) {
     const min = Number(cfg.min);
     const max = Number(cfg.max);
     const step = Number(cfg.step);
@@ -572,9 +572,9 @@ async function run() {
     ensureValidRange('Fast', args.fast);
     ensureValidRange('Slow', args.slow);
 
-    const erDim = buildDimension('ER', args.er);
-    const fastDim = buildDimension('Fast', args.fast);
-    const slowDim = buildDimension('Slow', args.slow);
+    const erDim = buildDimension(args.er);
+    const fastDim = buildDimension(args.fast);
+    const slowDim = buildDimension(args.slow);
 
     const ER_VALUES: number[] = Number.isFinite(args.fixedEr) ? [args.fixedEr!] : erDim.values;
     const FAST_VALUES: number[] = Number.isFinite(args.fixedFast) ? [args.fixedFast!] : fastDim.values;

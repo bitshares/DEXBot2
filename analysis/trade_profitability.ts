@@ -554,7 +554,7 @@ function analyzePair(trades: TradeFill[], matchMode: 'fifo' | 'sequential' = 'se
 
 // ─── Output Helpers ──────────────────────────────────────────────────────────
 
-function fmt(n: number, _decimals = 4): string {
+function fmt(n: number): string {
     // Shared 4-significant-figure formatter (see modules/order/format.ts) so
     // terminal output matches the HTML report and `dexbot order`.
     return Number.isFinite(n) ? formatFundsValue(n) : 'NaN';
@@ -569,7 +569,7 @@ function fmtAsset(id: string): string {
     return assetSymbol(id);
 }
 
-function printSummary(pairs: PairAnalysis[], _accountId: string, _start: string, _end: string, _matchMode: 'fifo' | 'sequential' = 'sequential') {
+function printSummary(pairs: PairAnalysis[]) {
     console.log('');
 
     for (const pair of pairs) {
@@ -580,23 +580,23 @@ function printSummary(pairs: PairAnalysis[], _accountId: string, _start: string,
         const avgSell = pair.totalSellBase > 0 ? pair.totalSellQuote / pair.totalSellBase : 0;
 
         console.log(` ── ${pairLabel}`);
-        console.log(`    Buys:        ${fmt(totalBought, 4)} @ ${fmt(avgBuy, 6)} = ${fmt(pair.totalBuyQuote, 4)} ${fmtAsset(pair.quoteAsset)}`);
-        console.log(`    Sells:       ${fmt(totalSold, 4)} @ ${fmt(avgSell, 6)} = ${fmt(pair.totalSellQuote, 4)} ${fmtAsset(pair.quoteAsset)}`);
-        console.log(`    Net inventory \u0394: ${fmt(pair.netPosition, 4)} ${fmtAsset(pair.baseAsset)} (bought \u2212 sold in window)`);
+        console.log(`    Buys:        ${fmt(totalBought)} @ ${fmt(avgBuy)} = ${fmt(pair.totalBuyQuote)} ${fmtAsset(pair.quoteAsset)}`);
+        console.log(`    Sells:       ${fmt(totalSold)} @ ${fmt(avgSell)} = ${fmt(pair.totalSellQuote)} ${fmtAsset(pair.quoteAsset)}`);
+        console.log(`    Net inventory \u0394: ${fmt(pair.netPosition)} ${fmtAsset(pair.baseAsset)} (bought \u2212 sold in window)`);
         console.log(`    Trades:      ${pair.realizedPnls.length} realized lots, ${pair.buys.length} buys, ${pair.sells.length} sells`);
         if (pair.unmatchedSellBase > 0.0001) {
-            console.log(`    Unmatched:   ${fmt(pair.unmatchedSellBase, 4)} ${fmtAsset(pair.baseAsset)} (sold without prior buy in window — expected if inventory predates window)`);
+            console.log(`    Unmatched:   ${fmt(pair.unmatchedSellBase)} ${fmtAsset(pair.baseAsset)} (sold without prior buy in window — expected if inventory predates window)`);
         }
-        console.log(`    Gross PnL:    ${fmtAsset(pair.quoteAsset)} ${fmt(pair.totalRealizedPnl, 4)}`);
+        console.log(`    Gross PnL:    ${fmtAsset(pair.quoteAsset)} ${fmt(pair.totalRealizedPnl)}`);
         const mktFee = pair.totalMarketFees;
         const blkFee = pair.totalBlockchainFees;
         if (mktFee > 0.0001) {
-            console.log(`    Market fees:  ${fmtAsset(pair.quoteAsset)} ${fmt(-mktFee, 4)}`);
+            console.log(`    Market fees:  ${fmtAsset(pair.quoteAsset)} ${fmt(-mktFee)}`);
         }
         if (blkFee > 0.0001) {
-            console.log(`    Blockchain:   BTS ${fmt(-blkFee, 4)}`);
+            console.log(`    Blockchain:   BTS ${fmt(-blkFee)}`);
         }
-        console.log(`    Net PnL:      ${fmtAsset(pair.quoteAsset)} ${fmt(pair.totalRealizedPnlNet, 4)}`);
+        console.log(`    Net PnL:      ${fmtAsset(pair.quoteAsset)} ${fmt(pair.totalRealizedPnlNet)}`);
         if (pair.quoteAsset !== BTS_ID) {
             console.log(`    ⚠ Non-BTS quote — PnL is in ${fmtAsset(pair.quoteAsset)}, not BTS`);
         }
@@ -619,15 +619,15 @@ function printSummary(pairs: PairAnalysis[], _accountId: string, _start: string,
             const groupVol = group.reduce((s, p) => s + p.totalBuyQuote + p.totalSellQuote, 0);
             const qSymbol = fmtAsset(quoteAsset);
             console.log(` ── TOTAL (${qSymbol}) — ${group.length} pair(s)`);
-            console.log(`    Gross PnL:    ${fmtAsset(quoteAsset)} ${fmt(groupPnl, 4)}`);
+            console.log(`    Gross PnL:    ${fmtAsset(quoteAsset)} ${fmt(groupPnl)}`);
             if (groupMktFees > 0.0001) {
-                console.log(`    Market fees:  ${fmtAsset(quoteAsset)} ${fmt(-groupMktFees, 4)}`);
+                console.log(`    Market fees:  ${fmtAsset(quoteAsset)} ${fmt(-groupMktFees)}`);
             }
             if (groupBlkFees > 0.0001) {
-                console.log(`    Blockchain:   BTS ${fmt(-groupBlkFees, 4)}`);
+                console.log(`    Blockchain:   BTS ${fmt(-groupBlkFees)}`);
             }
-            console.log(`    Net PnL:      ${fmtAsset(quoteAsset)} ${fmt(groupNet, 4)}`);
-            console.log(`    Volume:       ${fmt(groupVol, 4)} ${qSymbol}`);
+            console.log(`    Net PnL:      ${fmtAsset(quoteAsset)} ${fmt(groupNet)}`);
+            console.log(`    Volume:       ${fmt(groupVol)} ${qSymbol}`);
             console.log('');
         }
     }
@@ -658,15 +658,15 @@ function printPnlDetail(pairs: PairAnalysis[]) {
         for (let i = 0; i < pair.realizedPnls.length; i++) {
             const r = pair.realizedPnls[i];
             const idx = String(i + 1).padStart(2);
-            const bp = fmt(r.buyPrice, 8).padStart(11);
-            const ep = fmt(r.effPrice, 8).padStart(11);
-            const sp = fmt(r.sellPrice, 8).padStart(11);
-            const amt = fmt(r.amount, 4).padStart(9);
-            const pnlStr = fmt(r.pnl, 6).padStart(9);
+            const bp = fmt(r.buyPrice).padStart(11);
+            const ep = fmt(r.effPrice).padStart(11);
+            const sp = fmt(r.sellPrice).padStart(11);
+            const amt = fmt(r.amount).padStart(9);
+            const pnlStr = fmt(r.pnl).padStart(9);
             const pctStr = fmtPct(r.pnlPct).padStart(8);
-            const mktFeeStr = fmt(r.marketFeeEntry + r.marketFeeExit, 4).padStart(8);
-            const feeStr = fmt(r.feeBts, 4).padStart(8);
-            const netStr = fmt(r.pnlNet, 6).padStart(10);
+            const mktFeeStr = fmt(r.marketFeeEntry + r.marketFeeExit).padStart(8);
+            const feeStr = fmt(r.feeBts).padStart(8);
+            const netStr = fmt(r.pnlNet).padStart(10);
             const netPctStr = fmtPct(r.pnlNetPct).padStart(8);
             const mk = (r.entryIsMaker ? 'M' : 'T') + '/' + (r.exitIsMaker ? 'M' : 'T') + ' ';
             const et = (r.entryTime || '').slice(0, 22).padEnd(22);
@@ -1125,15 +1125,15 @@ function printMetrics(pairs: PairAnalysis[], window?: WindowRange) {
         // Edge
         console.log(`  Win Rate:             ${(m.winRate * 100).toFixed(1)}%`);
         console.log(`  Profit Factor:        ${m.profitFactor === Infinity ? '∞' : m.profitFactor.toFixed(2)}`);
-        const mktFeeStr = pair.totalMarketFees > 0.0001 ? ` (market ${fmt(pair.totalMarketFees, 4)})` : '';
-        const blkFeeStr = pair.totalBlockchainFees > 0.0001 ? ` (op ${fmt(pair.totalBlockchainFees, 4)} BTS)` : '';
+        const mktFeeStr = pair.totalMarketFees > 0.0001 ? ` (market ${fmt(pair.totalMarketFees)})` : '';
+        const blkFeeStr = pair.totalBlockchainFees > 0.0001 ? ` (op ${fmt(pair.totalBlockchainFees)} BTS)` : '';
         console.log(`  Fee Drag:             ${m.feeDragPct > 0 ? m.feeDragPct.toFixed(2) + '% of gross profit' + mktFeeStr + blkFeeStr : '—'}`);
         console.log(`  Avg Win / Avg Loss:   ${m.avgWinLossRatio === Infinity ? '∞' : m.avgWinLossRatio.toFixed(2)}`);
         const qSymbol = fmtAsset(pair.quoteAsset);
-        console.log(`  Expectancy (gross):   ${fmt(m.expectancyBts, 4)} ${qSymbol} (${fmtPct(m.expectancyPct)}) per trade`);
+        console.log(`  Expectancy (gross):   ${fmt(m.expectancyBts)} ${qSymbol} (${fmtPct(m.expectancyPct)}) per trade`);
         const rDisplay = m.expectancyR === Infinity ? '∞' : m.expectancyR.toFixed(3) + 'R';
         console.log(`  Expectancy (R):       ${rDisplay}`);
-        console.log(`  Expectancy (net):     ${fmt(m.netExpectancyBts, 4)} ${qSymbol} per trade`);
+        console.log(`  Expectancy (net):     ${fmt(m.netExpectancyBts)} ${qSymbol} per trade`);
         console.log('');
         // Edge quality
         console.log(`  Median R:             ${m.medianR.toFixed(2)}`);
@@ -1158,13 +1158,13 @@ function printMetrics(pairs: PairAnalysis[], window?: WindowRange) {
         const spanStr = m.scoredSpanDays < m.periodSpanDays - 1e-9
             ? `${m.scoredSpanDays.toFixed(1)}d scored of ${m.periodSpanDays.toFixed(1)}d window`
             : `${m.periodSpanDays.toFixed(1)}d`;
-        console.log(`  Projected net PnL:    ${fmt(m.projectedNetPnlAnn, 2)} ${qSymbol}/yr   (${fmt(m.projectedNetPnlPerDay, 2)}/day over ${spanStr})`);
+        console.log(`  Projected net PnL:    ${fmt(m.projectedNetPnlAnn)} ${qSymbol}/yr   (${fmt(m.projectedNetPnlPerDay)}/day over ${spanStr})`);
         console.log('');
         // Tail risk
         if (m.mddHadStablePeak) {
-            console.log(`  Max Drawdown:         ${fmt(m.mddAbsBts, 4)} ${qSymbol} (${fmtPct(m.mddPct)} of peak cumulative profit)`);
+            console.log(`  Max Drawdown:         ${fmt(m.mddAbsBts)} ${qSymbol} (${fmtPct(m.mddPct)} of peak cumulative profit)`);
         } else {
-            console.log(`  Min Equity:            ${fmt(m.prePeakMinEquity, 4)} ${fmtAsset(pair.quoteAsset)}`);
+            console.log(`  Min Equity:            ${fmt(m.prePeakMinEquity)} ${fmtAsset(pair.quoteAsset)}`);
         }
         const recLabel = m.maxRecoveryDays > 0 ? m.maxRecoveryDays.toFixed(1) + ' days' + (m.isOngoingRecovery ? ' (ongoing)' : '') : '—';
         console.log(`  Max Recovery Time:    ${recLabel}`);
@@ -1183,7 +1183,7 @@ function printMetrics(pairs: PairAnalysis[], window?: WindowRange) {
         console.log(`  Partial fills/order:  ${m.fillsPerOrderMean.toFixed(2)} mean, ${m.fillsPerOrderMedian.toFixed(1)} med, ${m.fillsPerOrderMax} max`);
         console.log(`  One-shot orders:      ${(m.oneShotOrderRatio * 100).toFixed(0)}%`);
         console.log(`  Fills/day:            ${m.fillsPerDay.toFixed(2)}`);
-        console.log(`  Avg vol/day:          ${fmt(m.avgVolumePerDay, 2)} ${fmtAsset(pair.quoteAsset)}`);
+        console.log(`  Avg vol/day:          ${fmt(m.avgVolumePerDay)} ${fmtAsset(pair.quoteAsset)}`);
         console.log('');
 
     }
@@ -1205,10 +1205,10 @@ function printMetrics(pairs: PairAnalysis[], window?: WindowRange) {
             console.log(` ── TOTAL (${qSymbol}) — ${group.length} pair(s)`);
             console.log(`    Lots:      ${totalLots}`);
             const feeParts: string[] = [];
-            if (totalMktFees > 0.0001) feeParts.push(`market ${fmt(totalMktFees, 4)} ${qSymbol}`);
-            if (totalBlkFees > 0.0001) feeParts.push(`op ${fmt(totalBlkFees, 4)} BTS`);
+            if (totalMktFees > 0.0001) feeParts.push(`market ${fmt(totalMktFees)} ${qSymbol}`);
+            if (totalBlkFees > 0.0001) feeParts.push(`op ${fmt(totalBlkFees)} BTS`);
             const feeSuffix = feeParts.length > 0 ? `  (${feeParts.join(', ')})` : '';
-            console.log(`    Net PnL:   ${fmtAsset(quoteAsset)} ${fmt(totalNet, 4)}${feeSuffix}`);
+            console.log(`    Net PnL:   ${fmtAsset(quoteAsset)} ${fmt(totalNet)}${feeSuffix}`);
             console.log('');
         }
     }
@@ -1435,7 +1435,7 @@ async function run(argv: string[] = process.argv.slice(2)) {
         console.log(`\n📄 PnL report saved. Open report: (${toFileUrl(reportPath)})`);
     } else {
         // Output: summaries → grand total → per-match detail
-        printSummary(analyses, accountId, gte, lte, opts.matchMode as 'sequential' | 'fifo');
+        printSummary(analyses);
 
         if (opts.showPnlDetail) {
             printPnlDetail(analyses);

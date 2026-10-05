@@ -358,7 +358,7 @@ assert.strictEqual(resolveMarketSourceForBot({ startPrice: 1.2345 }), null, 'num
         close_quote: '160000',
         base_volume: '360000',
         quote_volume: '180000',
-    }], { id: '1.3.1', precision: 4, symbol: 'IOB.XRP' }, { id: '1.3.0', precision: 5, symbol: 'BTS' }, 3600);
+    }], { id: '1.3.1', precision: 4, symbol: 'IOB.XRP' }, { id: '1.3.0', precision: 5, symbol: 'BTS' });
 
     assert.strictEqual(candles.length, 1, 'native market history should normalize one candle');
     assert.strictEqual(candles[0][0], new Date('2026-01-01T00:00:00Z').getTime(), 'timestamp should be parsed as UTC');
@@ -408,7 +408,6 @@ assert.strictEqual(resolveMarketSourceForBot({ startPrice: 1.2345 }), null, 'num
         [[1704067200, 0.5, 0.6, 0.4, 0.55, 10]],
         { id: '1.3.1', precision: 4, symbol: 'IOB.XRP' },
         { id: '1.3.0', precision: 5, symbol: 'BTS' },
-        3600
     );
     assert.strictEqual(candles.length, 1);
     assert.strictEqual(candles[0][0], 1704067200000, 'array-path epoch seconds should be normalized to ms');
@@ -418,7 +417,6 @@ assert.strictEqual(resolveMarketSourceForBot({ startPrice: 1.2345 }), null, 'num
         [[1704067200000, 0.5, 0.6, 0.4, 0.55, 10]],
         { id: '1.3.1', precision: 4, symbol: 'IOB.XRP' },
         { id: '1.3.0', precision: 5, symbol: 'BTS' },
-        3600
     );
     assert.strictEqual(candlesMs[0][0], 1704067200000, 'array-path epoch ms should pass through unchanged');
 }
