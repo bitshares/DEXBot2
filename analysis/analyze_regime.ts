@@ -31,6 +31,7 @@ import { calculateAMA }                from '../market_adapter/core/strategies/a
 import { writeChartFile }              from './chart_utils.js';
 import { getCandleClose }              from './math_utils.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 const HURST_CONFIG = MARKET_ADAPTER.HURST_CONFIG;
 const PE_CONFIG = MARKET_ADAPTER.PE_CONFIG;
@@ -47,29 +48,20 @@ function parseArgs() {
         quiet:       boolean;
         listBots:    boolean;
     } = {
-        source:      { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         chartFile:   path.join(PATHS.ANALYSIS.CHARTS_DIR, 'regime_chart.html'),
         hurstWindow: HURST_CONFIG.window,
         peWindow:    PE_CONFIG.window,
         peM:         PE_CONFIG.m,
-        quiet:       false,
-        listBots:    false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if      (arg === '--source')       config.source.type              = args[++i];
-        else if (arg === '--bot-key')      config.source.config.botKey     = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--chart')        config.chartFile                = args[++i];
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if      (arg === '--chart')        config.chartFile                = args[++i];
         else if (arg === '--hurst-window') config.hurstWindow              = parseInt(args[++i], 10);
         else if (arg === '--pe-window')    config.peWindow                 = parseInt(args[++i], 10);
         else if (arg === '--pe-m')         config.peM                      = parseInt(args[++i], 10);
-        else if (arg === '--list-bots')    config.listBots                 = true;
-        else if (arg === '--quiet')        config.quiet                    = true;
     }
 
     return config;

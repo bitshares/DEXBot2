@@ -1,7 +1,8 @@
 'use strict';
 
 import { toIntervalLabel } from './interval_utils.js';
-import { escapeHtml, serializeJsonForScript, uplotInlineTags } from '../analysis/chart_utils.js';
+import { escapeHtml, serializeJsonForScript, UPLOT_SHARED_SCRIPT, uplotInlineTags } from '../analysis/chart_utils.js';
+import { makeCursorConfig, bindHoverStateFn, zoomResetScript } from '../analysis/chart_ui.js';
 import { fixedTo, roundTo, roundToDecimals } from '../modules/order/utils/math.js';
 
 
@@ -363,15 +364,7 @@ function makeYAxis(show, formatter, size = 58) {
 }
 
 function makeCursor() {
-    return {
-        show: true,
-        x: true,
-        y: true,
-        points: { show: false },
-        drag: { x: false, y: false, setScale: false },
-        sync: { key: chartGroupId, setSeries: false, scales: ['x', null] },
-        focus: { prox: -1 },
-    };
+    return ${makeCursorConfig('chartGroupId')};
 }
 
 function makePlotBase(showX, yFormatter, yScale, yRange, extraHooks = {}) {
@@ -666,167 +659,9 @@ const [xMin, xMax] = [ts[0], ts[ts.length - 1]];
 let pendingRange = null;
 let pendingRangeRaf = 0;
 
-function clampXRange(min, max) {
-    let nextMin = min;
-    let nextMax = max;
-    const span = nextMax - nextMin;
-    if (!Number.isFinite(span) || span <= 0) {
-        return { min: xMin, max: xMax };
-    }
+${UPLOT_SHARED_SCRIPT}
 
-    if (nextMin < xMin) {
-        nextMax += xMin - nextMin;
-        nextMin = xMin;
-    }
-    if (nextMax > xMax) {
-        nextMin -= nextMax - xMax;
-        nextMax = xMax;
-    }
-    if (nextMin < xMin) nextMin = xMin;
-    if (nextMax > xMax) nextMax = xMax;
-    if (nextMax <= nextMin) {
-        return { min: xMin, max: xMax };
-    }
-    return { min: nextMin, max: nextMax };
-}
-
-function syncXRange(min, max) {
-    pendingRange = clampXRange(min, max);
-    if (pendingRangeRaf) return;
-
-    const rafSync = window.requestAnimationFrame
-        ? window.requestAnimationFrame.bind(window)
-        : (fn) => setTimeout(fn, 0);
-
-    pendingRangeRaf = rafSync(() => {
-        const next = pendingRange;
-        pendingRange = null;
-        pendingRangeRaf = 0;
-        if (!next) return;
-        charts.forEach((chart) => {
-            chart.batch(() => {
-                chart.setScale('x', next);
-            });
-        });
-    });
-}
-
-function bindWheelZoom(chart) {
-    const onWheel = (e) => {
-        if (!e) return;
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-        e.preventDefault();
-        e.stopPropagation();
-
-        const rect = chart.root.getBoundingClientRect();
-        
-        // Correctly calculate plot-relative 'left' for accurate centering
-        const left = e.clientX - rect.left - (chart.bbox.left / (chart.pxRatio || 1));
-        const center = chart.posToVal(left, 'x');
-        
-        const xScale = chart.scales.x || {};
-        const currMin = Number.isFinite(xScale.min) ? xScale.min : xMin;
-        const currMax = Number.isFinite(xScale.max) ? xScale.max : xMax;
-        const span = currMax - currMin;
-        if (!Number.isFinite(span) || span <= 0) return;
-
-        const factor = e.deltaY < 0 ? 0.85 : 1.15;
-        const nextSpan = Math.max(1, Math.min(xMax - xMin, span * factor));
-        const ratio = (center - currMin) / span;
-        const nextMin = center - nextSpan * ratio;
-        const nextMax = nextMin + nextSpan;
-
-        syncXRange(nextMin, nextMax);
-    };
-
-    chart.root.addEventListener('wheel', onWheel, { passive: false });
-}
-
-function bindPan(chart) {
-    let dragging = false;
-    let startClientX = 0;
-    let startClientY = 0;
-    let startMin = xMin;
-    let startMax = xMax;
-    let xUnitsPerPx = 0;
-
-    const getCurrentScale = () => {
-        const xScale = chart.scales.x || {};
-        const currMin = Number.isFinite(xScale.min) ? xScale.min : xMin;
-        const currMax = Number.isFinite(xScale.max) ? xScale.max : xMax;
-        return { currMin, currMax };
-    };
-
-    const onMouseMove = (e) => {
-        if (!dragging) return;
-        
-        // Ignore if vertical movement is dominant (likely scrolling)
-        if (Math.abs(e.clientY - startClientY) > 20) return;
-        
-        e.preventDefault();
-        const deltaPx = e.clientX - startClientX;
-        const deltaVal = deltaPx * xUnitsPerPx;
-
-        syncXRange(startMin - deltaVal, startMax - deltaVal);
-    };
-
-    const endDrag = () => {
-        if (!dragging) return;
-        dragging = false;
-        document.body.style.cursor = '';
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', endDrag);
-    };
-
-    const onMouseDown = (e) => {
-        if (!e || e.button !== 0) return;
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-        const rect = chart.root.getBoundingClientRect();
-        const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-        if (!inside) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        dragging = true;
-        startClientX = e.clientX;
-        startClientY = e.clientY;
-        const current = getCurrentScale();
-        startMin = current.currMin;
-        startMax = current.currMax;
-        
-        // Calculate units per pixel once at start of drag to avoid sliding bug
-        // chart.bbox.width is in device pixels; divide by pxRatio for CSS pixels
-        xUnitsPerPx = (current.currMax - current.currMin) / (chart.bbox.width / (chart.pxRatio || 1));
-        
-        document.body.style.cursor = 'grabbing';
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', endDrag, { once: true });
-    };
-
-    chart.root.addEventListener('mousedown', onMouseDown);
-    chart.root.addEventListener('mouseleave', () => {
-        if (!dragging) return;
-        document.body.style.cursor = 'grabbing';
-    });
-    window.addEventListener('blur', endDrag);
-}
-
-function bindHoverState(chart) {
-    const root = chart.root;
-    root.addEventListener('mouseenter', () => {
-        root.classList.add('is-hovered');
-    });
-    root.addEventListener('mouseleave', () => {
-        root.classList.remove('is-hovered');
-    });
-}
-
-function resetZoom() {
-    pendingRange = null;
-    syncXRange(xMin, xMax);
-}
+${bindHoverStateFn()}
 
 function sizeCharts() {
     applyChartHeights();
@@ -839,11 +674,7 @@ function sizeCharts() {
 }
 
 window.addEventListener('resize', sizeCharts);
-window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === '0') {
-        resetZoom();
-    }
-});
+${zoomResetScript()}
 
 charts.forEach((chart) => {
     bindWheelZoom(chart);

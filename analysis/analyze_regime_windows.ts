@@ -28,6 +28,7 @@ import { writeChartFile }            from './chart_utils.js';
 import { getCandleClose }            from './math_utils.js';
 import { roundTo } from '../modules/order/utils/math.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 const HURST_CONFIG = MARKET_ADAPTER.HURST_CONFIG;
 const PE_CONFIG = MARKET_ADAPTER.PE_CONFIG;
@@ -61,23 +62,14 @@ function parseArgs() {
         quiet:     boolean;
         listBots:  boolean;
     } = {
-        source:    { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         chartFile: path.join(PATHS.ANALYSIS.CHARTS_DIR, 'regime_windows_heatmap.html'),
-        quiet:     false,
-        listBots:  false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if      (arg === '--source')      config.source.type             = args[++i];
-        else if (arg === '--bot-key')     config.source.config.botKey    = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--chart')       config.chartFile               = args[++i];
-        else if (arg === '--list-bots')   config.listBots                = true;
-        else if (arg === '--quiet')       config.quiet                   = true;
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if      (arg === '--chart')       config.chartFile               = args[++i];
     }
 
     return config;

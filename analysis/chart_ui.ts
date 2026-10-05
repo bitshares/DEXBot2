@@ -12,16 +12,19 @@ const Y_AXIS_SIZE = 58;
 
 /**
  * Return the uPlot cursor config object literal.
- * Consumers must define `SYNC_KEY` before calling this.
+ *
+ * @param syncKey  JS expression for the sync key. Defaults to the `SYNC_KEY`
+ *                 variable that callers define; pass a literal/variable name
+ *                 (e.g. `'chartGroupId'`) when the page uses another name.
  */
-function makeCursorConfig(): string {
+function makeCursorConfig(syncKey = 'SYNC_KEY'): string {
     return `{
             show: true,
             x: true,
             y: true,
             points: { show: false },
             drag: { x: false, y: false, setScale: false },
-            sync: { key: SYNC_KEY, setSeries: false, scales: ['x', null] },
+            sync: { key: ${syncKey}, setSeries: false, scales: ['x', null] },
             focus: { prox: -1 },
         }`;
 }

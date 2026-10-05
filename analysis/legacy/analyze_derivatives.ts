@@ -32,6 +32,7 @@ type DerivativeRow = ReturnType<DerivativeAnalyzerType['update']>;
 import { writeChartFile } from '../chart_utils.js';
 import { PATHS } from '../../modules/paths.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from '../resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from '../analyze_args.js';
 
 
 interface CliConfig {
@@ -70,7 +71,7 @@ interface PriceSource {
 function parseArgs(): CliConfig {
     const args = process.argv.slice(2);
     const config: CliConfig = {
-        source: { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         slowSmaPeriod:        500,
         fastSmaPeriod:        undefined,
         minBarsForConfirmation: 3,
@@ -92,16 +93,12 @@ function parseArgs(): CliConfig {
         rsiZone: 10,
         rsiExtreme: 90,
         chartFile: path.join(PATHS.ANALYSIS.CHARTS_DIR, 'derivative_chart.html'),
-        quiet: false,
-        listBots: false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if      (arg === '--source')    config.source.type                  = args[++i];
-        else if (arg === '--bot-key')   config.source.config.botKey         = args[++i];
-        else if (arg === '--file')      { config.source.config.filePath = args[++i]; config.source.type = 'json'; }
-        else if (arg === '--sma')       config.slowSmaPeriod                = parseInt(args[++i]);
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if      (arg === '--sma')       config.slowSmaPeriod                = parseInt(args[++i]);
         else if (arg === '--fast-sma')  config.fastSmaPeriod                = parseInt(args[++i]);
         else if (arg === '--confirm')   config.minBarsForConfirmation       = parseInt(args[++i]);
         else if (arg === '--macd-fast')  { config.macdFastPeriod            = parseInt(args[++i]); }
@@ -122,8 +119,6 @@ function parseArgs(): CliConfig {
         else if (arg === '--no-price-regime-gate')  config.priceRegimeGate      = false;
         else if (arg === '--price-regime-buffer-pct') config.priceRegimeMinDistancePct = parseFloat(args[++i]);
         else if (arg === '--chart')       config.chartFile                  = args[++i];
-        else if (arg === '--list-bots')  config.listBots                   = true;
-        else if (arg === '--quiet')     config.quiet                        = true;
         else if (arg === '--help' || arg === '-h') { showHelp(); process.exit(0); }
     }
 

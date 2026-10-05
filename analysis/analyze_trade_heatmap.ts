@@ -21,6 +21,7 @@ import { MARKET_ADAPTER } from '../modules/constants.js';
 import { calcStdDev, getCandleClose } from './math_utils.js';
 import { writeChartFile } from './chart_utils.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 
 function parseArgs() {
@@ -39,7 +40,7 @@ function parseArgs() {
         quiet: boolean;
         listBots: boolean;
     } = {
-        source: { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         ama: 'AMA3',
         output: 'analysis/charts/trade_heatmap.html',
         buckets: null,
@@ -49,19 +50,12 @@ function parseArgs() {
         binSize: 5,
         sliceMonths: 12,
         thresholds: [1, 2, 3, 5, 10, 20],
-        quiet: false,
-        listBots: false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--source') config.source.type = args[++i];
-        else if (arg === '--bot-key') config.source.config.botKey = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--ama') config.ama = args[++i];
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if (arg === '--ama') config.ama = args[++i];
         else if (arg === '--output') config.output = args[++i];
         else if (arg === '--buckets') config.buckets = parseInt(args[++i], 10);
         else if (arg === '--max-neg') config.maxNeg = parseFloat(args[++i]);
@@ -70,8 +64,6 @@ function parseArgs() {
         else if (arg === '--bin-size') config.binSize = parseFloat(args[++i]);
         else if (arg === '--slice-months') config.sliceMonths = parseInt(args[++i], 10);
         else if (arg === '--thresholds') config.thresholds = args[++i].split(',').map(Number);
-        else if (arg === '--list-bots') config.listBots = true;
-        else if (arg === '--quiet') config.quiet = true;
     }
 
     return config;

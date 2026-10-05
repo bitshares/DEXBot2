@@ -97,6 +97,31 @@ function _isLockStaleOrDead(lockPath: string, staleMs: number, now: number, aliv
     return false;
 }
 
+interface ResolvedLockPayload {
+    ownerId: number | string;
+    buildPayload: () => UnknownRecord;
+    resolveRunningMsg: () => string;
+    timeoutMsg: string;
+}
+
+/**
+ * Resolve the ownership token, payload builder, and lazy error messages shared
+ * by the sync and async lock cores.
+ */
+function _resolveLockPayload(lockPath: string, opts: AcquireLockOptions, timeoutMs: number): ResolvedLockPayload {
+    const ownerId = _lockOwnerId();
+    const buildPayloadFn = opts.buildPayload;
+    const buildPayload = typeof buildPayloadFn === 'function'
+        ? () => ({ ...buildPayloadFn(), ownerId })
+        : () => ({ pid: _lockOwnerId(), at: Date.now(), ownerId });
+    const alreadyRunningMsg = opts.alreadyRunningMsg;
+    const resolveRunningMsg = typeof alreadyRunningMsg === 'function'
+        ? alreadyRunningMsg
+        : () => (alreadyRunningMsg || `already locked: `);
+    const timeoutMsg = opts.timeoutMsg || `Could not acquire lock on ${lockPath} within ${timeoutMs}ms`;
+    return { ownerId, buildPayload, resolveRunningMsg, timeoutMsg };
+}
+
 /**
  * Shared file-lock primitive.
  *
@@ -130,16 +155,7 @@ function _acquireLockCore(lockPath: string, opts: AcquireLockOptions = {}): Acqu
         MARKET_ADAPTER.FILE_LOCK_HEARTBEAT_MAX_MS,
         Math.max(MARKET_ADAPTER.FILE_LOCK_HEARTBEAT_MIN_MS, Math.floor(staleMs / 2))
     );
-    const ownerId = _lockOwnerId();
-    const buildPayloadFn = opts.buildPayload;
-    const buildPayload = typeof buildPayloadFn === 'function'
-        ? () => ({ ...buildPayloadFn(), ownerId })
-        : () => ({ pid: _lockOwnerId(), at: Date.now(), ownerId });
-    const alreadyRunningMsg = opts.alreadyRunningMsg;
-    const resolveRunningMsg = typeof alreadyRunningMsg === 'function'
-        ? alreadyRunningMsg
-        : () => (alreadyRunningMsg || `already locked: `);
-    const timeoutMsg = opts.timeoutMsg || `Could not acquire lock on ${lockPath} within ${timeoutMs}ms`;
+    const { ownerId, buildPayload, resolveRunningMsg, timeoutMsg } = _resolveLockPayload(lockPath, opts, timeoutMs);
 
     const deadline = Number.isFinite(timeoutMs) ? Date.now() + timeoutMs : Infinity;
     let attempts = 0;
@@ -209,16 +225,7 @@ async function _acquireLockCoreAsync(lockPath: string, opts: AcquireLockOptions 
     const timeoutMs = typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 5000;
     const retryMs = typeof opts.retryMs === 'number' && Number.isFinite(opts.retryMs) && opts.retryMs > 0 ? opts.retryMs : 50;
     const aliveCheck = typeof opts.aliveCheck === 'function' ? opts.aliveCheck : null;
-    const ownerId = _lockOwnerId();
-    const buildPayloadFn = opts.buildPayload;
-    const buildPayload = typeof buildPayloadFn === 'function'
-        ? () => ({ ...buildPayloadFn(), ownerId })
-        : () => ({ pid: _lockOwnerId(), at: Date.now(), ownerId });
-    const alreadyRunningMsg = opts.alreadyRunningMsg;
-    const resolveRunningMsg = typeof alreadyRunningMsg === 'function'
-        ? alreadyRunningMsg
-        : () => (alreadyRunningMsg || `already locked: `);
-    const timeoutMsg = opts.timeoutMsg || `Could not acquire lock on ${lockPath} within ${timeoutMs}ms`;
+    const { ownerId, buildPayload, resolveRunningMsg, timeoutMsg } = _resolveLockPayload(lockPath, opts, timeoutMs);
 
     const deadline = Date.now() + timeoutMs;
 

@@ -569,6 +569,17 @@ function fmtAsset(id: string): string {
     return assetSymbol(id);
 }
 
+/** Group pairs by quote asset for the grand-total sections. */
+function groupPairsByQuote(pairs: PairAnalysis[]): Map<string, PairAnalysis[]> {
+    const quoteGroups = new Map<string, PairAnalysis[]>();
+    for (const p of pairs) {
+        const q = p.quoteAsset;
+        if (!quoteGroups.has(q)) quoteGroups.set(q, []);
+        quoteGroups.get(q)!.push(p);
+    }
+    return quoteGroups;
+}
+
 function printSummary(pairs: PairAnalysis[]) {
     console.log('');
 
@@ -604,12 +615,7 @@ function printSummary(pairs: PairAnalysis[]) {
     }
 
     // Grand totals grouped by quote asset
-    const quoteGroups = new Map<string, PairAnalysis[]>();
-    for (const p of pairs) {
-        const q = p.quoteAsset;
-        if (!quoteGroups.has(q)) quoteGroups.set(q, []);
-        quoteGroups.get(q)!.push(p);
-    }
+    const quoteGroups = groupPairsByQuote(pairs);
     if (pairs.length > 1 && quoteGroups.size > 0) {
         for (const [quoteAsset, group] of quoteGroups) {
             const groupPnl = group.reduce((s, p) => s + p.totalRealizedPnl, 0);
@@ -1189,12 +1195,7 @@ function printMetrics(pairs: PairAnalysis[], window?: WindowRange) {
     }
 
     // Grand totals grouped by quote asset
-    const quoteGroups = new Map<string, PairAnalysis[]>();
-    for (const p of pairs) {
-        const q = p.quoteAsset;
-        if (!quoteGroups.has(q)) quoteGroups.set(q, []);
-        quoteGroups.get(q)!.push(p);
-    }
+    const quoteGroups = groupPairsByQuote(pairs);
     if (pairs.length > 1 && quoteGroups.size > 0) {
         for (const [quoteAsset, group] of quoteGroups) {
             const totalLots = group.reduce((s, p) => s + p.realizedPnls.length, 0);

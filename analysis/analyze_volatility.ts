@@ -35,6 +35,7 @@ import { PATHS } from '../modules/paths.js';
 import { getCandleClose } from './math_utils.js';
 import { writeChartFile } from './chart_utils.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 
 const DEFAULT_ATR_PERIOD = MARKET_ADAPTER.DYNAMIC_WEIGHT_ATR_PERIOD_DEFAULT;
@@ -62,26 +63,19 @@ function parseArgs() {
         quiet:     boolean;
         listBots:  boolean;
     } = {
-        source: { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         chartFile: DEFAULT_CHART_FILE,
         threshold: DEFAULT_THRESHOLD,
         atrPeriod: DEFAULT_ATR_PERIOD,
         exponent: MARKET_ADAPTER.DYNAMIC_WEIGHT_VOLATILITY_EXPONENT,
         scaleX: MARKET_ADAPTER.DYNAMIC_WEIGHT_VOLATILITY_SCALE_X_DEFAULT,
         clamp: DEFAULT_CLAMP,
-        quiet: false,
-        listBots: false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--source') config.source.type = args[++i];
-        else if (arg === '--bot-key') config.source.config.botKey = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--chart') config.chartFile = args[++i];
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if (arg === '--chart') config.chartFile = args[++i];
         else if (arg === '--threshold') config.threshold = parseFloat(args[++i]);
         else if (arg === '--atr-period') {
             const next = parseInt(args[++i], 10);
@@ -90,8 +84,6 @@ function parseArgs() {
         else if (arg === '--exp') config.exponent = parseFloat(args[++i]);
         else if (arg === '--scale-x') config.scaleX = parseFloat(args[++i]);
         else if (arg === '--clamp') config.clamp = parseFloat(args[++i]);
-        else if (arg === '--list-bots') config.listBots = true;
-        else if (arg === '--quiet') config.quiet = true;
     }
 
     return config;

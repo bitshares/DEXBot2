@@ -546,6 +546,25 @@ async function run() {
     const highV2 = results.filter(r => r.dexScore >= 80 && r.updates >= 1);
     const highV1 = results.filter(r => r.dexScore >= 80 && r.updates < 1);
 
+    // Fixed-width cells for one candidate row, shared by the HIGH groups and
+    // the tier tables so the two print paths can never drift apart.
+    function formatCandidateCells(r: CandidateInfo, rank: number) {
+        return {
+            rank: String(rank).padStart(2),
+            name: r.name.padEnd(22).slice(0, 22),
+            id: r.id.padEnd(14),
+            creates: String(r.creates).padStart(7),
+            fills: String(r.fills).padStart(6),
+            cancels: String(r.cancels).padStart(7),
+            fr: (r.fillRate.toFixed(1) + '%').padStart(5),
+            cr: r.cancelRatio.toFixed(2).padStart(4),
+            batch: String(r.maxBatch || '-').padStart(9),
+            inc: (r.impliedInc != null ? r.impliedInc.toFixed(2) + '%' : 'n/a').padStart(6),
+            grid: String(r.gridScore).padStart(5),
+            dex: String(r.dexScore).padStart(4),
+        };
+    }
+
     const hdrHigh = ' #   Name                  ID              Creates  Fills  Cancel  Fill%  C/C   MaxBatch  Incr%  Grid  DEX  Updates';
     function printHighGroup(label: string, rows: CandidateInfo[]) {
         if (!rows.length) return;
@@ -554,20 +573,8 @@ async function run() {
         console.log(hdrHigh);
         console.log(' ' + '─'.repeat(hdrHigh.length - 1));
         for (const r of rows) {
-            const rank    = String(results.indexOf(r) + 1).padStart(2);
-            const name    = r.name.padEnd(22).slice(0, 22);
-            const id      = r.id.padEnd(14);
-            const creates = String(r.creates).padStart(7);
-            const fills   = String(r.fills).padStart(6);
-            const cancels = String(r.cancels).padStart(7);
-            const fr      = (r.fillRate.toFixed(1) + '%').padStart(5);
-            const cr      = r.cancelRatio.toFixed(2).padStart(4);
-            const batch   = String(r.maxBatch || '-').padStart(9);
-            const inc     = (r.impliedInc != null ? r.impliedInc.toFixed(2) + '%' : 'n/a').padStart(6);
-            const grid    = String(r.gridScore).padStart(5);
-            const dex     = String(r.dexScore).padStart(4);
-            const upd     = String(r.updates).padStart(7);
-            console.log(` ${rank}  ${name}  ${id}  ${creates}  ${fills}  ${cancels}  ${fr}  ${cr}  ${batch}  ${inc}  ${grid}  ${dex}  ${upd}`);
+            const c = formatCandidateCells(r, results.indexOf(r) + 1);
+            console.log(` ${c.rank}  ${c.name}  ${c.id}  ${c.creates}  ${c.fills}  ${c.cancels}  ${c.fr}  ${c.cr}  ${c.batch}  ${c.inc}  ${c.grid}  ${c.dex}  ${String(r.updates).padStart(7)}`);
         }
         console.log('');
     }
@@ -591,20 +598,9 @@ async function run() {
         console.log(hdr);
         console.log(' ' + '─'.repeat(hdr.length - 1));
 
-        group.forEach((r, _i) => {
-            const rank    = String(results.indexOf(r) + 1).padStart(2);
-            const name    = r.name.padEnd(22).slice(0, 22);
-            const id      = r.id.padEnd(14);
-            const creates = String(r.creates).padStart(7);
-            const fills   = String(r.fills).padStart(6);
-            const cancels = String(r.cancels).padStart(7);
-            const fr      = (r.fillRate.toFixed(1) + '%').padStart(5);
-            const cr      = r.cancelRatio.toFixed(2).padStart(4);
-            const batch   = String(r.maxBatch || '-').padStart(9);
-            const inc     = (r.impliedInc != null ? r.impliedInc.toFixed(2) + '%' : 'n/a').padStart(6);
-            const grid    = String(r.gridScore).padStart(5);
-            const dex     = String(r.dexScore).padStart(4);
-            console.log(` ${rank}  ${name}  ${id}  ${creates}  ${fills}  ${cancels}  ${fr}  ${cr}  ${batch}  ${inc}  ${grid}  ${dex}`);
+        group.forEach((r) => {
+            const c = formatCandidateCells(r, results.indexOf(r) + 1);
+            console.log(` ${c.rank}  ${c.name}  ${c.id}  ${c.creates}  ${c.fills}  ${c.cancels}  ${c.fr}  ${c.cr}  ${c.batch}  ${c.inc}  ${c.grid}  ${c.dex}`);
         });
         console.log('');
     }

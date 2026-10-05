@@ -20,6 +20,7 @@ import { generateHTML } from '../market_adapter/lp_chart_core.js';
 import { calcStdDev, getCandleClose } from './math_utils.js';
 import { writeChartFile } from './chart_utils.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 
 function normSInv(p: number) {
@@ -79,25 +80,16 @@ function parseArgs() {
         quiet: boolean;
         listBots: boolean;
     } = {
-        source: { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         ama: 'AMA3',
         output: null,
-        quiet: false,
-        listBots: false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--source') config.source.type = args[++i];
-        else if (arg === '--bot-key') config.source.config.botKey = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--ama') config.ama = args[++i];
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if (arg === '--ama') config.ama = args[++i];
         else if (arg === '--output') config.output = args[++i];
-        else if (arg === '--list-bots') config.listBots = true;
-        else if (arg === '--quiet') config.quiet = true;
     }
 
     return config;

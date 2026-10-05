@@ -203,6 +203,15 @@ function bindPan(chart) {
         window.addEventListener('mousemove', onMouseMove);
         window.addEventListener('mouseup', endDrag, { once: true });
     });
+
+    // Keep the grab cursor while dragging even as the pointer leaves the plot,
+    // and end the drag if the window loses focus mid-drag (otherwise the chart
+    // keeps panning on the next mousemove after refocus).
+    chart.root.addEventListener('mouseleave', () => {
+        if (!dragging) return;
+        document.body.style.cursor = 'grabbing';
+    });
+    window.addEventListener('blur', endDrag);
 }
 `;
 

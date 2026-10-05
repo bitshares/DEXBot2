@@ -37,8 +37,16 @@ const DEFAULT_COMMON_QUOTE = 'USDT';
 const DEFAULT_BOOTSTRAP_LOOKBACK_HOURS = 720;
 const DEFAULT_BOTS_FILE = PATHS.PROFILES.BOTS_JSON;
 import type { BotEntry } from '../../modules/bot_settings.js';
-
-type CandleRow = [number, number, number, number, number, number];
+import {
+    parseCandleRow,
+    parseCandleRows,
+    parseHtxObjectRow,
+    OHLC_STANDARD,
+    OHLC_CLOSE_HIGH_LOW,
+    OHLC_GATE,
+    OHLC_KRAKEN,
+} from './cex_candle_parsing.js';
+import type { CandleRow } from './cex_candle_parsing.js';
 
 interface MarketRow {
     base: string;
@@ -256,12 +264,6 @@ function normalizeBaseAsset(base: unknown, symbol: unknown) {
     return rawBase;
 }
 
-function normalizeTimestamp(raw: unknown): number {
-    const ts = Number(raw);
-    if (!Number.isFinite(ts)) return Number.NaN;
-    return ts >= 1e12 ? Math.trunc(ts) : Math.trunc(ts * 1000);
-}
-
 function computeRequiredCandles(amaConfig: AmaConfig | null = null, cfg: { amaSlope?: { lookbackBars?: unknown } } | null = null): number {
     const ama = amaConfig || MARKET_ADAPTER.AMAS[MARKET_ADAPTER.DEFAULT_AMA_KEY as keyof typeof MARKET_ADAPTER.AMAS] || MARKET_ADAPTER.AMAS.AMA3;
     if (!ama) return DEFAULT_BOOTSTRAP_LOOKBACK_HOURS;
@@ -371,23 +373,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.baseAsset, r.quoteAsset, r.symbol, { status: r.status });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(json);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(json), OHLC_STANDARD),
     },
     bybit: {
         name: 'Bybit',
@@ -421,23 +407,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.baseCoin, r.quoteCoin, r.symbol, { status: r.status });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(asRecord(asRecord(json).result).list);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(asRecord(asRecord(json).result).list), OHLC_STANDARD),
     },
     gate: {
         name: 'Gate',
@@ -456,23 +426,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.base, r.quote, r.id, { tradeStatus: r.trade_status });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(json);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 7) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const close = Number(row[2]);
-                    const high = Number(row[3]);
-                    const low = Number(row[4]);
-                    const open = Number(row[5]);
-                    const volume = Number(row[6]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(json), OHLC_GATE),
     },
     bitget: {
         name: 'Bitget',
@@ -505,23 +459,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.baseCoin, r.quoteCoin, r.symbol, { status: r.status });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(asRecord(json).data);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(asRecord(json).data), OHLC_STANDARD),
     },
     kucoin: {
         name: 'KuCoin',
@@ -553,23 +491,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.baseCurrency, r.quoteCurrency, r.symbol, { enableTrading: r.enableTrading });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(asRecord(json).data);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const close = Number(row[2]);
-                    const high = Number(row[3]);
-                    const low = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(asRecord(json).data), OHLC_CLOSE_HIGH_LOW),
     },
     htx: {
         name: 'HTX',
@@ -607,31 +529,10 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             return marketRow(base, quote, id, { state: r.state });
         }),
         parseCandles: (json: unknown): CandleRow[] => {
-            const rows = Array.isArray(asRecord(json).data) ? asRecord(json).data as unknown[] : asArray(json);
+            const data = asRecord(json).data;
+            const rows = Array.isArray(data) ? data as unknown[] : asArray(json);
             return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (Array.isArray(row)) {
-                        if (row.length < 6) return null;
-                        const ts = normalizeTimestamp(row[0]);
-                        const open = Number(row[1]);
-                        const close = Number(row[2]);
-                        const high = Number(row[3]);
-                        const low = Number(row[4]);
-                        const volume = Number(row[5]);
-                        if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                        return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                    }
-                    if (!row || typeof row !== 'object') return null;
-                    const o = row as Record<string, unknown>;
-                    const ts = normalizeTimestamp(o.id ?? o.timestamp ?? o.time);
-                    const open = Number(o.open);
-                    const high = Number(o.high);
-                    const low = Number(o.low);
-                    const close = Number(o.close);
-                    const volume = Number(o.amount ?? o.vol ?? o.volume ?? 0);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
+                .map((row) => (Array.isArray(row) ? parseCandleRow(row, OHLC_CLOSE_HIGH_LOW) : parseHtxObjectRow(row)))
                 .filter((x): x is CandleRow => x != null)
                 .sort((a, b) => a[0] - b[0]);
         },
@@ -678,21 +579,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const result = asRecord(asRecord(json).result);
             const pairKey: string | undefined = Object.keys(result).find((key) => key !== 'last');
             if (!pairKey) return [];
-            const rows = asArray(result[pairKey]);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 7) return null;
-                    const ts = normalizeTimestamp(Number(row[0]) * 1000);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[6]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
+            return parseCandleRows(asArray(result[pairKey]), OHLC_KRAKEN);
         },
     },
     okx: {
@@ -728,23 +615,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(r.baseCcy, r.quoteCcy, r.instId, { state: r.state });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(asRecord(json).data);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(asRecord(json).data), OHLC_STANDARD),
     },
     mexc: {
         name: 'MEXC',
@@ -780,23 +651,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
             const r = asRecord(row);
             return marketRow(normalizeBaseAsset(r.baseAsset, r.symbol), r.quoteAsset, r.symbol, { status: r.status });
         }),
-        parseCandles: (json: unknown): CandleRow[] => {
-            const rows = asArray(json);
-            return rows
-                .map((row: unknown): CandleRow | null => {
-                    if (!Array.isArray(row) || row.length < 6) return null;
-                    const ts = normalizeTimestamp(row[0]);
-                    const open = Number(row[1]);
-                    const high = Number(row[2]);
-                    const low = Number(row[3]);
-                    const close = Number(row[4]);
-                    const volume = Number(row[5]);
-                    if (!Number.isFinite(ts) || ![open, high, low, close].every(Number.isFinite)) return null;
-                    return [ts, open, high, low, close, Number.isFinite(volume) ? volume : 0];
-                })
-                .filter((x): x is CandleRow => x != null)
-                .sort((a, b) => a[0] - b[0]);
-        },
+        parseCandles: (json: unknown): CandleRow[] => parseCandleRows(asArray(json), OHLC_STANDARD),
     },
 };
 

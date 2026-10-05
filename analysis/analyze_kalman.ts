@@ -24,6 +24,7 @@ import { getCandleClose } from './math_utils.js';
 import { writeChartFile } from './chart_utils.js';
 import { PATHS } from '../modules/paths.js';
 import { resolveSource, listAvailableBots, type SourceConfig } from './resolve_source.js';
+import { baseAnalysisConfig, consumeCommonAnalysisArg } from './analyze_args.js';
 
 
 
@@ -39,7 +40,7 @@ function parseArgs() {
         quiet: boolean;
         listBots: boolean;
     } = {
-        source: { type: 'market_adapter', config: { botKey: '' } },
+        ...baseAnalysisConfig(),
         // Defaults resolve to the live MARKET_ADAPTER Kalman constants so
         // runs are directly comparable with production (qTactical 0.01,
         // qModal 0.0001 — NOT a single shared Q for both filters).
@@ -48,25 +49,16 @@ function parseArgs() {
         qModal: null,
         qNoise: null,
         chartFile: path.join(PATHS.ANALYSIS.CHARTS_DIR, 'kalman_chart.html'),
-        quiet: false,
-        listBots: false,
     };
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--source') config.source.type = args[++i];
-        else if (arg === '--bot-key') config.source.config.botKey = args[++i];
-        else if (arg === '--file') {
-            config.source.config.filePath = args[++i];
-            config.source.type = 'json';
-        }
-        else if (arg === '--r') config.rNoise = parseFloat(args[++i]);
+        if (consumeCommonAnalysisArg(arg, () => args[++i], config)) continue;
+        if (arg === '--r') config.rNoise = parseFloat(args[++i]);
         else if (arg === '--q') config.qNoise = parseFloat(args[++i]);
         else if (arg === '--q-tactical') config.qTactical = parseFloat(args[++i]);
         else if (arg === '--q-modal') config.qModal = parseFloat(args[++i]);
         else if (arg === '--chart') config.chartFile = args[++i];
-        else if (arg === '--list-bots') config.listBots = true;
-        else if (arg === '--quiet') config.quiet = true;
     }
 
     return config;
