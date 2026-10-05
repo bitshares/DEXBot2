@@ -161,7 +161,7 @@ This directory contains the comprehensive technical documentation for the DEXBot
 - **Signal Concepts**: Dynamic weights, regime detection, and market adapter integration
 - **Debt Policy**: Native MPA and credit offer configuration and runtime rules
 - **Practical How-Tos**: Adding features step by step, common pitfalls to avoid, and useful debugging commands.
-- **Glossary**: Definitions of project-specific terminology (e.g., "Virtual Orders", "Rotation", "Pipeline Safety", "WorkingGrid", "COW Commit", "Dynamic Weight", "Regime Detection").
+- **Glossary**: Definitions of project-specific terminology (e.g., "VIRTUAL order state", "Rotation", "Pipeline Safety", "WorkingGrid", "Atomic Commit", "Dynamic Weight", "Regime Detection").
 
 ### 🔄 [Workflow](WORKFLOW.md)
 *How we build and release.*

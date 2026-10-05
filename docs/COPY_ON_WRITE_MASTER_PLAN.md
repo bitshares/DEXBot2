@@ -230,7 +230,7 @@ syncFromMaster(masterGrid, orderId, masterVersion?) {
 |--------|-------------|
 | `performSafeRebalance(fills, excludeIds)` | Entry point — delegates to COW |
 | `_applySafeRebalanceCOW(fills, excludeIds)` | Creates working grid, runs planning |
-| `WorkingGrid.buildDelta(masterGrid)` | Delta between master and working copy (`modules/order/working_grid.ts:204`, delegating to `utils/order.ts`) |
+| `WorkingGrid.buildDelta(masterGrid)` | Delta between master and working copy (`modules/order/working_grid.ts:205`, delegating to `utils/order.ts`) |
 | `_commitWorkingGrid(workingGrid, indexes, boundary, options = {})` | Atomic swap to master |
 | `_setRebalanceState(state)` | Track rebalance state |
 | `_currentWorkingGrid` | Reference to working grid during rebalance for fill sync |
