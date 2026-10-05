@@ -620,6 +620,7 @@ market_adapter/
 |   |-- adapter_client.ts          inter-process credential daemon client
 |   |-- native_history.ts          native BitShares market history fetch
 |   |-- file_lock.ts               single-instance file lock
+|   |-- file_json_cache.ts         write-through JSON read cache
 |   |-- data_discovery.ts          data directory auto-discovery
 |   |-- atomic_write.ts            atomic file write utility
 |   |-- dynamic_grid_snapshot.ts   dynamic grid snapshot helpers

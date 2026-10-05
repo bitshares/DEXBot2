@@ -1,6 +1,6 @@
 # TradingView HTML Exporter
 
-This exporter generates a standalone HTML chart in the `analysis/charts/` folder using the local `uPlot`-based TradingView-style renderer.
+This exporter generates a standalone HTML chart in the `analysis/charts/` folder using the local `uPlot`-based TradingView-style renderer. The renderer lives in `analysis/tradingview/tradingview_uplot_chart_generator.ts`; `analysis/tradingview/analyze_tradingview.ts` is the CLI entry point.
 
 ## Recommended: `dexbot tv` (One Step)
 

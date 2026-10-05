@@ -523,6 +523,8 @@ Details: [bot_fitting/README.md](bot_fitting/README.md)
 | `resolve_source.ts` | Shared source resolution: bot-key → candle file, AMA config, `--list-bots` |
 | `price_sources.ts` | Unified candle source abstraction (`json`, `market_adapter`) |
 | `chart_utils.ts` | Shared chart rendering utilities |
+| `chart_css.ts` | Shared uPlot CSS fragments for generated charts |
+| `chart_ui.ts` | Shared browser-side uPlot helpers (cursor, hover, zoom-reset, sizing) |
 | `math_utils.ts` | Shared math utilities |
 | `bot_key_utils.ts` | Bot-key resolution, candle file lookup, `accountId` persistence (`persistBotAccountId`) |
 | `account_resolver.ts` | Account resolution for all tools: `preferredAccount` / `--account` → `1.2.x`, stamping the result into `profiles/bots.json` |
