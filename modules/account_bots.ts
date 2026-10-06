@@ -101,7 +101,7 @@ import { parseJsonWithComments } from './order/utils/system.js';
 import { assertNoDuplicateBotKeys, loadSettingsFile, normalizeBotEntry } from './bot_settings.js';
 import type { BotEntry, BotSettingsFile } from './bot_settings.js';
 import type { UnknownRecord } from './types.js';
-import { getWhitelistFlags, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, whitelistFile } from './market_adapter_whitelist.js';
+import { getWhitelistFlags, hasWhitelistEntry, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, whitelistFile, AMA_ONLY_WHITELIST_FLAGS } from './market_adapter_whitelist.js';
 import { BOT_LIVE_CONFIG_KEYS } from './runtime_settings.js';
 import { mergeSettings } from './settings_merge.js';
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
@@ -1296,10 +1296,19 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     // together with the rest of the draft.
     const baseEntry = base && typeof base === 'object' && Object.keys(base).length > 0 ? base : null;
     const baseBotKey = baseEntry ? String(normalizeBotEntry(baseEntry as BotEntry, baseIndex).botKey || '') : '';
+    const isNewBot = !baseEntry;
     let adapterStaged: { ama: boolean; dynamicWeight: boolean; asymmetricBounds: boolean } | null = null;
     const isAmaGridPriceDraft = () => /^ama(?:[1-4])?$/.test(String(data.gridPrice ?? '').trim().toLowerCase());
-    const adapterFlags = () => adapterStaged
-        || getWhitelistFlags(baseBotKey || String(normalizeBotEntry(data as BotEntry, index).botKey || ''));
+    // Staged menu-6 edits win. Otherwise an existing bot uses its stored entry;
+    // a brand-new bot uses that entry too if one already exists for its key,
+    // and only falls back to AMA pricing ON when there is no record at all — so
+    // re-creating a previously configured key never silently flips its flags.
+    const adapterFlags = () => {
+        if (adapterStaged) return adapterStaged;
+        const key = baseBotKey || String(normalizeBotEntry(data as BotEntry, index).botKey || '');
+        if (!isNewBot) return getWhitelistFlags(key);
+        return hasWhitelistEntry(key) ? getWhitelistFlags(key) : { ...AMA_ONLY_WHITELIST_FLAGS };
+    };
 
     let finished = false;
     let cancelled = false;
@@ -1515,13 +1524,18 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     // flags already match what is stored — an unchanged save never creates a
     // placeholder entry.
     const stagedFlags = adapterStaged;
-    const commitAdapter: (() => void) | null = stagedFlags ? () => {
+    // A new bot also commits without an explicit menu-6 edit: its resolved
+    // default (record if present, else AMA-on) must be persisted so the market
+    // adapter sees the same value the editor displayed. An unchanged save still
+    // writes nothing.
+    const commitAdapter: (() => void) | null = (stagedFlags || isNewBot) ? () => {
         const newKey = String(normalizeBotEntry(data, index).botKey || '');
         const needRename = !!(baseBotKey && newKey && baseBotKey !== newKey);
+        const desired = stagedFlags || adapterFlags();
         const current = getWhitelistFlags(baseBotKey || newKey);
-        const unchanged = stagedFlags.ama === current.ama
-            && stagedFlags.dynamicWeight === current.dynamicWeight
-            && stagedFlags.asymmetricBounds === current.asymmetricBounds;
+        const unchanged = desired.ama === current.ama
+            && desired.dynamicWeight === current.dynamicWeight
+            && desired.asymmetricBounds === current.asymmetricBounds;
         if (needRename && !renameWhitelistEntry(baseBotKey, newKey)) {
             console.log(`${COLORS.yellow}Adapter flags not saved — see the warning above.${COLORS.reset}`);
             return;
@@ -1529,7 +1543,7 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
         // Unchanged flags need no write — a successful rename above already
         // migrated the entry under the new key.
         if (unchanged) return;
-        if (!setWhitelistFlags(newKey, stagedFlags)) {
+        if (!setWhitelistFlags(newKey, desired)) {
             console.log(`${COLORS.yellow}Warning: adapter flags not saved — could not write ${whitelistFile()}.${COLORS.reset}`);
         } else {
             console.log(`${COLORS.green}Adapter flags saved for '${newKey}'. Price/Weight are picked up on the adapter's next cycle; Range scaling applies after 'dexbot reset ${data.name}'.${COLORS.reset}`);

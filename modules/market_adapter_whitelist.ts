@@ -114,6 +114,18 @@ function isBotWhitelisted(botKey: string): boolean {
     return getWhitelistFlags(botKey).ama === true;
 }
 
+/**
+ * Whether an explicit whitelist entry exists for this key (distinguishes a
+ * stored all-off entry from an absent one, which getWhitelistFlags collapses
+ * to the same all-false shape).
+ * @param {string} botKey
+ * @returns {boolean}
+ */
+function hasWhitelistEntry(botKey: string): boolean {
+    const whitelist = loadMarketAdapterWhitelist();
+    return whitelist !== false && !!botKey && whitelist.has(String(botKey));
+}
+
 function isBotDynamicWeightWhitelisted(botKey: string): boolean {
     return getWhitelistFlags(botKey).dynamicWeight === true;
 }
@@ -243,5 +255,5 @@ function removeWhitelistEntry(botKey: string): boolean {
     return true;
 }
 
-export { whitelistFile, resetMarketAdapterWhitelistCache, getWhitelistFlags, isBotWhitelisted, isBotDynamicWeightWhitelisted, isBotAsymmetricBoundsWhitelisted, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, DEFAULT_WHITELIST_FLAGS }
+export { whitelistFile, resetMarketAdapterWhitelistCache, getWhitelistFlags, hasWhitelistEntry, isBotWhitelisted, isBotDynamicWeightWhitelisted, isBotAsymmetricBoundsWhitelisted, setWhitelistFlags, renameWhitelistEntry, removeWhitelistEntry, DEFAULT_WHITELIST_FLAGS, AMA_ONLY_WHITELIST_FLAGS }
 
