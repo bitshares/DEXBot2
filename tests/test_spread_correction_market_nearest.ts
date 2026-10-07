@@ -120,6 +120,14 @@ async function testSellNeverTargetsTheCeiling() {
         !placed.includes('slot-291') && !placed.includes('slot-290'),
         `Correction must never create at the grid ceiling; got ${JSON.stringify(placed)}`
     );
+    // Window-contiguous: with the empty sells BELOW the live window, correction
+    // must bridge from the window downward (the HIGHEST empty price), not start
+    // at the far bottom of the gap — the latter leaves an interior hole between
+    // the new order and the live window and over-tightens past the target.
+    assert.strictEqual(
+        placed[0], 'slot-164',
+        `SELL correction must pick the empty closest to the live window (slot-165); got ${placed[0]}`
+    );
     console.log(`  ✓ SELL targets a spread-tightening slot, not the ceiling (${JSON.stringify(placed)})`);
 }
 

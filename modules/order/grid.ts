@@ -115,11 +115,9 @@ interface SpreadCorrection {
 }
 
 interface PrioritizedTarget {
-    kind: 'create' | 'partial-topup';
+    kind: 'create';
     order: ManagedOrder;
-    current: number;
     ideal: number;
-    needed: number;
 }
 
 interface AmaSnapshot {
@@ -2478,6 +2476,13 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
 
             // Capture fund snapshot under lock for pre-flight verification before broadcast
             fundSnapshot = _snapshotFundState(manager);
+            // No executable correction on EITHER side: the balances/holds may be a
+            // stale snapshot (the grid does not lose funds, it holds them in
+            // resting/virtual slots), so ask the caller to refresh account totals +
+            // open orders instead of re-deriving the identical starved plan next
+            // tick. Previously only the "no side at all" case set this flag, so a
+            // fund-constrained plan on a chosen side never triggered a refresh.
+            if ((placeCount + updateCount) === 0) fundsExhausted = true;
             return (placeCount + updateCount) > 0;
         };
 
@@ -2539,8 +2544,7 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                     activeSnapshot = currentFunds;
                     manager.logger?.log?.(
                         `[SPREAD] Fund state changed between lock release and broadcast — ` +
-                        `re-planned with updated funds: ${activeCorrection.ordersToPlace?.length || 0} creates, ` +
-                        `${activeCorrection.ordersToUpdate?.length || 0} updates`,
+                        `re-planned with updated funds: ${activeCorrection.ordersToPlace?.length || 0} creates`,
                         'info'
                     );
                 } else {
@@ -2555,7 +2559,10 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                 const batchResult = await updateOrdersOnChainBatch(activeCorrection);
                 if (!batchResult || batchResult.executed !== true) {
                     manager.logger?.log?.(`Spread correction batch was prepared but not executed. Keeping local state unchanged.`, 'warn');
-                    return { ordersPlaced: 0, partialsMoved: 0 };
+                    // Nothing landed: ask the caller to refresh account totals +
+                    // open orders (stale holds/balances can make the same plan
+                    // re-derive every cycle).
+                    return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted: true };
                 }
             await manager.recalculateFunds();
                 const placed = activeCorrection.ordersToPlace?.length || 0;
@@ -2563,7 +2570,7 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                 return { ordersPlaced: placed + updated, partialsMoved: updated };
             } catch (err) {
                 manager.logger?.log?.(`Error applying spread correction on-chain: ${getErrorMessage(err)}`, 'warn');
-                return { ordersPlaced: 0, partialsMoved: 0 };
+                return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted: true };
             }
         }
         return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted };
@@ -2967,7 +2974,6 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         }
 
         const ordersToPlace: ManagedOrder[] = [];
-        const ordersToUpdate: Array<{ partialOrder: ManagedOrder; newSize: number }> = [];
         const railType = preferredSide;
         const sideName = railType === ORDER_TYPES.BUY ? 'buy' : 'sell';
         const configuredMissingSlots = Number(outOfSpread || 0);
@@ -3025,41 +3031,46 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             return ORDER_TYPES.SPREAD;
         };
 
-        let edgePartial: ManagedOrder | null = null;
-        const partials = allOrders
-            .filter((o) =>
-                getSlotCorrectType(o) === railType
-                && o.state === ORDER_STATES.PARTIAL
-            )
-            .sort((a, b) => railType === ORDER_TYPES.BUY ? b.price - a.price : a.price - b.price);
-        if (partials.length > 0) {
-            edgePartial = partials[0];
-            manager.logger?.log?.(`[SPREAD-CORRECTION] Identified partial order at ${edgePartial.price} for update`, 'debug');
-        }
+        // NOTE: rail partials are deliberately NOT correction targets. A
+        // top-up cannot change bestBuy/bestSell (spread is price-based) and is
+        // forbidden in place by clampPostFillUpdateSize, so the old
+        // edge-partial update was always a no-op that starved the creates.
+        // Spread repair is create-only; the sizing/rotation paths own partials.
 
         // Primary candidates: SPREAD-type slots adjacent to the gap.  Filter by
         // boundary-correct type so a SPREAD slot that, after a boundary shift, now sits
         // in the BUY or SELL zone is excluded — it would otherwise be placed on the
         // correction side at a price the grid already considers the opposite side.
         //
-        // Candidate ordering: MARKET-NEAREST FIRST, one comparator for both
-        // rail states.  A correction is only useful if it tightens bestBuy/bestSell,
-        // which means it must land on the market side of the live window — the
-        // highest empty BUY (live window is the rail top) or the lowest empty
-        // SELL (live window is the rail bottom).  Empty slots always sit on the
-        // far side of the live window, so "adjacent to the window" and "closest
-        // to market" are the same slot, and the same comparator also gives the
-        // correct answer for a fully-empty rail (no window anchor, so the
-        // market-nearest slot is by definition the best one to create).
+        // Candidate ordering: WINDOW-CONTIGUOUS FIRST. The SPREAD-TIGHTENING
+        // GUARD below keeps only candidates on the market side of the live
+        // window; among those the correction must EXTEND the window, i.e. pick
+        // the slot closest to the live edge (highest SELL / lowest BUY). Picking
+        // the far end instead leaves an interior hole between the new order and
+        // the live window and over-tightens past the target spread. With no live
+        // order (fully-empty rail) there is no anchor, so fall back to
+        // market-nearest (lowest SELL / highest BUY) — the best available level.
         //
-        // This previously had two branches — windowFirst (windowed) vs
-        // edgeFirst (empty) — that were written as exact OPPOSITES, so a SELL
-        // rail with a live window sorted DESCENDING and picked the grid
+        // The previous two-branch comparator (windowFirst vs edgeFirst, exact
+        // OPPOSITES) sorted a windowed SELL rail DESCENDING and picked the grid
         // ceiling: an order ~50% above bestSell that cannot tighten the spread
-        // by a single tick, and that the next resync then cancels as surplus.
-        const sortCandidates = (a: ManagedOrder, b: ManagedOrder): number => railType === ORDER_TYPES.BUY
-            ? b.price - a.price
-            : a.price - b.price;
+        // and is cancelled as surplus on the next resync. The single
+        // market-nearest comparator that replaced it fixed that case but sorts
+        // the FAR end first when the empties sit BELOW the window (the normal
+        // post-fill state), which is the same class of bug mirrored.
+        const { onChainBuys, onChainSells } = _getOnChainOrders(manager);
+        const railBestIsMax = railType === ORDER_TYPES.BUY;
+        const bestLiveOnRail = railBestIsMax
+            ? (onChainBuys.length ? Math.max(...onChainBuys.map((o) => o.price)) : null)
+            : (onChainSells.length ? Math.min(...onChainSells.map((o) => o.price)) : null);
+        const sortCandidates = (a: ManagedOrder, b: ManagedOrder): number => {
+            if (bestLiveOnRail != null && a?.price != null && b?.price != null) {
+                // Callers have already applied tightensSpread, so both prices
+                // are on the same side of the anchor and distance is monotone.
+                return Math.abs(a.price - bestLiveOnRail) - Math.abs(b.price - bestLiveOnRail);
+            }
+            return railBestIsMax ? b.price - a.price : a.price - b.price;
+        };
 
         // SPREAD-TIGHTENING GUARD: on a rail that already has a live order, only
         // a candidate that IMPROVES that rail's best price is a spread repair at
@@ -3095,11 +3106,6 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // With no live order on the side there is no reference to improve, so
         // the market-nearest slot is by definition the best available and the
         // guard stays open.
-        const { onChainBuys, onChainSells } = _getOnChainOrders(manager);
-        const railBestIsMax = railType === ORDER_TYPES.BUY;
-        const bestLiveOnRail = railBestIsMax
-            ? (onChainBuys.length ? Math.max(...onChainBuys.map((o) => o.price)) : null)
-            : (onChainSells.length ? Math.min(...onChainSells.map((o) => o.price)) : null);
         const tightensSpread = (c: ManagedOrder): boolean => {
             if (bestLiveOnRail == null || c?.price == null) return true;
             return railBestIsMax ? c.price > bestLiveOnRail : c.price < bestLiveOnRail;
@@ -3284,10 +3290,10 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             manager.logger?.log?.(`[SPREAD-CORRECTION] Identified ${spreadCandidates.length}/${missingSlots} slot(s) for activation on ${sideName} (orphaned=${orphanedVirtualCandidates.length}, spread=${spreadCandidates.length - orphanedVirtualCandidates.length})`, 'debug');
         }
 
-        if (!edgePartial && spreadCandidates.length === 0) {
+        if (spreadCandidates.length === 0) {
             manager.logger?.log?.(
                 bestLiveOnRail == null
-                    ? `[SPREAD-CORRECTION] No suitable partials, orphaned virtual slots, or spread slots found. Skipping.`
+                    ? `[SPREAD-CORRECTION] No orphaned virtual slots or spread slots found. Skipping.`
                     : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
                 'warn'
             );
@@ -3328,41 +3334,34 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             Number(manager.funds?.available?.[sideName] || 0),
             Number(sideName === 'buy' ? manager.accountTotals?.buyFree : manager.accountTotals?.sellFree) || 0
         ));
-        // PURE FUND-DRIVEN: corrections are funded exclusively by free
-        // available/chainFree. No resting order is ever shrunk to manufacture
+        // PURE FUND-DRIVEN: corrections are funded exclusively by
+        // funds.available[side] and the cached accountTotals[side]Free read.
+        // No resting order is ever shrunk to manufacture
         // budget (the previous self-funded/redistribution paths moved
         // inventory within a rail and were gamed by stale-size snapshots).
-        // When free funds cannot cover every target, the loop below places /
-        // tops-up what they allow and stops; the caller refreshes account
-        // totals + open orders to find out whether the shortfall was a stale
-        // accounting read (the grid does not lose funds, it holds them in
-        // resting orders).
+        // When free funds cannot cover every candidate, the loop below places
+        // what they allow and stops; the caller refreshes account totals + open
+        // orders to find out whether the shortfall was a stale accounting read
+        // (the grid does not lose funds, it holds them in resting orders).
 
         const prioritizedTargets: PrioritizedTarget[] = [];
 
-        if (edgePartial && edgePartial.id) {
-            const ideal = Number(idealById.get(edgePartial.id) || 0);
-            const current = Number(edgePartial.size || 0);
-            if (ideal > current + precisionEpsilon) {
-                prioritizedTargets.push({
-                    kind: 'partial-topup',
-                    order: edgePartial,
-                    current,
-                    ideal,
-                    needed: Math.max(0, ideal - current)
-                });
-            }
-        }
-
+        // Spread repair works by adding PRICE LEVELS, never by deepening an
+        // existing one: a top-up grows an order at its current price and so
+        // cannot move bestBuy/bestSell, and it is un-executable in place
+        // (a PARTIAL slot may not be grown by a COW update —
+        // clampPostFillUpdateSize). The old edge-partial top-up always clamped
+        // to a no-op yet ran FIRST and consumed the whole budget, leaving the
+        // creates unfunded ("planned N, placing 0") and the batch empty
+        // ("prepared but not executed"). Fund creates only, still from
+        // available free funds alone.
         for (const slot of spreadCandidates) {
             const ideal = Number(idealById.get(slot.id) || 0);
             if (ideal > precisionEpsilon) {
                 prioritizedTargets.push({
                     kind: 'create',
                     order: slot,
-                    current: 0,
-                    ideal,
-                    needed: ideal
+                    ideal
                 });
             }
         }
@@ -3373,18 +3372,47 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
 
         let remainingBudget = availableFund;
 
-        for (const target of prioritizedTargets) {
-            if (remainingBudget <= precisionEpsilon) break;
+        // FUNDING PROBE (diagnostic): one line per correction cycle showing the
+        // quantities that decide whether candidates can be funded. availableFund
+        // is min(funds.available[side], accountTotals[side]Free); when the
+        // virtual rail has already reserved the free balance this reads ~0 even
+        // though the side still holds inventory — the state that makes the loop
+        // below place fewer orders than the plan's candidates.
+        manager.logger?.log?.(
+            `[SPREAD-CORRECTION] Funding probe side=${sideName}: ` +
+            `availableFund=${Format.formatAmount8(availableFund)} ` +
+            `budget=${Format.formatAmount8(Number(ctx.budget || 0))} ` +
+            `virtual=${Format.formatAmount8(Number(sideName === 'buy' ? manager.funds?.virtual?.buy : manager.funds?.virtual?.sell) || 0)} ` +
+            `free=${Format.formatAmount8(Number(sideName === 'buy' ? manager.accountTotals?.buyFree : manager.accountTotals?.sellFree) || 0)} ` +
+            `virtualSell=${Format.formatAmount8(Number(manager.funds?.virtual?.sell || 0))} ` +
+            `sellFree=${Format.formatAmount8(Number(manager.accountTotals?.sellFree || 0))} ` +
+            `candidates=${prioritizedTargets.length} ` +
+            `ideals=[${prioritizedTargets.map((t) => `${t.order.id}:${Format.formatAmount8(Number(t.ideal || 0))}`).join(', ')}]`,
+            'debug'
+        );
 
-            if (target.kind === 'partial-topup') {
-                const topUp = Math.min(target.needed, remainingBudget);
-                const newSize = target.current + topUp;
-                if (newSize > target.current + precisionEpsilon && isOrderHealthy(newSize, railType, manager.assets, target.ideal)) {
-                    ordersToUpdate.push({ partialOrder: { ...target.order }, newSize });
-                    remainingBudget -= topUp;
-                }
-                continue;
-            }
+        // A truncated create (ideal >> residual) may fail isOrderHealthy's
+        // dust/minimum check against its OWN ideal; that candidate is skipped
+        // (continue) and the next one is tried with the SAME residual, so a
+        // small budget can still fund a smaller candidate. When every candidate
+        // is too truncated the residual is intentionally left UNSPENT rather
+        // than force-placed as dust — the refresh above is what distinguishes
+        // "genuinely no room" from "stale accounting read".
+        for (const target of prioritizedTargets) {
+            // FUNDING PROBE (per candidate): remainingBudget is read BEFORE this
+            // target is applied, so a "placing 0" cycle can be attributed to the
+            // residual gate rather than to isOrderHealthy/dust rejection.
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] Funding probe ${target.kind} ${target.order.id}: ` +
+                `ideal=${Format.formatAmount8(Number(target.ideal || 0))} ` +
+                `remainingBudget=${Format.formatAmount8(remainingBudget)} ` +
+                `availableFund=${Format.formatAmount8(availableFund)} ` +
+                `budget=${Format.formatAmount8(Number(ctx.budget || 0))} ` +
+                `virtualSell=${Format.formatAmount8(Number(manager.funds?.virtual?.sell || 0))} ` +
+                `sellFree=${Format.formatAmount8(Number(manager.accountTotals?.sellFree || 0))}`,
+                'debug'
+            );
+            if (remainingBudget <= precisionEpsilon) break;
 
             const createSize = Math.min(target.ideal, remainingBudget);
             if (createSize <= precisionEpsilon) continue;
@@ -3454,8 +3482,6 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             }
         }
 
-        const combinedUpdates = [...ordersToUpdate];
-
         if (spreadCandidates.length < missingSlots) {
             manager.logger?.log?.(
                 `[SPREAD-CORRECTION] Requested ${missingSlots} extra slot(s), found ${spreadCandidates.length} available slot(s) on ${sideName}`,
@@ -3470,12 +3496,12 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             );
         }
 
-        if (combinedUpdates.length > 0 || ordersToPlace.length > 0) {
+        if (ordersToPlace.length > 0) {
             manager.logger?.log?.(
-                `[SPREAD-CORRECTION] Prepared updates=${combinedUpdates.length}, creates=${ordersToPlace.length}, remainingBudget=${Format.formatSizeByOrderType(Math.max(0, remainingBudget), railType, manager.assets)}`,
+                `[SPREAD-CORRECTION] Prepared creates=${ordersToPlace.length}, remainingBudget=${Format.formatSizeByOrderType(Math.max(0, remainingBudget), railType, manager.assets)}`,
                 'debug'
             );
         }
 
-        return { ordersToPlace, ordersToUpdate: combinedUpdates, ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: 'spread-correction' };
+        return { ordersToPlace, ordersToUpdate: [], ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: 'spread-correction' };
     }

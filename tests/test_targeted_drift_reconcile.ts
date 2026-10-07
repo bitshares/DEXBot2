@@ -123,6 +123,56 @@ async function runTests() {
             'cleared flag must not trigger a refresh');
     }
 
+    // Option (a): the funds-exhausted trigger is a REFRESH, not a standing
+    // reconcile. After a successful sync the flag must clear (a stale-read
+    // shortfall the refresh resolves must not force a reconcile); if the sync
+    // ABORTS the flag must stay set so the next tick retries. Both halves are
+    // asserted here because "aborted retains the flag" is otherwise guaranteed
+    // only by statement order (the early return precedes the clear), which a
+    // later refactor can silently break.
+    console.log(' - Testing funds-exhausted refresh clears on success, retains on abort...');
+    {
+        const makeRefreshBot = (aborted: boolean) => {
+            const state = { syncCalls: 0 };
+            const bot = {
+                accountId: '1.2.345',
+                config: { dryRun: false, activeOrders: { buy: 0, sell: 0 } },
+                manager: {
+                    fetchAccountTotals: async () => {},
+                    checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }),
+                    persistGrid: async () => {},
+                },
+                _spreadFundsExhausted: true,
+                _targetedDriftSyncCooldownMs: 0,
+                _lastTargetedDriftSyncAt: 0,
+                _log: () => {},
+                _warn: () => {},
+                _syncOpenOrdersAndProcessFills: async () => {
+                    state.syncCalls++;
+                    return { syncResult: { unmatchedChainOrders: [] }, openOrders: [], aborted };
+                },
+            };
+            return { bot, state };
+        };
+
+        const { bot: ok, state: okState } = makeRefreshBot(false);
+        const ran = await MaintenanceRuntime.maybeRunTargetedDriftReconciliation(ok, 'test');
+        assert.strictEqual(ran, true, 'refresh must run for the funds-exhausted trigger');
+        assert.strictEqual(okState.syncCalls, 1, 'refresh must fetch open orders exactly once');
+        assert.strictEqual(ok._spreadFundsExhausted, false,
+            'a successful refresh must clear the funds-exhausted flag so the reconcile is conditional');
+        assert(ok._lastTargetedDriftSyncAt > 0, 'a successful refresh must stamp the cooldown');
+
+        const { bot: abort, state: abortState } = makeRefreshBot(true);
+        const ranAbort = await MaintenanceRuntime.maybeRunTargetedDriftReconciliation(abort, 'test');
+        assert.strictEqual(ranAbort, false, 'aborted sync must not report a completed refresh');
+        assert.strictEqual(abortState.syncCalls, 1, 'aborted refresh must still have attempted the sync');
+        assert.strictEqual(abort._spreadFundsExhausted, true,
+            'an aborted refresh must retain the funds-exhausted flag so the next tick retries');
+        assert.strictEqual(abort._lastTargetedDriftSyncAt, 0,
+            'an aborted refresh must not stamp the cooldown (retry must not be locked out)');
+    }
+
     console.log('✓ Targeted drift reconcile tests passed!');
 }
 

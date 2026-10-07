@@ -567,9 +567,10 @@ async function checkAndApplyBotConfigChanges(bot: BotLike, context: string = 'bo
             );
             // Deliver the promise above instead of waiting for the next fill
             // or the 240-min fetch: run the targeted drift reconciliation
-            // right away (same fire-and-forget shape as the poll tick — the
-            // callee owns its cooldown and pipeline gates, so a busy pipeline
-            // skips and the next maintenance tick retries).
+            // right away (same fire-and-forget shape as the poll tick). The
+            // callee owns the cooldown; the periodic call site additionally
+            // gates on an empty pipeline, which this config-pickup path does
+            // not — it retries on the next maintenance tick either way.
             try {
                 const driftRun = maybeRunTargetedDriftReconciliation(bot, `${context} config pickup`);
                 driftRun?.catch?.((err: unknown) => {
@@ -739,10 +740,12 @@ function getTargetedSyncReason(bot: BotLike) {
         return { reason: `fund drift: ${drift.reason}`, targetBuy, targetSell, liveBuy, liveSell, drift };
     }
 
-    // Pure fund-driven spread correction found no free funds on either side.
-    // The balances may simply be a stale snapshot (fills not yet booked), so
-    // the only fallback is to refresh account totals + open orders and let the
-    // next correction cycle re-check. Never recycle resting inventory.
+    // Spread correction placed no effective orders: either it found no free
+    // funds on either side, or the prepared batch did not execute. The balances
+    // or holds may simply be a stale snapshot (the grid does not lose funds, it
+    // holds them in resting/virtual slots), so the only fallback is to refresh
+    // account totals + open orders and let the next correction cycle re-check.
+    // Never recycle resting inventory.
     if (bot._spreadFundsExhausted === true) {
         return { reason: 'spread correction had no free funds', targetBuy, targetSell, liveBuy, liveSell, drift };
     }
@@ -785,6 +788,16 @@ async function maybeRunTargetedDriftReconciliation(bot: BotLike, context: string
             bot._warn(`[TARGETED-SYNC] Chain sync failed during ${context}, skipping reconciliation`);
             return false;
         }
+
+        // The point of a funds-exhausted trigger is the REFRESH itself: it
+        // exists to correct a stale balance/reservation read, not to force a
+        // reconcile. Clear the flag now so the re-check below (and the next
+        // tick's gate) treats "funds appeared after the refresh" as resolved and
+        // only reconciles on a still-concrete signal — fund drift or a counted
+        // order shortfall. The spread check later this tick re-derives the flag
+        // from fresh state, so a genuinely empty balance re-arms it for the next
+        // tick (subject to the cooldown below).
+        if (bot._spreadFundsExhausted === true) bot._spreadFundsExhausted = false;
 
         const remaining = getTargetedSyncReason(bot);
         const unmatchedCount = Number(syncResult?.unmatchedChainOrders?.length || 0);
@@ -3525,7 +3538,7 @@ async function syncOpenOrdersAndProcessFillsImpl(bot: BotLike, tag: string) {
         return { syncResult: null, aborted: true, hasUnmatched: -1, openOrders: null };
     }
 }
-export { loadBotsConfigSnapshot, isWrapperAdapterOwner, checkAndApplyBotConfigChanges, buildBotConfigFingerprint, refreshDynamicWeightDistribution, performGridResync, updateBotGridResetMetadata, handlePendingTriggerReset, setupTriggerFileDetection, performPeriodicGridChecks, isOpenOrdersSyncLoopEnabled, startOpenOrdersSyncLoop, stopOpenOrdersSyncLoop, setupBlockchainFetchInterval, stopBlockchainFetchInterval, setupBotsConfigPollInterval, stopBotsConfigPollInterval, executeMaintenanceLogic, getTargetedSyncReason, countLiveReserveOrders, cancelDustOrders, isOrderDoesNotExistError, runGridMaintenance, releaseMarketAdapterRuntime, syncMarketAdapterOnPeriodicConfigCheck, usesAmaGridPrice, runDustHealthCheck, setupDustHealthCheckInterval, requestGridReset, wireStructuralGridResyncRequest, getPipelineSignals, markGridActivity, getMetrics, syncOpenOrdersAndProcessFills, shouldDeferMaintenanceForBroadcast, checkGridLockHoldDuration };
+export { loadBotsConfigSnapshot, isWrapperAdapterOwner, checkAndApplyBotConfigChanges, buildBotConfigFingerprint, refreshDynamicWeightDistribution, performGridResync, updateBotGridResetMetadata, handlePendingTriggerReset, setupTriggerFileDetection, performPeriodicGridChecks, isOpenOrdersSyncLoopEnabled, startOpenOrdersSyncLoop, stopOpenOrdersSyncLoop, setupBlockchainFetchInterval, stopBlockchainFetchInterval, setupBotsConfigPollInterval, stopBotsConfigPollInterval, executeMaintenanceLogic, getTargetedSyncReason, maybeRunTargetedDriftReconciliation, countLiveReserveOrders, cancelDustOrders, isOrderDoesNotExistError, runGridMaintenance, releaseMarketAdapterRuntime, syncMarketAdapterOnPeriodicConfigCheck, usesAmaGridPrice, runDustHealthCheck, setupDustHealthCheckInterval, requestGridReset, wireStructuralGridResyncRequest, getPipelineSignals, markGridActivity, getMetrics, syncOpenOrdersAndProcessFills, shouldDeferMaintenanceForBroadcast, checkGridLockHoldDuration };
 
 
 export default {
