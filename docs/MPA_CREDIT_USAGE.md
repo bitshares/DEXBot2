@@ -266,6 +266,26 @@ When a deal's `latest_repay_time` is within `CREDIT_DEAL_EXPIRY_THRESHOLD_HOURS`
 
 If inline reborrow cannot be built safely, the runtime stores a deferred reborrow request in `profiles/credit_runtime/<botKey>.json` and retries later.
 
+#### Shortfall-Aware Partial Renewal
+
+The repay leg is funded from the borrower's *free* debt-asset balance before the atomic reborrow returns anything. If that balance is below principal + credit fee (the borrowed asset was spent into the grid), a full renewal fails on-chain with `Insufficient Balance`. The runtime renews the largest affordable piece instead:
+
+- `free >= principal + fee` → full renewal (legacy behaviour).
+- Otherwise repay/reborrow the largest piece that fits, floored to the debt-asset precision, clamped to the offer's `min_deal_amount` and the policy's `maxBorrowAmountPerOperation`, and leaving one raw unit unspent as a balance-drift buffer.
+- The remainder keeps its original `latest_repay_time` (the rolled piece gets a fresh one), so later cycles chip it away.
+- If no piece can be formed, it falls back to the full renewal so the chain error still surfaces.
+
+The reborrow snapshots the pre-repay deal IDs, so the stale-entry guard only drops a request when a deal *appeared after* the repay on the same offer — sibling deals no longer block a legitimate reborrow.
+
+#### Collateral Shortfall Scaling
+
+A reborrow can only lock the collateral the repay just released. If the market moved against the collateral, the full debt needs more than the deal holds, so the runtime clamps the borrow to the released collateral rather than emit an op that fails the collateral check:
+
+- `buildCreditOfferAcceptOperation` takes an optional raw `availableCollateralAmount` budget and shrinks the borrow to the maximum that budget can back at the offer price (`capBorrowToCollateral`). It lives in the shared builder, so original, fallback, and deferred reborrows all get it.
+- A clamped borrow below `min_deal_amount` is deferred and retried (up to `TIMING.CREDIT_REBORROW_MAX_ATTEMPTS`, default `6`) so a price recovery can revive it; after the limit it is dropped. The repay still proceeds, so the position deleverages.
+- The collateral-switch flow passes the new asset's balance as the budget.
+- Each accept records `requestedBorrowAmount` vs `borrowAmount` and `clampedByCollateral` in `lastBorrowRequest`.
+
 ### Collateral Switching on Renewal
 
 You can switch a credit deal's collateral to a different asset on its next renewal by changing `lendingItem.collateralAsset` to the new asset in `bots.json`. The runtime detects existing deals whose collateral no longer matches the policy and migrates them during proactive expiry repay+reborrow. Requirements:
@@ -322,7 +342,7 @@ The file tracks discovered chain state and pending work, including:
 - `positions` — per-position state map keyed as `debtAssetId:collateralAssetId`
 - Active MPA call-order state and credit deal IDs per position
 - `assignedCollateralBudget` per position
-- Pending reborrow requests (including deferred split pieces when an oversized-deal cycle hits `CREDIT_DEAL_SPLIT_MAX_PIECES`)
+- Pending reborrow requests (including deferred split pieces when an oversized-deal cycle hits `CREDIT_DEAL_SPLIT_MAX_PIECES`, and the `reborrowAttempts` counter that bounds retries)
 - Last repay timestamp and grid reset request
 - Debt snapshot across all assets
 
@@ -343,8 +363,7 @@ Treat this file as runtime state, not primary configuration. The source of truth
 
 - `modules/credit_runtime.ts`: debt workflow executor (Phase 0 oversized-deal splitter lives here)
 - `modules/credit_pricing.ts`: canonical credit-pricing math (offer orientation, conversion rates, CR, fees) shared by runtime and analyzer
-- `modules/cr_planner.ts`: MPA debt-first planner; clamps `debtDelta` by `maxBorrowAmountPerOperation`
-- `modules/cr_planner.ts`: `DebtFirstCrPlanOptions` — planner options carrying `maxBorrowAmountPerOperation`; lending-item shapes are validated inline in `bot_settings.ts`
+- `modules/cr_planner.ts`: MPA debt-first planner (`DebtFirstCrPlanOptions`, clamps `debtDelta` by `maxBorrowAmountPerOperation`); lending-item shapes are validated in `modules/bot_settings.ts`
 - `modules/dexbot_class.ts`: runtime startup and watchdog lifecycle
 - `modules/bot_settings.ts`: `debtPolicy` validation
 - `market_adapter/README.md`: AMA pricing, grid triggers, and dynamic-weight runtime

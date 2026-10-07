@@ -12,6 +12,7 @@ const {
   collateralValueFromOfferPrice,
   requiredCollateralForBorrow,
   borrowAmountForCollateral,
+  capBorrowToCollateral,
   creditDealCollateralRatio,
   averageCollateralRatio,
   dailyOfferFeeRate,
@@ -80,6 +81,19 @@ function testRequiredAndBorrowRoundTrip() {
   assert.strictEqual(requiredCollateralForBorrow(100000, null, '1.3.10', '1.3.0'), null, 'missing price is null');
 }
 
+function testCapBorrowToCollateral() {
+  // Core price: 2 debt-base / 1 collateral-quote. 50000 collateral yields 100000.
+  const core = { base: { amount: 200000, asset_id: '1.3.10' }, quote: { amount: 100000, asset_id: '1.3.0' } };
+  assert.strictEqual(capBorrowToCollateral(200000, null, core, '1.3.10', '1.3.0'), 200000, 'no budget keeps requested');
+  assert.strictEqual(capBorrowToCollateral(200000, 50000, core, '1.3.10', '1.3.0'), 100000, 'budget clamps down to what collateral supports');
+  assert.strictEqual(capBorrowToCollateral(80000, 50000, core, '1.3.10', '1.3.0'), 80000, 'sufficient budget keeps requested');
+  assert.strictEqual(capBorrowToCollateral(200000, 0, core, '1.3.10', '1.3.0'), null, 'zero budget cannot support a borrow');
+  assert.strictEqual(capBorrowToCollateral(0, 50000, core, '1.3.10', '1.3.0'), null, 'non-positive request is null');
+  assert.strictEqual(capBorrowToCollateral(200000, 50000, null, '1.3.10', '1.3.0'), null, 'missing price is null');
+  const reversed = { base: { amount: 100000, asset_id: '1.3.0' }, quote: { amount: 200000, asset_id: '1.3.10' } };
+  assert.strictEqual(capBorrowToCollateral(200000, 50000, reversed, '1.3.10', '1.3.0'), 100000, 'reversed orientation matches core');
+}
+
 function testCreditDealCollateralRatio() {
   assert.strictEqual(creditDealCollateralRatio(10, 4, 2), 0.8, 'collateral value / debt');
   assert.strictEqual(creditDealCollateralRatio(10, 4, null), null, 'no rate is null');
@@ -114,6 +128,7 @@ function main() {
   testExtractOfferConversionRate();
   testCollateralValueFromOfferPrice();
   testRequiredAndBorrowRoundTrip();
+  testCapBorrowToCollateral();
   testCreditDealCollateralRatio();
   testAverageCollateralRatio();
   testDailyOfferFeeRate();

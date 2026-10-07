@@ -8,7 +8,7 @@ import { getStorage } from './storage/index.js';
 import * as client from './bitshares_client.js';
 const { BitShares, waitForConnected } = client;
 import * as chainOrders from './chain_orders.js';
-import { blockchainToFloat, floatToBlockchainInt, resolveConfigValue, isPercentageString, parsePercentageString, roundToDecimals } from './order/utils/math.js';
+import { blockchainToFloat, floatToBlockchainInt, floorToBlockchainInt, resolveConfigValue, isPercentageString, parsePercentageString, roundToDecimals } from './order/utils/math.js';
 import { toFiniteNumber } from './order/format.js';
 import { createBotKey } from './account_orders.js';
 import * as fundRegistry from './fund_registry.js';
@@ -33,6 +33,7 @@ import {
 } from './cr_planner.js';
 import {
     borrowAmountForCollateral as sharedBorrowAmountForCollateral,
+    capBorrowToCollateral as sharedCapBorrowToCollateral,
     collateralValueFromOfferPrice as sharedCollateralValueFromOfferPrice,
     creditDealFee as sharedCreditDealFee,
     dailyOfferFeeRate as sharedDailyOfferFeeRate,
@@ -47,6 +48,11 @@ const CREDIT_FEE_RATE_DENOM = FEE_PARAMETERS.GRAPHENE_FEE_RATE_DENOM;
 const ZERO_ASSET_ID = NATIVE_CLIENT.CHAIN.CORE_ASSET_ID;
 const DEFAULT_STATE_DIR = PATHS.CREDIT_RUNTIME_DIR;
 const GRAPHENE_COLLATERAL_RATIO_DENOM = FEE_PARAMETERS.GRAPHENE_COLLATERAL_RATIO_DENOM;
+// Raw debt-asset units kept unspent by a renewal repay, so the repay still fits
+// if the free balance drifts by a tick between the balance read and broadcast.
+// The on-chain repay fee is exact, so without this the sizing can land precisely
+// on the free balance and any one-unit drift would fail the whole batch.
+const CREDIT_REBORROW_FREE_BALANCE_BUFFER_INT = 1;
 
 
 function deepClone<T>(value: T): T {
@@ -758,8 +764,7 @@ class CreditRuntime {
                     throw new Error(`Unable to resolve account for percentage amount on ${String(asset.id)}`);
                 }
                 const balances = await chainOrders.getOnChainAssetBalances(accountRef, [String(asset.id)]);
-                const balanceMap = balances as Record<string, unknown> | null | undefined;
-                const balance = (balanceMap?.[String(asset.id)] || balanceMap?.[String(asset.symbol)] || null) as UnknownRecord | null;
+                const balance = this._pickOnChainBalanceEntry(balances, asset.id, asset);
                 total = toFiniteNumber(balance?.[balanceField], NaN);
                 if (!Number.isFinite(total) || total < 0) {
                     throw new Error(`Unable to resolve ${referenceLabel} for ${String(asset.id)}`);
@@ -1196,8 +1201,7 @@ class CreditRuntime {
             this._fetchBorrowerDeals().catch(() => []),
         ]);
 
-        const balanceMap = balances as Record<string, unknown> | null | undefined;
-        const balance = (balanceMap?.[String(assetId)] || balanceMap?.[String(asset.symbol)] || null) as UnknownRecord | null;
+        const balance = this._pickOnChainBalanceEntry(balances, assetId, asset);
         const onChainTotal = toFiniteNumber(balance?.total, NaN);
         if (!Number.isFinite(onChainTotal)) {
             return null;
@@ -1775,7 +1779,7 @@ class CreditRuntime {
         };
     }
 
-    async buildCreditOfferAcceptOperation({ offer, borrowAmount, collateralAmount, autoRepay = false, specificPolicy = null, pendingRepayAmount = null, pendingReleaseCollateralAmount = null }: { offer?: UnknownRecord | null; borrowAmount?: unknown; collateralAmount?: unknown; autoRepay?: boolean; specificPolicy?: UnknownRecord | null; pendingRepayAmount?: unknown; pendingReleaseCollateralAmount?: unknown } = {}): Promise<UnknownRecord> {
+    async buildCreditOfferAcceptOperation({ offer, borrowAmount, collateralAmount, autoRepay = false, specificPolicy = null, pendingRepayAmount = null, pendingReleaseCollateralAmount = null, availableCollateralAmount = null }: { offer?: UnknownRecord | null; borrowAmount?: unknown; collateralAmount?: unknown; autoRepay?: boolean; specificPolicy?: UnknownRecord | null; pendingRepayAmount?: unknown; pendingReleaseCollateralAmount?: unknown; availableCollateralAmount?: number | null } = {}): Promise<UnknownRecord> {
         let policy = specificPolicy;
         if (!policy) {
             const dp = this.debtPolicy;
@@ -1854,6 +1858,8 @@ class CreditRuntime {
 
         let borrowInt: number | null = null;
         let requiredCollateralInt: number | null = null;
+        let requestedBorrowInt: number | null = null;
+        let clampedByCollateral = false;
         const requestedBorrowAmount = borrowAmount !== undefined && borrowAmount !== null
             ? positiveOrNull(borrowAmount)
             : null;
@@ -1867,6 +1873,32 @@ class CreditRuntime {
             if (!Number.isFinite(borrowInt) || borrowInt <= 0) {
                 throw new Error('borrowAmount must be positive');
             }
+            requestedBorrowInt = borrowInt;
+
+            // A reborrow can only lock the collateral the repay just released.
+            // If the requested borrow needs more than that (for example the
+            // market moved against the collateral since the deal was opened),
+            // scale the borrow down to what the budget supports instead of
+            // emitting an op that cannot be collateralized.
+            const hasCollateralBudget = availableCollateralAmount !== null && availableCollateralAmount !== undefined && availableCollateralAmount > 0;
+            if (hasCollateralBudget) {
+                const cappedBorrowInt = sharedCapBorrowToCollateral(
+                    borrowInt,
+                    availableCollateralAmount,
+                    collateralPrice,
+                    String(debtAsset.id),
+                    String(collateralAsset.id),
+                );
+                if (cappedBorrowInt === null || cappedBorrowInt <= 0) {
+                    throw new Error('released collateral cannot support any reborrow at offer price');
+                }
+                if (cappedBorrowInt < borrowInt) {
+                    this.log(`credit runtime: shrinking reborrow from ${blockchainToFloat(borrowInt, Number(debtAsset.precision))} to ${blockchainToFloat(cappedBorrowInt, Number(debtAsset.precision))} — released collateral ${blockchainToFloat(availableCollateralAmount, Number(collateralAsset.precision))} ${collateralAsset.symbol} supports only that much`);
+                    borrowInt = cappedBorrowInt;
+                    clampedByCollateral = true;
+                }
+            }
+
             this._enforceMaxBorrowAmount(policy, borrowInt, debtAsset, { pendingRepayAmount });
 
             const minimumCollateralInt = this._calculateRequiredCollateral(borrowInt, collateralPrice, debtAsset, collateralAsset);
@@ -1876,6 +1908,15 @@ class CreditRuntime {
             requiredCollateralInt = collateralSpec?.amount !== null && collateralSpec?.amount !== undefined
                 ? await this._resolveAmountToBlockchainInt(collateralSpec, collateralAsset, accountId, { balanceField: 'total', referenceAmount: collateralReferenceAmount, referenceLabel: 'total collateral balance' })
                 : minimumCollateralInt;
+
+            // An explicit collateral amount (e.g. a percentage spec) may still
+            // exceed the released budget; cap it so the op cannot over-lock. Do
+            // NOT recompute the borrow here — it was already clamped above and
+            // must never grow back past the requested amount.
+            if (hasCollateralBudget && requiredCollateralInt != null && requiredCollateralInt > availableCollateralAmount) {
+                requiredCollateralInt = availableCollateralAmount;
+            }
+
             if (minimumCollateralInt != null && requiredCollateralInt != null && requiredCollateralInt < minimumCollateralInt) {
                 throw new Error(`collateral amount ${requiredCollateralInt} is below required collateral ${minimumCollateralInt}`);
             }
@@ -1885,6 +1926,7 @@ class CreditRuntime {
                 : null;
             requiredCollateralInt = await this._resolveAmountToBlockchainInt(collateralSpec, collateralAsset, accountId, { balanceField: 'total', referenceAmount: collateralReferenceAmount, referenceLabel: 'total collateral balance' });
             borrowInt = this._calculateBorrowAmountFromCollateral(requiredCollateralInt, collateralPrice, debtAsset, collateralAsset);
+            requestedBorrowInt = borrowInt;
             if (borrowInt != null && Number.isFinite(borrowInt) && borrowInt > 0) {
                 this._enforceMaxBorrowAmount(policy, borrowInt, debtAsset, { pendingRepayAmount });
             }
@@ -1980,7 +2022,9 @@ class CreditRuntime {
         this.state.lastBorrowRequest = {
             offerId: String(offerId),
             borrowAmount: borrowInt,
+            requestedBorrowAmount: requestedBorrowInt,
             collateralAmount: requiredCollateralInt,
+            clampedByCollateral,
             autoReborrow: !!policy?.autoReborrow,
             requestedAt: nowIso()
         };
@@ -2130,8 +2174,16 @@ class CreditRuntime {
         }
         let deferredReborrowRequest: UnknownRecord | null = null;
         let inlineReborrowPlanned = false;
+        let availableReborrowCollateralInt: number | null = null;
+        // Snapshot the deals that already exist before this repay broadcasts.
+        // A later pending reborrow can then distinguish a genuine replacement
+        // (a deal that appeared after the repay) from a sibling deal that was
+        // already present on the same offer and must not suppress the reborrow.
+        const preRepayDealIds = this._collectActiveDealIds();
 
         if (shouldAutoReborrow) {
+            // Collateral this repay frees — the ceiling a reborrow may lock.
+            availableReborrowCollateralInt = await this._computeReleasedCollateralInt(dealSummary, repayAmount, options);
             const reborrowAmount = options.reborrowAmount !== undefined && options.reborrowAmount !== null
                 ? options.reborrowAmount
                 : repayAmount;
@@ -2178,6 +2230,7 @@ class CreditRuntime {
                         specificPolicy: options.specificPolicy as UnknownRecord | null | undefined,
                         pendingRepayAmount: repayAmount,
                         pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
+                        availableCollateralAmount: availableReborrowCollateralInt,
                     });
                     operations.push(acceptOp);
                     inlineReborrowPlanned = true;
@@ -2191,6 +2244,7 @@ class CreditRuntime {
                         autoRepay: autoRepaySetting,
                         pendingRepayAmount: repayAmount,
                         pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
+                        availableCollateralAmount: availableReborrowCollateralInt,
                         excludeOfferId: dealSummary.offerId,
                     });
                     if (fallback) {
@@ -2205,6 +2259,8 @@ class CreditRuntime {
                             collateralAmount: reborrowCollateralAmount,
                             autoRepay: autoRepaySetting,
                             specificPolicy: reborrowPolicy,
+                            preRepayDealIds,
+                            availableCollateralAmount: availableReborrowCollateralInt,
                             pendingRepayAmount: repayAmount,
                             pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
                             requestedAt: nowIso(),
@@ -2222,6 +2278,7 @@ class CreditRuntime {
                     autoRepay: autoRepaySetting,
                     pendingRepayAmount: repayAmount,
                     pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
+                    availableCollateralAmount: availableReborrowCollateralInt,
                     excludeOfferId: dealSummary.offerId,
                 });
                 if (fallback) {
@@ -2236,6 +2293,8 @@ class CreditRuntime {
                         collateralAmount: reborrowCollateralAmount,
                         autoRepay: autoRepaySetting,
                         specificPolicy: reborrowPolicy,
+                        preRepayDealIds,
+                        availableCollateralAmount: availableReborrowCollateralInt,
                         pendingRepayAmount: repayAmount,
                         pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
                         requestedAt: nowIso(),
@@ -2265,6 +2324,8 @@ class CreditRuntime {
                         ? reborrowPolicy.autoRepay
                         : (dealSummary.autoRepay ?? false)),
                 specificPolicy: reborrowPolicy,
+                preRepayDealIds,
+                availableCollateralAmount: availableReborrowCollateralInt,
                 pendingRepayAmount: repayAmount,
                 pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
                 requestedAt: nowIso(),
@@ -2279,6 +2340,7 @@ class CreditRuntime {
                         autoRepay: reborrowRequest.autoRepay as boolean | undefined,
                         specificPolicy: reborrowRequest.specificPolicy as UnknownRecord | null | undefined,
                         pendingReleaseCollateralAmount: reborrowRequest.pendingReleaseCollateralAmount,
+                        availableCollateralAmount: (reborrowRequest.availableCollateralAmount as number | null) ?? null,
                     });
                     await this.executeOperations([acceptOp], 'credit reborrow');
                     await this.refreshState();
@@ -2315,6 +2377,9 @@ class CreditRuntime {
             collateralAmount: request.collateralAmount ?? null,
             autoRepay: request.autoRepay ?? false,
             specificPolicy: request.specificPolicy || null,
+            preRepayDealIds: Array.isArray(request.preRepayDealIds) ? request.preRepayDealIds.map((id: unknown) => String(id)) : null,
+            availableCollateralAmount: request.availableCollateralAmount ?? null,
+            reborrowAttempts: Number(request.reborrowAttempts) || 0,
             pendingRepayAmount: request.pendingRepayAmount ?? null,
             pendingReleaseCollateralAmount: request.pendingReleaseCollateralAmount ?? null,
             requestedAt: request.requestedAt || nowIso(),
@@ -2328,6 +2393,163 @@ class CreditRuntime {
         const parts = String(id).split('.');
         const num = Number(parts[parts.length - 1]);
         return Number.isFinite(num) ? num : 0;
+    }
+
+    _collectActiveDealIds(): string[] {
+        // state.creditDeals is the flattened mirror of positions[*].creditDeals
+        // rebuilt after every refresh, so it is the single source of truth here.
+        const ids = new Set<string>();
+        const deals = Array.isArray(this.state.creditDeals) ? this.state.creditDeals : [];
+        for (const deal of deals) {
+            const id = (deal as UnknownRecord | null)?.id;
+            if (id) ids.add(String(id));
+        }
+        return Array.from(ids);
+    }
+
+    /**
+     * Pick a balance entry from a `getOnChainAssetBalances` result by asset id,
+     * falling back to the asset symbol. Centralizes the lookup shape shared by
+     * the percentage/amount resolvers and the credit helpers.
+     */
+    _pickOnChainBalanceEntry(balances: unknown, assetId: unknown, asset: UnknownRecord | null): UnknownRecord | null {
+        const balanceMap = balances as Record<string, unknown> | null | undefined;
+        const symbol = (asset as { symbol?: unknown } | null)?.symbol;
+        return (balanceMap?.[String(assetId)]
+            || (symbol != null ? balanceMap?.[String(symbol)] : undefined)
+            || null) as UnknownRecord | null;
+    }
+
+    /**
+     * Read the chain-free balance of the debt asset. Returns null when the
+     * balance cannot be determined so callers can fall back to the legacy
+     * (full-deal) renewal path instead of guessing.
+     */
+    async _getFreeDebtAssetBalance(debtAssetId: unknown, debtAsset: UnknownRecord | null): Promise<number | null> {
+        const accountRef = getAccountRef(this.bot);
+        if (!accountRef || !debtAssetId) return null;
+        try {
+            const balances = await chainOrders.getOnChainAssetBalances(accountRef, [String(debtAssetId)]);
+            const entry = this._pickOnChainBalanceEntry(balances, debtAssetId, debtAsset);
+            const free = toFiniteNumber(entry?.free, NaN);
+            return Number.isFinite(free) ? free : null;
+        } catch (err) {
+            this.warn(`credit runtime: unable to read free balance for ${String(debtAssetId)}: ${getErrorMessage(err)}`);
+            return null;
+        }
+    }
+
+    /**
+     * Raw collateral freed by a repay, used as the ceiling a reborrow can lock.
+     * Precedence:
+     *   1. explicit raw `options.availableCollateralAmount` (collateral-switch flow),
+     *   2. exact on-chain `floor(repay * collateral / debt)` when the deal's own
+     *      collateral asset is used,
+     *   3. explicit `options.pendingReleaseCollateralAmount` (float) as a fallback.
+     * Returns null when it cannot be determined, so the accept builder keeps the
+     * legacy (unclamped) behaviour.
+     */
+    async _computeReleasedCollateralInt(dealSummary: DealSummary | UnknownRecord | null, repayAmount: unknown, options: UnknownRecord): Promise<number | null> {
+        // 1. Explicit raw budget (collateral-switch flow) wins.
+        const explicitRaw = toFiniteNumber(options?.availableCollateralAmount, null);
+        if (explicitRaw !== null && explicitRaw > 0) return Math.floor(explicitRaw);
+
+        const effectiveCollateralAssetId = options?.collateralAsset ?? dealSummary?.collateralAssetId ?? null;
+        const dealCollateralAssetId = dealSummary?.collateralAssetId ?? null;
+        const sameCollateralAsset = !dealCollateralAssetId || !effectiveCollateralAssetId
+            || String(dealCollateralAssetId) === String(effectiveCollateralAssetId);
+
+        // 2. Exact on-chain release: floor(repay * collateral / debt), matching
+        //    credit_deal_repay_evaluator::do_apply. Preferred over the float
+        //    fallback so the budget never over-states the freed collateral.
+        if (sameCollateralAsset) {
+            const debtAsset = await this._resolveAsset(dealSummary?.debtAssetId);
+            const debtPrecision = getAssetPrecision(debtAsset);
+            if (debtPrecision !== null) {
+                const repayInt = floatToBlockchainInt(repayAmount, debtPrecision);
+                const debtInt = toFiniteNumber(dealSummary?.debtAmount, 0);
+                const collateralInt = toFiniteNumber(dealSummary?.collateralAmount, 0);
+                if (Number.isFinite(repayInt) && repayInt > 0 && debtInt > 0 && collateralInt > 0) {
+                    const released = Math.floor(collateralInt * Math.min(repayInt, debtInt) / debtInt);
+                    if (released > 0) return released;
+                }
+            }
+
+            // 3. Fallback when raw deal amounts are unavailable: use an explicit
+            //    released float, floored at the collateral precision.
+            if (options?.pendingReleaseCollateralAmount !== null && options?.pendingReleaseCollateralAmount !== undefined) {
+                const collateralAsset = effectiveCollateralAssetId ? await this._resolveAsset(effectiveCollateralAssetId) : null;
+                const collateralPrecision = getAssetPrecision(collateralAsset);
+                if (collateralPrecision === null) return null;
+                const explicitFloat = toFiniteNumber(options.pendingReleaseCollateralAmount, null);
+                if (explicitFloat === null || explicitFloat <= 0) return null;
+                const explicit = floorToBlockchainInt(explicitFloat, collateralPrecision);
+                return Number.isFinite(explicit) && explicit > 0 ? explicit : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Decide how much of a maturing deal can actually be repaid and reborrowed
+     * with the currently free debt-asset balance. The repay leg is funded from
+     * the borrower's free balance before the atomic reborrow returns anything,
+     * so when the borrowed asset has been deployed into the grid the full deal
+     * cannot be renewed in one shot. In that case we roll the largest affordable
+     * piece (bounded by min_deal_amount and maxBorrowAmountPerOperation) and let
+     * the remaining debt be handled on the next cycle.
+     *
+     * Returns null when sizing is not possible (unknown balance / malformed
+     * deal) so the caller keeps the existing full-renewal behaviour.
+     */
+    async _resolveRenewalSizing({ deal, debtAsset, offer, policy }: { deal: UnknownRecord | null; debtAsset: UnknownRecord | null; offer: UnknownRecord | null; policy: UnknownRecord | null }): Promise<UnknownRecord | null> {
+        const fullAmount = blockchainAmountToFloat(deal?.debtAmount, debtAsset);
+        if (fullAmount == null || fullAmount <= 0) return null;
+        const feeRate = Number(deal?.feeRate) || 0;
+        const free = await this._getFreeDebtAssetBalance(deal?.debtAssetId, debtAsset);
+        if (free === null) return null;
+
+        // Work in raw debt units and reuse the on-chain (ceil) fee helper so the
+        // sizing matches what the repay will actually require.
+        const precisionRaw = Number((debtAsset as { precision?: unknown } | null)?.precision);
+        const decimals = Number.isFinite(precisionRaw) && precisionRaw >= 0 ? Math.trunc(precisionRaw) : 0;
+        const fullInt = floorToBlockchainInt(fullAmount, decimals);
+        const freeInt = floorToBlockchainInt(free, decimals);
+        const requiredInt = fullInt + sharedCreditDealFee(fullInt, feeRate, CREDIT_FEE_RATE_DENOM);
+        const required = blockchainToFloat(requiredInt, decimals);
+        const spendableInt = freeInt - CREDIT_REBORROW_FREE_BALANCE_BUFFER_INT;
+        if (spendableInt >= requiredInt) {
+            return { partial: false, amount: fullAmount, free, required };
+        }
+
+        const minDealInt = toFiniteNumber(offer?.min_deal_amount, null);
+        const minDeal = minDealInt !== null ? blockchainToFloat(minDealInt, decimals) : null;
+
+        // Start from an upper estimate and step down until piece + ceil(fee)
+        // fits the spendable balance; the loop runs at most a couple of iterations.
+        let pieceInt = spendableInt > 0 ? Math.ceil(spendableInt / (1 + feeRate / CREDIT_FEE_RATE_DENOM)) : 0;
+        while (pieceInt > 0 && pieceInt + sharedCreditDealFee(pieceInt, feeRate, CREDIT_FEE_RATE_DENOM) > spendableInt) {
+            pieceInt -= 1;
+        }
+        const maxPerOp = positiveOrNull(policy?.maxBorrowAmountPerOperation);
+        if (maxPerOp !== null && maxPerOp > 0) {
+            const maxPerOpInt = floorToBlockchainInt(maxPerOp, decimals);
+            if (maxPerOpInt < pieceInt) pieceInt = maxPerOpInt;
+        }
+        const affordable = blockchainToFloat(pieceInt, decimals);
+
+        if (
+            !Number.isFinite(affordable)
+            || affordable <= 0
+            || (minDeal !== null && minDeal > 0 && affordable < minDeal)
+        ) {
+            return { partial: false, insufficient: true, amount: 0, free, required, minDeal };
+        }
+        if (affordable >= fullAmount) {
+            return { partial: false, amount: fullAmount, free, required };
+        }
+        return { partial: true, amount: affordable, free, required, minDeal };
     }
 
     async _getOfferById(offerId: unknown): Promise<UnknownRecord | null> {
@@ -2399,7 +2621,7 @@ class CreditRuntime {
         };
     }
 
-    async _selectFallbackCreditOffer({ debtAssetId, collateralAssetId, policy, borrowAmount, collateralAmount, autoRepay, pendingRepayAmount = null, pendingReleaseCollateralAmount, excludeOfferId = null }: { debtAssetId?: unknown; collateralAssetId?: unknown; policy?: UnknownRecord; borrowAmount?: unknown; collateralAmount?: unknown; autoRepay?: unknown; pendingRepayAmount?: unknown; pendingReleaseCollateralAmount?: unknown; excludeOfferId?: unknown } = {}): Promise<FallbackOfferCandidate | null> {
+    async _selectFallbackCreditOffer({ debtAssetId, collateralAssetId, policy, borrowAmount, collateralAmount, autoRepay, pendingRepayAmount = null, pendingReleaseCollateralAmount, availableCollateralAmount = null, excludeOfferId = null }: { debtAssetId?: unknown; collateralAssetId?: unknown; policy?: UnknownRecord; borrowAmount?: unknown; collateralAmount?: unknown; autoRepay?: unknown; pendingRepayAmount?: unknown; pendingReleaseCollateralAmount?: unknown; availableCollateralAmount?: number | null; excludeOfferId?: unknown } = {}): Promise<FallbackOfferCandidate | null> {
         const offers = await this._fetchCreditOffersByAsset(debtAssetId);
         const candidates: FallbackOfferCandidate[] = [];
         for (const offer of offers) {
@@ -2420,6 +2642,7 @@ class CreditRuntime {
                     specificPolicy: policy,
                     pendingRepayAmount,
                     pendingReleaseCollateralAmount,
+                    availableCollateralAmount,
                 });
                 candidates.push({
                     offer,
@@ -2771,11 +2994,29 @@ class CreditRuntime {
         }
         this._reborrowsInFlight = true;
 
+        const configuredMaxAttempts = Number(this.config?.timing?.CREDIT_REBORROW_MAX_ATTEMPTS);
+        const maxReborrowAttempts = Number.isFinite(configuredMaxAttempts) && configuredMaxAttempts > 0
+            ? Math.trunc(configuredMaxAttempts)
+            : TIMING.CREDIT_REBORROW_MAX_ATTEMPTS;
+
         try {
             const onChainDeals = await this._fetchBorrowerDeals();
             const activeDealIds = new Set(onChainDeals.map((deal) => String(deal?.id)).filter(Boolean));
             const nextQueue: UnknownRecord[] = [];
             let processed = 0;
+
+            // Bounded retry: build/broadcast failures increment the attempt count
+            // and are dropped once the limit is reached. Transient deferrals
+            // (offer missing/disabled, source deal still active) are not counted.
+            const recordFailedAttempt = (request: UnknownRecord, label: string, err: unknown): void => {
+                const attempts = (Number(request.reborrowAttempts) || 0) + 1;
+                if (attempts >= maxReborrowAttempts) {
+                    this.warn(`credit runtime: dropping ${label} for offer ${request.offerId} after ${attempts} failed attempt(s) — last error: ${getErrorMessage(err)}`);
+                    return;
+                }
+                this.warn(`credit runtime: ${label} for offer ${request.offerId} failed (attempt ${attempts}/${maxReborrowAttempts}): ${getErrorMessage(err)}`);
+                nextQueue.push({ ...request, reborrowAttempts: attempts, reason: getErrorMessage(err) });
+            };
 
             for (const request of this.state.pendingReborrows) {
                 if (!request?.offerId || (request.borrowAmount == null && request.collateralAmount == null)) {
@@ -2810,10 +3051,17 @@ class CreditRuntime {
                 if (request.sourceDealId && request.offerId && requestPolicy?.renewOnly === true) {
                     const sourceNum = this._extractDealNumericId(request.sourceDealId);
                     if (sourceNum > 0) {
-                        const hasNewerReplacement = onChainDeals.some((d) =>
-                            String(d?.offerId) === String(request.offerId)
-                            && this._extractDealNumericId(d.id) > sourceNum
-                        );
+                        const preRepaySnapshot = Array.isArray(request.preRepayDealIds)
+                            ? new Set(request.preRepayDealIds.map((id: unknown) => String(id)))
+                            : null;
+                        const hasNewerReplacement = onChainDeals.some((d) => {
+                            if (String(d?.offerId) !== String(request.offerId)) return false;
+                            if (this._extractDealNumericId(d.id) <= sourceNum) return false;
+                            // With a pre-repay snapshot, only deals that appeared
+                            // after the repay count as replacements. Sibling deals
+                            // already present on the same offer are not.
+                            return preRepaySnapshot ? !preRepaySnapshot.has(String(d.id)) : true;
+                        });
                         if (hasNewerReplacement) {
                             this.warn(`credit runtime: dropping stale pending reborrow for deal ${request.sourceDealId} — replacement deal already exists for offer ${request.offerId}`);
                             processed++;
@@ -2848,6 +3096,7 @@ class CreditRuntime {
                             collateralAmount: effectiveCollateralAmount,
                             autoRepay: (request.autoRepay ?? false) as boolean,
                             pendingReleaseCollateralAmount: request.pendingReleaseCollateralAmount,
+                            availableCollateralAmount: (request.availableCollateralAmount as number | null) ?? null,
                             excludeOfferId: request.offerId,
                         })
                         : null;
@@ -2857,8 +3106,7 @@ class CreditRuntime {
                             await this.executeOperations([fallback.op], 'credit reborrow');
                             processed++;
                         } catch (err) {
-                            this.warn(`credit runtime: fallback reborrow for offer ${request.offerId} failed: ${getErrorMessage(err)}`);
-                            nextQueue.push({ ...request, reason: getErrorMessage(err) });
+                            recordFailedAttempt(request, 'fallback reborrow', err);
                         }
                     } else {
                         this.warn(`credit runtime: pending reborrow for offer ${request.offerId} deferred — ${offer ? 'offer disabled' : 'offer unavailable'}`);
@@ -2875,12 +3123,12 @@ class CreditRuntime {
                         autoRepay: (request.autoRepay ?? false) as boolean,
                         specificPolicy: (request.specificPolicy || requestPolicy) as UnknownRecord | undefined,
                         pendingReleaseCollateralAmount: request.pendingReleaseCollateralAmount,
+                        availableCollateralAmount: (request.availableCollateralAmount as number | null) ?? null,
                     });
                     await this.executeOperations([acceptOp], 'credit reborrow');
                     processed++;
                 } catch (err) {
-                    this.warn(`credit runtime: pending reborrow for offer ${request.offerId} failed: ${getErrorMessage(err)}`);
-                    nextQueue.push({ ...request, reason: getErrorMessage(err) });
+                    recordFailedAttempt(request, 'pending reborrow', err);
                 }
             }
 
@@ -3043,15 +3291,22 @@ class CreditRuntime {
                     }
                     const isCollateralMismatch = deal.collateralMismatch === true;
                     let existingCollateralAmount: number | null = null;
+                    let explicitAvailableCollateralInt: number | null = null;
                     if (isCollateralMismatch) {
                         const accountRef = getAccountRef(this.bot);
                         const balances = await chainOrders.getOnChainAssetBalances(accountRef, [configuredCollateralAssetId]);
-                        const balanceMap = balances as Record<string, unknown>;
-                        const balance = (balanceMap?.[String(configuredCollateralAssetId)] || balanceMap?.[String(configuredCollateralAsset?.symbol)] || null) as UnknownRecord | null;
+                        const balance = this._pickOnChainBalanceEntry(balances, configuredCollateralAssetId, configuredCollateralAsset);
                         const available = toFiniteNumber(balance?.total, undefined);
                         if (!Number.isFinite(available) || available <= 0) {
                             this.warn(`credit runtime: skipping collateral switch for deal ${deal.id} — no balance of new collateral ${configuredCollateralAssetId}`);
                             continue;
+                        }
+                        const configuredCollateralPrecision = getAssetPrecision(configuredCollateralAsset);
+                        if (configuredCollateralPrecision !== null) {
+                            explicitAvailableCollateralInt = floatToBlockchainInt(available, configuredCollateralPrecision);
+                            if (!Number.isFinite(explicitAvailableCollateralInt) || explicitAvailableCollateralInt <= 0) {
+                                explicitAvailableCollateralInt = null;
+                            }
                         }
                     }
                     if (!isCollateralMismatch) {
@@ -3060,6 +3315,32 @@ class CreditRuntime {
                         if (existingCollateralAmount == null || existingCollateralAmount <= 0) {
                             throw new Error(`unable to convert deal ${deal.id} collateral amount for release`);
                         }
+                    }
+                    // Shortfall-aware renewal: the repay leg is funded from the
+                    // free debt-asset balance before the atomic reborrow returns
+                    // anything, so when the borrowed asset has been deployed into
+                    // the grid the full deal cannot be renewed at once. Roll the
+                    // largest affordable piece instead and leave the rest for the
+                    // next cycle rather than failing the whole renewal.
+                    const renewalOffer = await this._getOfferById(deal.offerId);
+                    const sizing = await this._resolveRenewalSizing({ deal, debtAsset, offer: renewalOffer, policy: lendingItem });
+                    let renewalAmount = repayAmount;
+                    let isPartialRenewal = false;
+                    if (sizing?.partial === true) {
+                        renewalAmount = sizing.amount as number;
+                        isPartialRenewal = renewalAmount < repayAmount;
+                    } else if (sizing?.insufficient === true) {
+                        // Nothing affordable — fall back to the full renewal so the
+                        // on-chain failure still surfaces rather than silently
+                        // skipping a deal that is about to expire.
+                        this.warn(`credit runtime: cannot size a partial renewal for deal ${deal.id} (free ${sizing.free}, required ${sizing.required}); attempting full renewal`);
+                    }
+                    let renewalPendingReleaseCollateral: number | null = isCollateralMismatch ? null : existingCollateralAmount;
+                    if (isPartialRenewal && !isCollateralMismatch && existingCollateralAmount != null) {
+                        renewalPendingReleaseCollateral = existingCollateralAmount * (renewalAmount / repayAmount);
+                    }
+                    if (isPartialRenewal) {
+                        this.warn(`credit runtime: insufficient free ${debtAsset?.symbol ?? deal.debtAssetId} for full renewal of deal ${deal.id} (have ${sizing?.free}, need ${sizing?.required}); repaying/reborrowing ${renewalAmount} and rolling the rest`);
                     }
                     // Snapshot pre-existing pending reborrows for this deal so we
                     // can prune stale ones after repayCreditDeal without removing
@@ -3073,14 +3354,15 @@ class CreditRuntime {
                         staleSnapshot.map((r: Record<string, unknown>) => `${r.sourceDealId}:${r.offerId}:${r.requestedAt}`)
                     );
 
-                    await this.repayCreditDeal(deal, repayAmount, {
+                    await this.repayCreditDeal(deal, renewalAmount, {
                         autoReborrow: true,
-                        collateralAmount: isCollateralMismatch ? null : {
+                        collateralAmount: isCollateralMismatch || isPartialRenewal ? null : {
                             amount: existingCollateralAmount,
                             assetId: deal.collateralAssetId,
                         },
                         collateralAsset: configuredCollateralAssetId,
-                        pendingReleaseCollateralAmount: isCollateralMismatch ? null : existingCollateralAmount,
+                        pendingReleaseCollateralAmount: renewalPendingReleaseCollateral,
+                        availableCollateralAmount: explicitAvailableCollateralInt,
                         specificPolicy: lendingItem,
                     });
 

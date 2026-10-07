@@ -637,6 +637,7 @@ export interface GridFeeParams extends UnknownRecord {
 export interface TimingConfig extends UnknownRecord {
   SAFETY_NET_SYNC_TIMEOUT_MS?: number;
   CREDIT_DEAL_EXPIRY_THRESHOLD_HOURS?: number;
+  CREDIT_REBORROW_MAX_ATTEMPTS?: number;
   BLOCKCHAIN_FETCH_INTERVAL_MIN?: number;
   BOTS_CONFIG_POLL_INTERVAL_MS?: number;
   BTS_ACQUIRE_COOLDOWN_MIN?: number;

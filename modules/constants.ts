@@ -397,6 +397,7 @@ let TIMING = {
     CREDIT_DEAL_CHECK_INTERVAL_MIN: 60,      // How often to check credit deal expiry (minutes)
     CREDIT_DEAL_EXPIRY_THRESHOLD_HOURS: 12,  // Proactively renew deals expiring within this window
     CREDIT_DEAL_SPLIT_MAX_PIECES: 48,        // Max pieces per _splitOversizedCreditDeals cycle (~4.8min at 6s/piece)
+    CREDIT_REBORROW_MAX_ATTEMPTS: 6,         // Drop a deferred reborrow after this many failed build/broadcast attempts
 
     // LOCK_REFRESH_MIN_MS: Minimum interval for refreshing order lock leases during long operations.
     // Prevents lock expiration during extended reconciliations or batch operations.

@@ -23,7 +23,7 @@ utils._setFeeCache({
 
 const { OrderManager } = require('../modules/order/manager');
 const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
-const { floatToBlockchainInt, blockchainToFloat } = require('../modules/order/utils/math');
+const { floatToBlockchainInt, blockchainToFloat, floorToBlockchainInt } = require('../modules/order/utils/math');
 const { buildCreateOrderArgs } = require('../modules/order/utils/order');
 const { createTestLogger } = require('./helpers/silent_logger');
 
@@ -295,6 +295,19 @@ function testExactLogScenario() {
     assert(remaining > 0, 'Remaining should be positive');
 }
 
+function testFloorToBlockchainInt() {
+    console.log('\n[Test 5] floorToBlockchainInt never rounds up');
+    console.log('-'.repeat(70));
+
+    assert.strictEqual(floorToBlockchainInt(206 / 1.03, 0), 200, 'binary-float underflow is corrected at precision 0');
+    assert.strictEqual(floorToBlockchainInt(1.99999999, 2), 199, 'genuine fraction below one tick floors down');
+    assert.strictEqual(floorToBlockchainInt(1.23, 2), 123, 'exact value is preserved');
+    assert.strictEqual(floorToBlockchainInt(0.009, 2), 0, 'sub-tick value floors to zero');
+    assert.strictEqual(floorToBlockchainInt(1.005, 2), 100, 'does not round half up');
+
+    console.log('  ✓ floorToBlockchainInt floors without over-stating');
+}
+
 // Run all tests
 (async () => {
     try {
@@ -302,6 +315,7 @@ function testExactLogScenario() {
         await testFillWithQuantizedOrder();
         testMultipleSizesQuantization();
         testExactLogScenario();
+        testFloorToBlockchainInt();
 
         console.log('\n' + '='.repeat(70));
          console.log('All Precision Quantization Tests Passed! ✅');

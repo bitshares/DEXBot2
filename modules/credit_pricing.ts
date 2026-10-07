@@ -227,6 +227,28 @@ function borrowAmountForCollateral(
 }
 
 /**
+ * Raw debt yielded by a raw collateral budget, never exceeding the requested
+ * raw debt. Returns `requestedBorrowInt` when no budget is supplied or the
+ * budget already covers it; `null` when a supplied budget cannot support any
+ * borrow at the offer price (caller should back off rather than emit a doomed
+ * accept op).
+ */
+function capBorrowToCollateral(
+    requestedBorrowInt: unknown,
+    availableCollateralInt: unknown,
+    collateralPrice: OfferPrice | null | undefined,
+    debtAssetId: string | null = null,
+    collateralAssetId: string | null = null,
+): number | null {
+    const requested = toFiniteOrNull(requestedBorrowInt);
+    if (requested === null || requested <= 0) return null;
+    if (availableCollateralInt === null || availableCollateralInt === undefined) return requested;
+    const budgetBorrow = borrowAmountForCollateral(availableCollateralInt, collateralPrice, debtAssetId, collateralAssetId);
+    if (budgetBorrow === null || budgetBorrow <= 0) return null;
+    return Math.min(requested, budgetBorrow);
+}
+
+/**
  * Per-deal CR from floats plus a conversion rate:
  * (collateralFloat * rate) / debtFloat.
  */
@@ -300,6 +322,7 @@ export {
     collateralValueFromOfferPrice,
     requiredCollateralForBorrow,
     borrowAmountForCollateral,
+    capBorrowToCollateral,
     creditDealCollateralRatio,
     averageCollateralRatio,
     dailyOfferFeeRate,
