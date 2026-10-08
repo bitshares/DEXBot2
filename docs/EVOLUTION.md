@@ -2,14 +2,14 @@
 
 ## Executive Summary
 
-DEXBot2 is a sophisticated decentralized exchange trading bot for the BitShares blockchain. This report documents the complete evolution of the project from its inception in December 2025 through the current 1.6.11 release.
+DEXBot2 is a sophisticated decentralized exchange trading bot for the BitShares blockchain. This report documents the complete evolution of the project from its inception in December 2025 through the current 1.6.12 release.
 
 ### Key Milestones
 - **Project Inception**: December 2, 2025
-- **Growth Phase**: 2,322 commits over ~9 active months
+- **Growth Phase**: 2,350 commits over ~9 active months
 - **Code Maturity**: Evolution from basic utilities to a ~100,000+ LoC intelligent TypeScript system
-- **Stability**: Progression from manual testing to a suite of 307 automated test files
-- **Releases**: 143 version entries in the changelog (v0.1.0 to v1.6.11)
+- **Stability**: Progression from manual testing to a suite of 313 automated test files
+- **Releases**: 144 version entries in the changelog (v0.1.0 to v1.6.12)
 
 > **Post-1.0.0 "why":** the thematic story behind the hardening releases — root cause, recurring
 > bug families, and lessons — lives in
@@ -149,7 +149,7 @@ Evolved from a basic README to a comprehensive framework (50+ docs entries, 80%+
 
 ## Version History
 
-Compact, era-level view; commit counts are `git rev-list --count <tag>..<tag>` over the current history (2026-10-02), so the column sums to 2,215 — the 107 commits up to and including the `v0.1.0` tag are not attributed to an era (2,215 + 107 = 2,322). Per-release detail lives in [CHANGELOG.md](../CHANGELOG.md); the thematic post-1.0.0 story in [ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md](ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md).
+Compact, era-level view; commit counts are `git rev-list --count <tag>..<tag>` over the current history (2026-10-08), so the column sums to 2,243 — the 107 commits up to and including the `v0.1.0` tag are not attributed to an era (2,243 + 107 = 2,350). Per-release detail lives in [CHANGELOG.md](../CHANGELOG.md); the thematic post-1.0.0 story in [ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md](ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md).
 
 | Era | Commits | Theme |
 |-----|--------:|-------|
@@ -169,11 +169,12 @@ Compact, era-level view; commit counts are `git rev-list --count <tag>..<tag>` o
 | v1.6.8 → v1.6.9 | 6 | Market-adapter cycle-CPU cuts, candle-boundary off-hour idle, spread-correction spread-tightening guard |
 | v1.6.9 → v1.6.10 | 7 | Huber-robust AMA slope, asset-pair uppercase canonicalization, TradingView indicator ownership (auto opt-in, span bounds) and chart-view preservation |
 | v1.6.10 → v1.6.11 | 6 | AMA-slope 3-bar persistence gate + 16h Huber lookback, EMA-smoothing removal, PnL HTML report + month-shard fill cache, five order-engine/lifecycle safety fixes |
+| v1.6.11 → v1.6.12 | 27 | Explicit-`any` elimination + ratchet, shared ECC core & Firefox-safe pure-JS scrypt, worker-drain and fresh-placement cancel-grace safety fixes, funded spread correction, partial credit renewal, update install-layout classifier, AMA persistence-override fixes, test-suite speedup, dynamic-weight knob retune |
 
 ---
 
 **Report Originally Generated**: February 19, 2026
-**Last Updated**: October 2, 2026
-**Total Commits**: 2,322
-**Date Range**: December 2, 2025 – October 2, 2026
+**Last Updated**: October 8, 2026
+**Total Commits**: 2,350
+**Date Range**: December 2, 2025 – October 8, 2026
 **Repository**: DEXBot2 (BitShares DEX Trading Bot)

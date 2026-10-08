@@ -1,6 +1,6 @@
 {
   "name": "trend-detection",
-  "version": "1.6.11",
+  "version": "1.6.12",
   "description": "Kalman filter trend detection with tactical/modal state tracking",
   "main": "../../dist/analysis/trend_detection/kalman_trend_analyzer.js",
   "scripts": {
