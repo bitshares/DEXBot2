@@ -827,11 +827,23 @@ class MarketAdapterService {
      * (legacy fire-on-first-crossing).
      */
     resolveAmaSlopePersistBars(cfg: JsonObj): number {
-        const explicit = Number((cfg?.amaSlope as JsonObj | undefined)?.persistBars ?? cfg?.amaSlopePersistBars);
-        if (Number.isFinite(explicit) && explicit >= 1) return Math.round(explicit);
-        const enabled = (cfg?.amaSlope as JsonObj | undefined)?.persistEnabled === true
-            || cfg?.amaSlopePersistEnabled === true
-            || MARKET_ADAPTER.AMA_SLOPE_PERSIST_ENABLED === true;
+        // Per-bot/market `persistBars`: >= 1 sets the gate length, exactly 0
+        // disables it (legacy 1). Negative/NaN fall through to the enable flags.
+        const rawBars = (cfg?.amaSlope as JsonObj | undefined)?.persistBars ?? cfg?.amaSlopePersistBars;
+        const explicit = (rawBars === null || rawBars === undefined) ? NaN : Number(rawBars);
+        if (Number.isFinite(explicit)) {
+            if (explicit >= 1) return Math.round(explicit);
+            if (explicit === 0) return 1;
+        }
+        // `persistEnabled` is a tri-state override: an explicit false disables
+        // the gate even when the global default is on; undefined falls back to
+        // the global flag; explicit true enables it. Must be an explicit
+        // tri-state check — a `||` chain lets the global `true` mask a per-bot
+        // `false`, silently killing the documented per-bot rollback.
+        const override = (cfg?.amaSlope as JsonObj | undefined)?.persistEnabled ?? cfg?.amaSlopePersistEnabled;
+        const enabled = override === false ? false
+            : override === true ? true
+            : MARKET_ADAPTER.AMA_SLOPE_PERSIST_ENABLED === true;
         if (!enabled) return 1;
         const bars = Number(MARKET_ADAPTER.AMA_SLOPE_PERSIST_BARS);
         return Number.isFinite(bars) && bars >= 1 ? Math.round(bars) : 1;
@@ -2496,14 +2508,6 @@ class MarketAdapterService {
             triggerSuppressedReason = 'stale_candle_data';
         }
 
-        // Slope-delta persistence gate (trigger B). Advances only on actionable
-        // cycles; any successful reset clears it via advanceTriggeredBotState.
-        const amaSlopePersistence = (!staleData && !hasUnresolvedCandleGaps)
-            ? this.advanceAmaSlopePersistence(amaSlopeResetDetails, cfg, botState)
-            : { shouldTrigger: false, persistBars: this.resolveAmaSlopePersistBars(cfg) };
-        const amaSlopeShouldTrigger = amaSlopePersistence.shouldTrigger;
-        const amaSlopePersistBars = amaSlopePersistence.persistBars;
-
         const buildDynamicGridOptions = (options: JsonObj = {}) => {
             const payload: JsonObj = {
                 gridCenterPrice: options.gridCenterPrice ?? null, // explicit baseline if provided
@@ -2691,7 +2695,20 @@ class MarketAdapterService {
                 }
             }
 
-            if (!triggered && !triggerSuppressedReason && isGridRangeScalingWhitelisted && amaSlopeShouldTrigger) {
+            // Slope-delta persistence gate (trigger B). Advance only when this
+            // cycle can actually act on it — after trigger A (price/Drift) and
+            // bootstrap have had their chance, and only for whitelisted bots.
+            // Mirrors grid_reset_sim, where the slope candidate is evaluated
+            // only in the price trigger's `else` branch, and stops the counter
+            // accumulating for bots that never use the slope trigger.
+            const amaSlopeGateActive = !triggered && !triggerSuppressedReason && isGridRangeScalingWhitelisted;
+            const amaSlopePersistence = amaSlopeGateActive
+                ? this.advanceAmaSlopePersistence(amaSlopeResetDetails, cfg, botState)
+                : { shouldTrigger: false, persistBars: this.resolveAmaSlopePersistBars(cfg) };
+            const amaSlopeShouldTrigger = amaSlopePersistence.shouldTrigger;
+            const amaSlopePersistBars = amaSlopePersistence.persistBars;
+
+            if (amaSlopeGateActive && amaSlopeShouldTrigger) {
                 const amaSlopePersisted = persistDynamicGridSnapshot(centerPrice);
 
                 if (!amaSlopePersisted) {

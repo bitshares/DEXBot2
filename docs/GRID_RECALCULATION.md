@@ -279,7 +279,9 @@ in the same direction, so a 1–2 bar excursion is ignored. A sustained move is
 confirmed K bars after onset — up to K−1 bars later than the ungated trigger;
 the independent price/Drift trigger is unaffected.
 `AMA_SLOPE_PERSIST_ENABLED` (default `true`) is the master switch; a
-bot/market can override via `amaSlope.persistBars` or `amaSlope.persistEnabled`.
+bot/market can override via `amaSlope.persistBars` (`>= 1` gate length, `0`
+disables) or `amaSlope.persistEnabled: false`, which disables the gate for that
+bot even while the global switch is on.
 Versus the ungated path this cuts resets ~35% and whipsaws (~52%→~17%) with lag
 and range tilt unchanged.
 

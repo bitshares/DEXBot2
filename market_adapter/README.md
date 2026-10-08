@@ -805,7 +805,8 @@ Main override knobs live in `profiles/market_adapter_settings.json`:
 | `gain` | Output amplitude |
 | `amaSlopePercentMode` | Slope override units: `perBar` for percent per bar, or `window`/unset for legacy cumulative percent over the lookback |
 | `amaSlope.lookbackBars` | AMA slope lookback; slope is averaged per bar over this window (default 16) |
-| `amaSlope.persistBars` | Slope-delta persistence gate: consecutive confirming bars required before the slope reset fires (default 3; `1` = legacy fire-on-first-crossing). Values `< 1` fall through to the global default, so use `1` (or `persistEnabled: false`) to disable, not `0`. Global default in `MARKET_ADAPTER.AMA_SLOPE_PERSIST_*` |
+| `amaSlope.persistBars` | Slope-delta persistence gate: consecutive confirming bars required before the slope reset fires (default `MARKET_ADAPTER.AMA_SLOPE_PERSIST_BARS`, 3). `1` = legacy fire-on-first-crossing; `0` = disable. Negative/absent values fall through to the global flag |
+| `amaSlope.persistEnabled` | Per-bot tri-state override of the master switch: `false` disables the gate for this bot/market even when `AMA_SLOPE_PERSIST_ENABLED` is on, `true` forces it on, unset follows the global flag |
 | `amaSlope.neutralZonePct` | Dead band around flat average AMA slope |
 | `amaSlope.maxSlopePct` | Average AMA slope saturation |
 | `amaSlopeDeltaThresholdPercent` | Average AMA slope delta threshold for slope-based resets |

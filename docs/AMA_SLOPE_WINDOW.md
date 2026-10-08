@@ -141,7 +141,7 @@ So it was removed completely in favour of the zero-migration window change.
   suppress it.
 - **Rollback.** Window: set `DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS` back to `20`.
   Gate: `AMA_SLOPE_PERSIST_ENABLED = false` (or `amaSlope.persistEnabled: false`
-  per bot). No schema change.
+  / `amaSlope.persistBars: 0` per bot). No schema change.
 - **Caveat.** Proxy-scored. The fill model lacks queue-position loss and adverse
   selection, so the economic benefit is not conclusively demonstrated; validate
   in shadow mode before relying on it. The churn/lag/wrong-way wins are robust

@@ -182,11 +182,19 @@ function resolveGridResetSimConfig({ botKey, bot, ama, overrides }: {
     // adapter service so the chart replay fires the same Δs resets production
     // does. Per-bot override wins; else the global enable + value; else legacy 1.
     const resolveSlopePersistBars = () => {
-        const explicit = Number(botCfg?.amaSlope?.persistBars ?? botCfg?.amaSlopePersistBars);
-        if (Number.isFinite(explicit) && explicit >= 1) return Math.round(explicit);
-        const enabled = botCfg?.amaSlope?.persistEnabled === true
-            || botCfg?.amaSlopePersistEnabled === true
-            || MARKET_ADAPTER.AMA_SLOPE_PERSIST_ENABLED === true;
+        // Mirror resolveAmaSlopePersistBars (market_adapter_service): explicit
+        // `persistBars >= 1` wins, `0` disables, and `persistEnabled: false` is a
+        // real tri-state override that must beat the global `true`.
+        const rawBars = botCfg?.amaSlope?.persistBars ?? botCfg?.amaSlopePersistBars;
+        const explicit = (rawBars === null || rawBars === undefined) ? NaN : Number(rawBars);
+        if (Number.isFinite(explicit)) {
+            if (explicit >= 1) return Math.round(explicit);
+            if (explicit === 0) return 1;
+        }
+        const override = botCfg?.amaSlope?.persistEnabled ?? botCfg?.amaSlopePersistEnabled;
+        const enabled = override === false ? false
+            : override === true ? true
+            : MARKET_ADAPTER.AMA_SLOPE_PERSIST_ENABLED === true;
         if (!enabled) return 1;
         const bars = Number(MARKET_ADAPTER.AMA_SLOPE_PERSIST_BARS);
         return Number.isFinite(bars) && bars >= 1 ? Math.round(bars) : 1;

@@ -2196,6 +2196,20 @@ async function testAmaSlopePersistenceGate() {
     assert.strictEqual(legacy.shouldTrigger, true, 'explicit persistBars:1 fires immediately');
     assert.strictEqual(legacy.persistBars, 1, 'explicit persistBars:1 is honored');
 
+    // Per-bot overrides must beat the global default (both directions).
+    // Regression: the old `||` chain let the global `true` mask a per-bot
+    // `persistEnabled:false`, so the documented per-bot rollback did nothing.
+    assert.strictEqual(service.resolveAmaSlopePersistBars({ amaSlope: { persistEnabled: false } }), 1,
+        'explicit persistEnabled:false disables the gate despite the global default');
+    assert.strictEqual(service.resolveAmaSlopePersistBars({ amaSlopePersistEnabled: false }), 1,
+        'flat persistEnabled:false disables the gate');
+    assert.strictEqual(service.resolveAmaSlopePersistBars({ amaSlope: { persistBars: 0 } }), 1,
+        'persistBars:0 disables the gate instead of silently falling through');
+    assert.strictEqual(service.resolveAmaSlopePersistBars({ amaSlope: { persistBars: 2 } }), 2,
+        'explicit persistBars >= 1 wins');
+    assert.strictEqual(service.resolveAmaSlopePersistBars({ amaSlope: { persistEnabled: true } }), bars,
+        'explicit persistEnabled:true follows the global gate length');
+
     console.log(' - AMA slope persistence gate ok');
 }
 

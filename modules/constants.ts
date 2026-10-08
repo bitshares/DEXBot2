@@ -1292,8 +1292,9 @@ let MARKET_ADAPTER = {
     // confirming bars, filtering short-lived excursions. Enabled by default
     // (was legacy fire-on-first-crossing): measured over the real 1h pools it
     // cuts resets ~35% and whipsaw ~52%→~17%, leaving lag and range-tilt
-    // unchanged. Per bot/market override via `amaSlope.persistBars` /
-    // `amaSlope.persistEnabled`. See docs/AMA_SLOPE_WINDOW.md.
+    // unchanged. Per bot/market override via `amaSlope.persistBars` (>= 1 gate
+    // length, 0 disables, 1 = legacy) or `amaSlope.persistEnabled: false`
+    // (disables even while the global flag is on). See docs/AMA_SLOPE_WINDOW.md.
     AMA_SLOPE_PERSIST_ENABLED: true,
 
     // AMA_SLOPE_PERSIST_BARS: consecutive confirming bars required before the
