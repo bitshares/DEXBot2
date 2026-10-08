@@ -937,6 +937,42 @@ function printMarketAdapterStatusBlock() {
     }
 }
 
+/**
+ * Best-effort wait until no `dexbot` worker process remains.
+ *
+ * `stop` returns as soon as the monolithic wrapper exits, but the wrapper's
+ * supervisor pid file is wiped on wrapper exit, so a `start` racing the worker
+ * teardown spawns a SECOND worker over the still-live orders (duplicate
+ * trades). Poll /proc until every dexbot worker is gone or the deadline
+ * expires. No-op off Linux / when /proc is unreadable.
+ *
+ * Must also run when there is no live wrapper (stale or absent pid file): an
+ * orphaned worker is exactly the case the pid-file check cannot see.
+ *
+ * @param deadlineMs - Maximum time to wait for the workers to exit.
+ * @returns True when no worker remains (or the scan is unavailable).
+ */
+async function drainMonolithicWorkers(deadlineMs = 15000): Promise<boolean> {
+    const workerPaths = candidateRuntimeScriptPaths(['dexbot']);
+    const drainStarted = Date.now();
+    while (Date.now() - drainStarted < deadlineMs) {
+        let aliveWorkers = 0;
+        try {
+            for (const procEntry of fs.readdirSync('/proc')) {
+                const wpid = Number(procEntry);
+                if (!Number.isInteger(wpid) || wpid <= 0) continue;
+                if (pidMatchesScriptCandidates(wpid, workerPaths)) aliveWorkers++;
+            }
+        } catch (_) { /* /proc scan is best-effort */ }
+        // A failed scan yields 0 and returns immediately, so this is a no-op
+        // on platforms without /proc rather than a 15s stall.
+        if (aliveWorkers === 0) return true;
+        await new Promise((res) => setTimeout(res, 250));
+    }
+    console.warn(`dexbot stop: worker process(es) still alive after ${deadlineMs}ms — not waiting longer (state kept; a start may report the running bot).`);
+    return false;
+}
+
 async function handleControl({ cmd, target }: { cmd: string; target?: string }) {
     const effectiveCmd = cmd === 'shutdown' ? 'delete' : cmd === 'stat' ? 'status' : cmd;
     const actionLabel = getControlActionLabel(cmd);
@@ -1053,25 +1089,7 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
                 // (duplicate trades). Wait for every dexbot worker to actually
                 // die before returning.
                 if (monolithicExited) {
-                    const workerPaths = candidateRuntimeScriptPaths(['dexbot']);
-                    const drainDeadlineMs = 15000;
-                    const drainStarted = Date.now();
-                    let drained = false;
-                    while (Date.now() - drainStarted < drainDeadlineMs) {
-                        const aliveWorkers: number[] = [];
-                        try {
-                            for (const procEntry of fs.readdirSync('/proc')) {
-                                const wpid = Number(procEntry);
-                                if (!Number.isInteger(wpid) || wpid <= 0) continue;
-                                if (pidMatchesScriptCandidates(wpid, workerPaths)) aliveWorkers.push(wpid);
-                            }
-                        } catch (_) { /* /proc scan is best-effort */ }
-                        if (aliveWorkers.length === 0) { drained = true; break; }
-                        await new Promise((res) => setTimeout(res, 250));
-                    }
-                    if (!drained) {
-                        console.warn(`dexbot stop: worker process(es) still alive after ${drainDeadlineMs}ms — not waiting longer (state kept; a start may report the running bot).`);
-                    }
+                    await drainMonolithicWorkers();
                 }
             } catch (err) {
                 if (getErrorCode(err) !== 'ESRCH') throw err;
@@ -1090,6 +1108,12 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
             printControlActionSummary(actionLabel, summaryBotNames, summaryServiceNames);
             return;
         } else if (stale) {
+            // Stale pid file: the wrapper is gone, but its worker can outlive
+            // it. Drain before returning so a following start cannot spawn a
+            // duplicate over the live orders.
+            if (effectiveCmd !== 'status') {
+                await drainMonolithicWorkers();
+            }
             if (effectiveCmd === 'delete') {
                 const summaryBotNames = getControlBotNames(undefined, true);
                 const isolatedDeleted = await sendIsolatedDeleteIfAvailable();
@@ -1118,6 +1142,15 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
                 return;
             }
         }
+    }
+
+    // No live wrapper pid file: an orphaned worker can still be running (the
+    // wrapper was killed without leaving a pid file, or cleanupStateFiles
+    // already ran). Drain before the isolated fall-through so that path cannot
+    // race a start into a duplicate worker.
+    if (!target && effectiveCmd !== 'status'
+        && (effectiveCmd === 'stop-all' || effectiveCmd === 'delete' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all')) {
+        await drainMonolithicWorkers();
     }
 
     if (effectiveCmd === 'delete' && !target && storage.exists(MONOLITHIC_CRED_PID_FILE)) {
@@ -1211,5 +1244,5 @@ if (isUnlockStartDirectRun) {
     })();
 }
 
-export { buildDexbotStartArgs, candidateRuntimeScriptPaths, ensureNoForeignCredentialDaemon, findCredentialSocketOwnerPid, isLikelyCredentialDaemonProcess, main, runStartOnboardingIfNeeded, pidMatchesScriptCandidates, waitForChildSpawn, waitForStableChildStartup }
+export { buildDexbotStartArgs, candidateRuntimeScriptPaths, drainMonolithicWorkers, ensureNoForeignCredentialDaemon, findCredentialSocketOwnerPid, isLikelyCredentialDaemonProcess, main, runStartOnboardingIfNeeded, pidMatchesScriptCandidates, waitForChildSpawn, waitForStableChildStartup }
 
