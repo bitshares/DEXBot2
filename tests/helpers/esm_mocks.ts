@@ -24,7 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const HOOKS_FILE = fs.realpathSync(path.join(__dirname, 'esm_mock_hooks.mjs'));
 const ENV_ACTIVE = 'DEXBOT_ESM_MOCKS_ACTIVE';
@@ -46,9 +46,10 @@ function tmpDir(sub) {
     return dir;
 }
 
-function manifestPathFor(entryFile) {
+function manifestPathFor(entryFile, suffix = '') {
     const stamp = path.basename(entryFile).replace(/\W+/g, '_');
-    return path.join(tmpDir('esm-mock-manifests'), `${stamp}-${process.pid}.json`);
+    const tail = suffix ? `-${suffix}` : '';
+    return path.join(tmpDir('esm-mock-manifests'), `${stamp}-${process.pid}${tail}.json`);
 }
 
 function readManifest(manifestPath) {
@@ -98,11 +99,19 @@ function esmMockEntry() {
  * runs in its own hooked child. In the parent, spawns one child per stage and
  * forwards the first failing exit code; in a hooked child, executes only the
  * requested stage.
+ *
+ * Stages are independent, so they run with bounded concurrency (default 4,
+ * override with DEXBOT_ESM_STAGE_CONCURRENCY=1 for the old sequential
+ * behaviour). Each stage gets its own manifest and stub files (keyed by PID)
+ * so parallel children never clobber one another.
  */
-function runEsmMockStages(
-    stages: string[],
-    runStage: (stage: string) => Promise<void> | void
-): void {
+function resolveStageConcurrency(stageCount) {
+    const raw = Number(process.env.DEXBOT_ESM_STAGE_CONCURRENCY);
+    const configured = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4;
+    return Math.max(1, Math.min(configured, stageCount));
+}
+
+function runEsmMockStages(stages, runStage) {
     if (process.env[ENV_ACTIVE] === '1' && process.env[ENV_MANIFEST]) {
         const stage = process.env[ENV_STAGE] || stages[0];
         Promise.resolve(runStage(stage)).then(
@@ -116,33 +125,83 @@ function runEsmMockStages(
     }
 
     const entryFile = fs.realpathSync(path.resolve(process.argv[1] || ''));
-    let exitCode = 0;
-    for (const stage of stages) {
-        process.stdout.write(`\n=== [STAGE] ${stage} ===\n`);
-        const manifestPath = manifestPathFor(entryFile);
-        writeManifest(manifestPath, {});
-        const child = spawnSync(process.execPath, ['--import', HOOKS_FILE, entryFile], {
-            stdio: 'inherit',
-            env: {
-                ...process.env,
-                [ENV_ACTIVE]: '1',
-                [ENV_MANIFEST]: manifestPath,
-                [ENV_STAGE]: stage,
-            },
-            cwd: repoRoot(),
-        });
-        try { fs.rmSync(manifestPath, { force: true }); } catch { /* best effort */ }
-        if (child.status !== 0) {
-            exitCode = child.status === null ? 1 : child.status;
-            break;
+    const concurrency = resolveStageConcurrency(stages.length);
+
+    if (concurrency <= 1) {
+        let exitCode = 0;
+        for (const stage of stages) {
+            process.stdout.write(`\n=== [STAGE] ${stage} ===\n`);
+            const manifestPath = manifestPathFor(entryFile);
+            writeManifest(manifestPath, {});
+            const child = spawnSync(process.execPath, ['--import', HOOKS_FILE, entryFile], {
+                stdio: 'inherit',
+                env: {
+                    ...process.env,
+                    [ENV_ACTIVE]: '1',
+                    [ENV_MANIFEST]: manifestPath,
+                    [ENV_STAGE]: stage,
+                },
+                cwd: repoRoot(),
+            });
+            try { fs.rmSync(manifestPath, { force: true }); } catch { /* best effort */ }
+            if (child.status !== 0) {
+                exitCode = child.status === null ? 1 : child.status;
+                break;
+            }
         }
+        process.exit(exitCode);
     }
-    process.exit(exitCode);
+
+    // Parallel path: one child per stage, bounded by `concurrency`. The parent
+    // stays alive on the child handles and exits once every worker settles.
+    const spawnStage = (stage, index) =>
+        new Promise<number>((resolve) => {
+            const manifestPath = manifestPathFor(
+                entryFile,
+                `${index}-${Math.random().toString(36).slice(2, 8)}`
+            );
+            writeManifest(manifestPath, {});
+            const child = spawn(process.execPath, ['--import', HOOKS_FILE, entryFile], {
+                stdio: 'inherit',
+                env: {
+                    ...process.env,
+                    [ENV_ACTIVE]: '1',
+                    [ENV_MANIFEST]: manifestPath,
+                    [ENV_STAGE]: stage,
+                },
+                cwd: repoRoot(),
+            });
+            const settle = (code: number | null) => {
+                try { fs.rmSync(manifestPath, { force: true }); } catch { /* best effort */ }
+                resolve(code === null ? 1 : code);
+            };
+            child.on('close', settle);
+            child.on('error', () => settle(1));
+        });
+
+    let next = 0;
+    let exitCode = 0;
+    let abort = false;
+    const worker = async () => {
+        while (!abort) {
+            const index = next++;
+            if (index >= stages.length) return;
+            const stage = stages[index];
+            process.stdout.write(`\n=== [STAGE] ${stage} ===\n`);
+            const code = await spawnStage(stage, index);
+            if (code !== 0) {
+                abort = true;
+                exitCode = code;
+                return;
+            }
+        }
+    };
+    Promise.all(Array.from({ length: concurrency }, worker)).then(() => process.exit(exitCode));
 }
 
 function stubFileFor(absTarget) {
     const stamp = absTarget.replace(/[^A-Za-z0-9._-]+/g, '__');
-    return path.join(tmpDir('esm-mock-stubs'), `${stamp}.cjs`);
+    return path.join(tmpDir('esm-mock-stubs'), `${stamp}-${process.pid}.cjs`);
 }
 
 /**

@@ -35,11 +35,15 @@ async function setupFiles() {
     });
 
     await new Promise((resolve, reject) => {
+        // Clear (and never hold the loop open with) the watchdog timer once the
+        // child reports ready — otherwise it keeps the test process alive for
+        // the full 2s after every assertion has passed.
+        const timer = setTimeout(() => reject(new Error('Child timeout')), 2000);
+        timer.unref?.();
         child.on('message', (msg) => {
-            if (msg === 'ready') resolve(undefined);
+            if (msg === 'ready') { clearTimeout(timer); resolve(undefined); }
         });
-        child.on('error', reject);
-        setTimeout(() => reject(new Error('Child timeout')), 2000);
+        child.on('error', (err) => { clearTimeout(timer); reject(err); });
     });
 
     // Kill it forcefully so it doesn't cleanup the socket

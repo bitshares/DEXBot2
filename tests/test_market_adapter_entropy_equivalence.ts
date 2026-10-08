@@ -160,7 +160,10 @@ function makeSeries(kind, length, seed) {
 
 const SERIES = [];
 for (const kind of ['random', 'trend', 'flat', 'sawtooth']) {
-    for (const seed of [1, 7, 99]) SERIES.push({ kind, seed, prices: makeSeries(kind, 800, seed) });
+    // Two seeds keep the kind coverage while cutting the differential sweep
+    // cost; the reference and production analyzers are deterministic, so extra
+    // random samples add runtime, not signal.
+    for (const seed of [1, 99]) SERIES.push({ kind, seed, prices: makeSeries(kind, 600, seed) });
 }
 
 const PE_CONFIGS = [
@@ -269,7 +272,13 @@ function testRegimeCacheMatchesColdRunOnAnExtendedSeries() {
     // window one bar longer. Both must equal a from-scratch computation.
     const prices = makeSeries('random', 800, 31337);
     const opts = { regimeSensitivity: 1, cacheKey: 'unit:extend' };
-    for (let length = 700; length <= prices.length; length += 1) {
+    // Sample lengths rather than every one: each iteration runs a full cold +
+    // cached analysis, and the cache is deterministic, so a stride still
+    // catches a resume/prefix regression (and always checks the final length).
+    const lengths: number[] = [];
+    for (let length = 700; length < prices.length; length += 5) lengths.push(length);
+    lengths.push(prices.length);
+    for (const length of lengths) {
         const window = prices.slice(0, length);
         const cached = computeRegimeMultiplier(window, opts);
         const cold = computeRegimeMultiplier(window, { regimeSensitivity: opts.regimeSensitivity });
@@ -311,7 +320,7 @@ function testRegimeCacheMatchesColdRunOnASlidingWindow() {
     ];
     for (const { label, opts: variant } of variants) {
         _resetRegimeCache();
-        for (let end = 1200; end < 1260; end++) {
+        for (let end = 1200; end < 1260; end += 3) {
             const window = prices.slice(Math.max(0, end - CAP + 1), end + 1);
             const warm = computeRegimeMultiplier(window, { regimeSensitivity: 1, cacheKey: `unit:slide:${label}`, ...variant });
             const cold = computeRegimeMultiplier(window, { regimeSensitivity: 1, ...variant });

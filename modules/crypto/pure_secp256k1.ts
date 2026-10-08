@@ -99,45 +99,106 @@ function modInverse(a: bigint, n: bigint): bigint {
 }
 
 // ── Elliptic curve point operations ────────────────────────────────────────
+//
+// Points are held in Jacobian projective coordinates internally so that a
+// scalar multiplication performs exactly ONE field inversion (at the very
+// end) instead of one per point addition/doubling. The previous affine
+// implementation called `modInverse` on every step, which made signing and
+// public-key derivation an order of magnitude slower on the pure-JS path.
+//
+// A Jacobian point (X, Y, Z) represents the affine point (X/Z^2, Y/Z^3);
+// Z === 0n is the point at infinity.
+
+interface JacobianPoint {
+    x: bigint;
+    y: bigint;
+    z: bigint;
+}
+
+function toJacobian(point: EcPoint | null): JacobianPoint {
+    if (!point) return { x: 0n, y: 1n, z: 0n };
+    return { x: point.x, y: point.y, z: 1n };
+}
+
+function fromJacobian(point: JacobianPoint): EcPoint | null {
+    const p = secp256k1.p;
+    if (point.z === 0n) return null;
+    const zInv = modInverse(point.z, p);
+    const zInv2 = mod(zInv * zInv, p);
+    return {
+        x: mod(point.x * zInv2, p),
+        y: mod(point.y * zInv2 * zInv, p),
+    };
+}
+
+function jacobianDouble(point: JacobianPoint): JacobianPoint {
+    const p = secp256k1.p;
+    if (point.z === 0n || point.y === 0n) return { x: 0n, y: 1n, z: 0n };
+    const xx = mod(point.x * point.x, p);
+    const yy = mod(point.y * point.y, p);
+    const yyyy = mod(yy * yy, p);
+    // a = 0, so M = 3*X^2
+    const m = mod(3n * xx, p);
+    const s = mod(4n * point.x * yy, p);
+    const x3 = mod(m * m - 2n * s, p);
+    const y3 = mod(m * (s - x3) - 8n * yyyy, p);
+    const z3 = mod(2n * point.y * point.z, p);
+    return { x: x3, y: y3, z: z3 };
+}
+
+function jacobianAdd(p1: JacobianPoint, p2: JacobianPoint): JacobianPoint {
+    const p = secp256k1.p;
+    if (p1.z === 0n) return p2;
+    if (p2.z === 0n) return p1;
+    const z1z1 = mod(p1.z * p1.z, p);
+    const z2z2 = mod(p2.z * p2.z, p);
+    const u1 = mod(p1.x * z2z2, p);
+    const u2 = mod(p2.x * z1z1, p);
+    const s1 = mod(p1.y * p2.z * z2z2, p);
+    const s2 = mod(p2.y * p1.z * z1z1, p);
+    const h = mod(u2 - u1, p);
+    const r = mod(s2 - s1, p);
+    if (h === 0n) {
+        if (r === 0n) return jacobianDouble(p1);
+        return { x: 0n, y: 1n, z: 0n };
+    }
+    const hh = mod(h * h, p);
+    const hhh = mod(h * hh, p);
+    const v = mod(u1 * hh, p);
+    const x3 = mod(r * r - hhh - 2n * v, p);
+    const y3 = mod(r * (v - x3) - s1 * hhh, p);
+    const z3 = mod(p1.z * p2.z * h, p);
+    return { x: x3, y: y3, z: z3 };
+}
+
+function jacobianMul(point: JacobianPoint, scalar: bigint): JacobianPoint {
+    let result: JacobianPoint = { x: 0n, y: 1n, z: 0n };
+    let addend = point;
+    let s = scalar;
+    while (s > 0n) {
+        if (s & 1n) result = jacobianAdd(result, addend);
+        addend = jacobianDouble(addend);
+        s >>= 1n;
+    }
+    return result;
+}
 
 function ecPointMul(point: EcPoint, scalar: bigint): EcPoint | null {
     if (scalar === 0n) return null;
     if (scalar < 0n) {
         return ecPointMul({ x: point.x, y: secp256k1.p - point.y }, -scalar);
     }
-    let result: EcPoint | null = null;
-    let addend: EcPoint = { x: point.x, y: point.y };
-    let s = scalar;
-    while (s > 0n) {
-        if (s & 1n) {
-            result = result ? ecPointAdd(result, addend) : addend;
-        }
-        addend = ecPointAdd(addend, addend)!;
-        s >>= 1n;
-    }
-    return result;
+    return fromJacobian(jacobianMul(toJacobian(point), scalar));
 }
 
 function ecPointAdd(a: EcPoint | null, b: EcPoint | null): EcPoint | null {
     if (!a) return b;
     if (!b) return a;
-    if (a.x === b.x && a.y === b.y) {
-        return ecPointDouble(a);
-    }
-    if (a.x === b.x) return null;
-    const p = secp256k1.p;
-    const lam = mod((b.y - a.y) * modInverse(mod(b.x - a.x, p), p), p);
-    const x = mod(lam * lam - a.x - b.x, p);
-    const y = mod(lam * (a.x - x) - a.y, p);
-    return { x, y };
+    return fromJacobian(jacobianAdd(toJacobian(a), toJacobian(b)));
 }
 
 function ecPointDouble(point: EcPoint): EcPoint {
-    const p = secp256k1.p;
-    const lam = mod((3n * point.x * point.x + secp256k1.a) * modInverse(mod(2n * point.y, p), p), p);
-    const x = mod(lam * lam - 2n * point.x, p);
-    const y = mod(lam * (point.x - x) - point.y, p);
-    return { x, y };
+    return fromJacobian(jacobianDouble(toJacobian(point)))!;
 }
 
 // ── Public key encoding/decoding ───────────────────────────────────────────

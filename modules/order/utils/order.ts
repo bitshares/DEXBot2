@@ -910,6 +910,24 @@ function resolveCorrectionMaxUpdates(manager: OrderManagerLike): number {
 }
 
 /**
+ * Resolve the inter-op delay between successive correction broadcasts.
+ * Reads the bot config override first, then the frozen default, falling back
+ * to TIMING.SYNC_DELAY_MS. A finite value >= 0 is honored verbatim (0 lets
+ * tests drive the drain with no wall-clock sleeps).
+ * @param {unknown} manager
+ * @returns {number} Non-negative delay in milliseconds
+ */
+function resolveCorrectionInterOpDelayMs(manager: OrderManagerLike): number {
+    const raw = manager?.config?.fillProcessing?.CORRECTION_INTER_OP_DELAY_MS
+        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_INTER_OP_DELAY_MS;
+    if (raw != null) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+    }
+    return TIMING.SYNC_DELAY_MS;
+}
+
+/**
  * Resolve the correction-backlog warn threshold (see
  * CORRECTION_QUEUE_WARN_THRESHOLD). Non-positive disables the alarm.
  * @param {unknown} manager
@@ -1055,6 +1073,7 @@ async function correctAllPriceMismatches(manager: OrderManagerLike, accountName:
             return true;
         });
         const updateEntries = liveEntries.filter((c) => !(c.cancelOnly === true || c.isSurplus === true));
+        const interOpDelayMs = resolveCorrectionInterOpDelayMs(manager);
 
         const canBatch = cancelEntries.length > 1
             && typeof accountOrders?.buildCancelOrderOp === 'function'
@@ -1074,7 +1093,7 @@ async function correctAllPriceMismatches(manager: OrderManagerLike, accountName:
             const result = await correctOrderPriceOnChain(manager, correctionInfo, accountName, privateKey, accountOrders);
             results.push({ ...correctionInfo, result });
             if (result && result.success) corrected++; else failed++;
-            await sleep(TIMING.SYNC_DELAY_MS);
+            await sleep(interOpDelayMs);
         }
 
         // Price updates are bounded by wall-clock lock-hold budget (primary)
@@ -1098,7 +1117,7 @@ async function correctAllPriceMismatches(manager: OrderManagerLike, accountName:
             results.push({ ...correctionInfo, result });
             if (result && result.success) corrected++; else failed++;
             updatesProcessed++;
-            await sleep(TIMING.SYNC_DELAY_MS);
+            await sleep(interOpDelayMs);
         }
         // Persist master grid mutations from surplus-type-mismatch cancellations.
         // Without this, corrections that cancel an order and convert its grid slot

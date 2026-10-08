@@ -119,6 +119,10 @@ interface TransportConfig {
     shouldSkipNode?: ((nodeUrl: string) => boolean) | null;
     validateNode?: (() => Promise<void>) | null;
     keepAliveIntervalMs?: number;
+    // Base for the exponential reconnect backoff (delay = base * 2^attempts,
+    // clamped to 30s). Defaults to 1000ms; exposed so tests can drive the
+    // reconnect cycle without wall-clock waits.
+    reconnectBaseDelayMs?: number;
 }
 
 function createTransport(config: TransportConfig = {}) {
@@ -131,6 +135,7 @@ function createTransport(config: TransportConfig = {}) {
         shouldSkipNode = null,
         validateNode = null,
         keepAliveIntervalMs = KEEPALIVE_INTERVAL_MS,
+        reconnectBaseDelayMs = 1000,
     } = config;
 
     let ws: WebSocketLike | null = null;
@@ -248,7 +253,7 @@ function createTransport(config: TransportConfig = {}) {
             }, SLOW_RECONNECT_INTERVAL_MS);
             return;
         }
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts) + Math.random() * 1000, 30000);
+        const delay = Math.min(reconnectBaseDelayMs * Math.pow(2, reconnectAttempts) + Math.random() * reconnectBaseDelayMs, 30000);
         reconnectAttempts++;
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;

@@ -4,8 +4,15 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { setCachedModule } = require('./helpers/module_cache_stub');
 const { getErrorMessage } = require('../modules/utils/errors');
+const { esmMockEntry, defineEsmMockAbs } = require('./helpers/esm_mocks');
+
+// Compiled ESM namespaces are frozen and require.cache injection cannot
+// intercept static ESM imports, so bitshares_client / chain_orders are
+// replaced through loader hooks (same technique as test_credit_runtime).
+// Without this the mocks are inert and refreshState opens real WebSocket
+// connections to the public node list (multi-second DNS/connect timeouts).
+esmMockEntry();
 
 // Mock dependencies
 const BitSharesMock = {
@@ -21,7 +28,27 @@ const BitSharesMock = {
 
 global.BitShares = BitSharesMock;
 
-setCachedModule(path.resolve(__dirname, '../modules/bitshares_client.ts'), {
+/**
+ * Register an ESM mock for a module. Only the names listed here become named
+ * exports of the stub, so the list must match everything credit_runtime (and
+ * its graph) imports from the module — the same set test_credit_runtime uses.
+ * Do NOT require the real module first: that caches it in the ESM registry and
+ * the loader hook would never fire for credit_runtime's import.
+ */
+function registerEsmMock(relPath, names, overrides) {
+    defineEsmMockAbs(require.resolve(relPath), names, overrides);
+}
+
+registerEsmMock('../modules/bitshares_client', [
+    'BitShares',
+    'waitForConnected',
+    'createAccountClient',
+    'setSuppressConnectionLog',
+    'getNodeManager',
+    'getNodeStats',
+    'getNodeSummary',
+    '_internal',
+], {
     BitShares: BitSharesMock,
     waitForConnected: async () => {},
     createAccountClient: () => ({}),
@@ -32,11 +59,16 @@ setCachedModule(path.resolve(__dirname, '../modules/bitshares_client.ts'), {
     _internal: { connected: true },
 });
 
-setCachedModule(path.resolve(__dirname, '../modules/chain_orders.ts'), {
+registerEsmMock('../modules/chain_orders', [
+    'resolveAccountId',
+    'resolveAccountName',
+    'getOnChainAssetBalances',
+    'executeBatch',
+], {
     resolveAccountId: async (accountRef) => accountRef || '1.2.0',
     resolveAccountName: async (accountRef) => accountRef || 'account',
     getOnChainAssetBalances: async (accountRef, assets) => {
-        const out: any = {};
+        const out = {};
         for (const asset of assets || []) {
             out[String(asset)] = { free: 0, locked: 0, total: 0 };
         }

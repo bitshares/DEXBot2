@@ -53,7 +53,7 @@ function createManager(ordersList, queue = []) {
         _genesis: makeLadderFromPrices(fixturePrices),
         boundaryIdx: 0,
         _gapSlots: 0,
-        config: undefined as any,
+        config: { fillProcessing: { CORRECTION_INTER_OP_DELAY_MS: 0 } } as any,
         isBroadcastingActive: undefined as any,
         _gapEvacCancelQueued: new Set<string>(),
         logger: { log: (msg, level) => logs.push(`[${level}] ${msg}`) },
@@ -483,7 +483,7 @@ async function run() {
             queue.push(priceEntry(`slot-b${i}`, `1.7.b${i}`, 0.3 + i * 0.01));
         }
         const { manager } = createManager(slots, queue);
-        manager.config = { fillProcessing: { CORRECTION_MAX_UPDATES_PER_CYCLE: 3 } };
+        manager.config = { fillProcessing: { CORRECTION_MAX_UPDATES_PER_CYCLE: 3, CORRECTION_INTER_OP_DELAY_MS: 0 } };
         let updates = 0;
         const accountOrders = { updateOrder: async () => { updates++; return {}; } };
         const out = await correctAllPriceMismatches(manager, 'acct', 'k', accountOrders);
@@ -506,7 +506,7 @@ async function run() {
         // No CORRECTION_MAX_UPDATES_PER_CYCLE, so the elapsed-time budget alone
         // must bound the drain. Simulate a slow chain (large RPC round-trip) by
         // advancing the clock past the budget on the first update.
-        manager.config = { fillProcessing: { CORRECTION_LOCK_HOLD_BUDGET_MS: 4000 } };
+        manager.config = { fillProcessing: { CORRECTION_LOCK_HOLD_BUDGET_MS: 4000, CORRECTION_INTER_OP_DELAY_MS: 0 } };
         const realNow = Date.now;
         let clock = 1_000_000;
         Date.now = () => clock;
@@ -546,7 +546,7 @@ async function run() {
                 },
             ]
         );
-        manager.config = { fillProcessing: { CORRECTION_MAX_UPDATES_PER_CYCLE: 0 } };
+        manager.config = { fillProcessing: { CORRECTION_MAX_UPDATES_PER_CYCLE: 0, CORRECTION_INTER_OP_DELAY_MS: 0 } };
         let cancels = 0; let updates = 0;
         const accountOrders = {
             updateOrder: async () => { updates++; return {}; },
@@ -584,7 +584,7 @@ async function run() {
             [liveSell('slot-89', '1.7.574249250', 0.312638), liveSell('slot-90', '1.7.90', 0.4)],
             [priceEntry('slot-89', '1.7.574249250', 0.312638), priceEntry('slot-90', '1.7.90', 0.4)]
         );
-        manager.config = { fillProcessing: { CORRECTION_QUEUE_WARN_THRESHOLD: 2 } };
+        manager.config = { fillProcessing: { CORRECTION_QUEUE_WARN_THRESHOLD: 2, CORRECTION_INTER_OP_DELAY_MS: 0 } };
         const accountOrders = { updateOrder: async () => ({}) };
         await correctAllPriceMismatches(manager, 'acct', 'k', accountOrders);
         assert.ok(logs.some((l: string) => l.includes('Backlog')), 'backlog threshold must warn');

@@ -993,6 +993,14 @@ let FILL_PROCESSING = {
     // budgeted by either knob.
     CORRECTION_MAX_UPDATES_PER_CYCLE: null,
 
+    // CORRECTION_INTER_OP_DELAY_MS: spacing between successive correction
+    // broadcasts (one update/cancel RPC per iteration). Default null inherits
+    // TIMING.SYNC_DELAY_MS (500ms) — the production pacing that keeps a burst
+    // of corrections from looking like a flood to the node. Exposed as a
+    // config knob so tests can drive the drain at 0ms without wall-clock
+    // sleeps; 0 is honored verbatim.
+    CORRECTION_INTER_OP_DELAY_MS: null,
+
     // CORRECTION_QUEUE_WARN_THRESHOLD: emit a rate-limited warn when the
     // persisted correction queue reaches this size, so a growing backlog is
     // surfaced instead of silently starving placements.

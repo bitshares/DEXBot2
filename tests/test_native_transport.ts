@@ -547,6 +547,9 @@ async function testKeepAliveRecovery() {
             keepAliveIntervalMs: 30,
             rpcTimeoutMs: 100,
             connectTimeoutMs: 500,
+            // Keep the reconnect cycle fast: the assertions only need one
+            // successful reconnect, not the production 1s+ exponential wait.
+            reconnectBaseDelayMs: 10,
         });
 
         await transport.connect([`ws://127.0.0.1:${port}/ws`]);
@@ -564,7 +567,7 @@ async function testKeepAliveRecovery() {
                 reconnected = true;
                 break;
             }
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 20));
         }
 
         assert.ok(reconnected,

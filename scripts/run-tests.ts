@@ -166,22 +166,53 @@ function runOne(testFile: string): Promise<TestResult> {
     });
 }
 
-// ── Main sequential loop ────────────────────────────────────────────
+// ── Main loop ────────────────────────────────────────────────────────
+// Files run sequentially by default. Set DEXBOT_TEST_CONCURRENCY>1 to run
+// that many files in parallel (opt-in: several tests share tests/tmp paths, so
+// parallelism must be requested deliberately rather than assumed safe).
 async function main() {
-    const results: TestResult[] = [];
     let startTotal = performance.now();
+    const concurrency = (() => {
+        const raw = Number(process.env.DEXBOT_TEST_CONCURRENCY);
+        return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+    })();
 
+    const toRun: string[] = [];
     for (const testFile of testFiles) {
         if (liveTestFiles.has(testFile) && !runLiveTests) {
             skippedLive++;
             continue;
         }
+        toRun.push(testFile);
+    }
 
-        footer(`\n=== [TEST] ${testFile} ===`);
-        const r = await runOne(testFile);
-        results.push(r);
-        const statusTag = r.timedOut ? 'TIMEOUT' : (r.failed ? 'FAIL' : 'PASS');
-        footer(`--- [${statusTag}] ${testFile}  ${r.elapsedMs.toFixed(0)} ms${r.signal ? ` (signal ${r.signal})` : ''}`);
+    const results: TestResult[] = new Array(toRun.length);
+
+    if (concurrency <= 1) {
+        for (let i = 0; i < toRun.length; i++) {
+            const testFile = toRun[i];
+            footer(`\n=== [TEST] ${testFile} ===`);
+            const r = await runOne(testFile);
+            results[i] = r;
+            const statusTag = r.timedOut ? 'TIMEOUT' : (r.failed ? 'FAIL' : 'PASS');
+            footer(`--- [${statusTag}] ${testFile}  ${r.elapsedMs.toFixed(0)} ms${r.signal ? ` (signal ${r.signal})` : ''}`);
+        }
+    } else {
+        footer(`\n(running up to ${concurrency} test files in parallel)`);
+        let next = 0;
+        const worker = async () => {
+            while (true) {
+                const i = next++;
+                if (i >= toRun.length) return;
+                const testFile = toRun[i];
+                footer(`\n=== [TEST] ${testFile} ===`);
+                const r = await runOne(testFile);
+                results[i] = r;
+                const statusTag = r.timedOut ? 'TIMEOUT' : (r.failed ? 'FAIL' : 'PASS');
+                footer(`--- [${statusTag}] ${testFile}  ${r.elapsedMs.toFixed(0)} ms${r.signal ? ` (signal ${r.signal})` : ''}`);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, toRun.length) }, worker));
     }
 
     const totalMs = performance.now() - startTotal;

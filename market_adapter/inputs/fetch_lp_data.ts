@@ -42,7 +42,7 @@ import {
 } from './window_cache.js';
 import { PATHS } from '../../modules/paths.js';
 import * as bitsharesClient from '../../modules/bitshares_client.js';
-import { getErrorMessage } from '../../modules/utils/errors.js';
+import { getErrorMessage, resolveSeamMs } from '../../modules/utils/errors.js';
 import { isSameBotName } from '../../modules/utils/sanitize_key.js';
 import { pathToFileURL } from 'node:url';
 
@@ -361,7 +361,9 @@ async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, as
         bucketMs,
         allowSubFetch: true,
         fetchAttempts: FETCH_MAX_ATTEMPTS,
-        fetchBackoffBaseMs: FETCH_RETRY_BACKOFF_BASE_MS,
+        // Backoff base is overridable via the same `kibanaRetryDelayMs` seam the
+        // page/range retry loops use; tests set it to 0 to skip wall-clock sleeps.
+        fetchBackoffBaseMs: resolveSeamMs(config?.kibanaRetryDelayMs, FETCH_RETRY_BACKOFF_BASE_MS),
         onFetchRetry: (info: { attempt: number; attempts: number; backoffMs: number; error: unknown; gte: string; lte: string }) => {
             console.warn(`  Window fetch retry ${info.attempt}/${info.attempts} for ${String(info.gte).slice(0, 10)} → ${String(info.lte).slice(0, 10)} in ${info.backoffMs}ms after failure: ${getErrorMessage(info.error)}`);
         },
