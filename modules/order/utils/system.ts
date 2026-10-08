@@ -1540,7 +1540,27 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
                 const isDesired = desiredSlotIds.has(onChainOrder.id);
 
                 if (!isDesired || !slot || !(toFiniteNumber(slot.size) > 0)) {
+                    // Update removal is intentional, before the fresh check:
+                    // the slot reached this branch because it is not desired /
+                    // size 0, so a surviving Phase-1 committed-size UPDATE
+                    // could emit a stale target or a size-to-zero op on a live
+                    // fresh order ("surplus is never updated to size 0"
+                    // invariant). Dropping it with the deferred cancel keeps
+                    // the slot exactly as master holds it for the cycle; the
+                    // resize is re-derived next tick.
                     removeActionsForOrder(actions, COW_ACTIONS.UPDATE, onChainOrder);
+                    // Fresh-placement grace: a surplus placed seconds ago must
+                    // not be cancelled here (fee bleed, empty level, no net
+                    // change). Leave it active in the working grid; the
+                    // surplus is re-derived next cycle once the order has had
+                    // time to prove itself.
+                    if (onChainOrder.orderId && OrderUtils.isFreshlyPlacedOrder(manager, onChainOrder.orderId)) {
+                        manager.logger.log(
+                            `[DIVERGENCE-COW] Deferring cancel of freshly placed ${onChainOrder.orderId} (${onChainOrder.id}) — inside grace window`,
+                            'info'
+                        );
+                        continue;
+                    }
                     const hasQueuedCancel = hasActionForOrder(actions, COW_ACTIONS.CANCEL, onChainOrder);
 
                     if (!hasQueuedCancel) {

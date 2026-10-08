@@ -73,6 +73,11 @@ async function testMultiPartialConsolidation() {
     await mgr._updateOrder(p2);
     await mgr._updateOrder(p3);
 
+    // Test fixtures create partials via _updateOrder, which stamps them as
+    // fresh placements. Consolidation runs on resting partials, so age the
+    // stamps to exercise the mechanics rather than the fresh-cancel grace.
+    mgr._placedAt.clear();
+
     // Execute COW rebalance
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);
 

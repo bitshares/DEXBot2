@@ -55,6 +55,17 @@ async function testCOWDivergenceCorrection() {
     });
     await manager.recalculateFunds();
 
+    // Divergence mechanics tests operate on resting orders. `_updateOrder`
+    // stamps every new chain binding as a fresh placement, and the
+    // fresh-placement grace would otherwise defer the surplus cancels these
+    // tests assert. Age the stamps so the correction runs unguarded here; the
+    // guarded behavior has its own test
+    // (tests/test_fresh_placement_cancel_grace_paths.ts).
+    const applyAgedDivergence = (...args: any[]) => {
+        manager._placedAt.clear();
+        return (applyGridDivergenceCorrections as any)(...args);
+    };
+
     // Test 1: Surplus orders never become size-to-zero updates
     console.log('Test 1: Surplus orders are cancelled or rotated, never updated to size=0');
     {
@@ -81,7 +92,7 @@ async function testCOWDivergenceCorrection() {
 
         const mockAccountOrders = { storeMasterGrid: async () => {} };
 
-        await applyGridDivergenceCorrections(manager, mockAccountOrders, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, mockAccountOrders, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         // Verify COW result structure
         assert(capturedCowResult, 'Should have COW result');
@@ -147,7 +158,7 @@ async function testCOWDivergenceCorrection() {
             return { executed: true };
         };
 
-        await applyGridDivergenceCorrections(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         // Verify PARTIAL state is preserved
         const workingOrder = capturedCowResult.workingGrid.get('slot-5');
@@ -192,7 +203,7 @@ async function testCOWDivergenceCorrection() {
             return { executed: true };
         };
 
-        await applyGridDivergenceCorrections(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         // Check that active orders got UPDATE actions
         const updateActions = capturedCowResult.actions.filter(a => a.type === COW_ACTIONS.UPDATE);
@@ -248,7 +259,7 @@ async function testCOWDivergenceCorrection() {
             return { executed: true };
         };
 
-        await applyGridDivergenceCorrections(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         assert(capturedCowResult && Array.isArray(capturedCowResult.actions), 'Should have actions');
 
@@ -311,7 +322,7 @@ async function testCOWDivergenceCorrection() {
             return { executed: true };
         };
 
-        await applyGridDivergenceCorrections(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         assert(capturedCowResult && Array.isArray(capturedCowResult.actions), 'Should have actions');
 
@@ -407,7 +418,7 @@ async function testCOWDivergenceCorrection() {
             return { executed: true };
         };
 
-        await applyGridDivergenceCorrections(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
+        await applyAgedDivergence(manager, { storeMasterGrid: async () => {} }, 'bot-key', mockUpdateFn, updateGridFromBlockchainSnapshot);
 
         assert(capturedCowResult && Array.isArray(capturedCowResult.actions), 'Should have actions');
 

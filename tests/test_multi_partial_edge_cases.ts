@@ -74,6 +74,10 @@ async function testSingleDustPartial() {
 
     await mgr._updateOrder(dustPartial);
 
+    // Test fixtures create partials via _updateOrder, which stamps them as
+    // fresh placements. Consolidation runs on resting partials, so age the
+    // stamps to exercise the mechanics rather than the fresh-cancel grace.
+    mgr._placedAt.clear();
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);
 
     assert(result.actions.length > 0, 'Should have at least one strategy action for partial');
@@ -105,6 +109,10 @@ async function testMultipleDustPartials() {
         await mgr._updateOrder(order);
     }
 
+    // Test fixtures create partials via _updateOrder, which stamps them as
+    // fresh placements. Consolidation runs on resting partials, so age the
+    // stamps to exercise the mechanics rather than the fresh-cancel grace.
+    mgr._placedAt.clear();
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);
 
     console.log(`  Strategy actions found: ${result.actions.length}`);
@@ -133,6 +141,10 @@ async function testSubstantialPartial() {
 
     await mgr._updateOrder(partial);
 
+    // Test fixtures create partials via _updateOrder, which stamps them as
+    // fresh placements. Consolidation runs on resting partials, so age the
+    // stamps to exercise the mechanics rather than the fresh-cancel grace.
+    mgr._placedAt.clear();
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);
 
     assert(result.actions.length >= 1, `Should have strategy actions`);
@@ -159,6 +171,10 @@ async function testLargeResidual() {
 
     await mgr._updateOrder(outerOversized);
 
+    // Test fixtures create partials via _updateOrder, which stamps them as
+    // fresh placements. Consolidation runs on resting partials, so age the
+    // stamps to exercise the mechanics rather than the fresh-cancel grace.
+    mgr._placedAt.clear();
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);
 
     // Modern strategy might cancel it if outside window, or update it

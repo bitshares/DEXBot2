@@ -66,7 +66,7 @@ import {
     buildSuccessResult,
     evaluateCommit
 } from './utils/validate.js';
-import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, geometryTypeForSlotIndex, isOrderOnChain, resolveReserveCount, resolveLiveReserveEdgeAnchorPrice, compareReserveEdge, collectRefillSlotIds, recordOrderPlacement } from './utils/order.js';
+import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, geometryTypeForSlotIndex, isOrderOnChain, resolveReserveCount, resolveLiveReserveEdgeAnchorPrice, compareReserveEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder } from './utils/order.js';
 import { getErrorMessage, getErrorCode } from '../utils/errors.js';
 import type { GridGenesis } from './utils/math.js';
 import type {
@@ -160,6 +160,9 @@ interface COWExecuteParams {
     gridVersion: number;
     boundaryIdx: number | null;
     funds: ProjectedFunds | null;
+    // Owning manager, used only for the fresh-placement grace lookup
+    // (`manager._placedAt`). Optional so tests can drive the engine directly.
+    manager?: OrderManagerLike | null;
     fills?: COWFillLike[];
     excludeIds?: Set<string>;
     gapSlots?: number | null;
@@ -239,6 +242,7 @@ class COWRebalanceEngine {
         gridVersion,
         boundaryIdx,
         funds,
+        manager = null,
         fills = [],
         excludeIds = new Set(),
         gapSlots = null,
@@ -311,7 +315,38 @@ class COWRebalanceEngine {
             return aborted;
         }
 
-        const optimizedActions = optimizeRebalanceActions(reconcileResult.actions, masterGrid, {
+        // Fresh-placement cancel guard. Reconcile runs on a target snapshot
+        // that can be a beat behind a just-placed order; cancelling it burns
+        // fees, empties a level and re-places the same thing next cycle. Hold
+        // the whole slot's action group (a type-mismatch CANCEL is paired with
+        // a CREATE on the same id) for the grace window. The surplus is
+        // re-derived next cycle once the order has had time to prove itself.
+        const deferredFreshCancelSlots = new Set<string>();
+        for (const action of reconcileResult.actions as CowAction[]) {
+            if (action.type !== COW_ACTIONS.CANCEL || !action.orderId) continue;
+            if (!manager || !isFreshlyPlacedOrder(manager, action.orderId)) continue;
+            const slotId = String(action.id);
+            if (deferredFreshCancelSlots.has(slotId)) continue;
+            deferredFreshCancelSlots.add(slotId);
+            this.logger?.log(
+                `[COW] Deferring cancel of freshly placed ${action.orderId} (${slotId}) — inside grace window`,
+                'info'
+            );
+        }
+        // Id-group drop is deliberate: dropping only the CANCEL would let
+        // optimizeRebalanceActions below fold the paired CREATE back into an
+        // UPDATE (cancelAction.id + newGridId) and re-materialize the
+        // placement. Safe because reconcile emits per slot either a CANCEL
+        // group or an UPDATE, never both ("no duplicate UPDATE+CANCEL for the
+        // same order" invariant), and an unpaired-surplus CANCEL by
+        // construction has no remaining same-type hole to fold into — so no
+        // needed repricing is discarded here. If a generator ever emits both,
+        // the symptom is only a one-cycle repricing deferral.
+        const plannedActions: CowAction[] = deferredFreshCancelSlots.size > 0
+            ? (reconcileResult.actions as CowAction[]).filter((action) => !deferredFreshCancelSlots.has(String(action.id)))
+            : reconcileResult.actions as CowAction[];
+
+        const optimizedActions = optimizeRebalanceActions(plannedActions, masterGrid, {
             logger: (msg: string, level?: string) => this.logger?.log(msg, level),
             boundaryIdx: targetBoundary ?? undefined,
             gapSlots: gapSlots ?? undefined,
@@ -373,6 +408,14 @@ class COWRebalanceEngine {
         });
 
         projectTargetToWorkingGrid(workingGrid, targetGrid, { actions: optimizedActions });
+
+        // The projection above virtually applied every target-grid change,
+        // including the cancellations we just held back. Restore the freshly
+        // placed slots from master so committing the working grid does not
+        // virtualize a live order whose cancel was deferred.
+        for (const slotId of deferredFreshCancelSlots) {
+            workingGrid.syncFromMaster(masterGrid, slotId, gridVersion);
+        }
 
         const precisions = {
             buyPrecision: this.assets?.assetB?.precision,
@@ -2528,6 +2571,7 @@ class OrderManager implements OrderManagerLike {
             gridVersion: this._gridVersion,
             boundaryIdx: this.boundaryIdx,
             funds: this.getChainFundsSnapshot(),
+            manager: this,
             fills,
             excludeIds,
             gapSlots: this._gapSlots,
