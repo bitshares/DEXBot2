@@ -145,7 +145,7 @@ Evolved from a basic README to a comprehensive framework (50+ docs entries, 80%+
 
 **Completed**: browser-safe core; credit/MPA runtime; storage-adapter I/O centralization; self-healing recovery; Kibana PnL analytics — terminal analyzer plus the self-contained HTML report behind `dexbot pnl` (`analysis/pnl_report.ts`), backed by a per-account month-shard fill cache (`analysis/fills_cache.ts`); credit-only mode; Docker support; npm package. For the grid order engine arc specifically (COW pipeline, orphan/self-trade/fill-guard hardening, invariants) see [ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md](ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md) §R4.
 
-**Planned**: backtesting engine (historical candle replay via exchange abstraction); injectable interfaces at call boundaries; SQLite persistence + Zod validation at the blockchain boundary; Telegram bot (**not yet implemented**) — owner-gated monitoring (`/status`, `/orders`, `/grid`, `/balance`) and opt-in+confirm gated control (`/start`, `/stop`, `/pause`); DEXBot is the only writer, private keys never reach the module (`TELEGRAM` block + `DEXBOT_TELEGRAM_TOKEN` env).
+**Planned**: backtesting engine (historical candle replay via exchange abstraction); injectable interfaces at call boundaries; SQLite persistence + Zod validation at the blockchain boundary.
 
 ## Version History
 
