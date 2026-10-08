@@ -2317,10 +2317,19 @@ class SyncEngine {
                             }
                             // Deduced fee (createFee or updateFee) must always be applied to reflect blockchain cost
                             const actualFee = fee;
-                            await mgr._applyOrderUpdate(updatedOrder, 'fill-place', {
+                            const linked = await mgr._applyOrderUpdate(updatedOrder, 'fill-place', {
                                 skipAccounting: chainData.skipAccounting || false,
                                 fee: actualFee
                             });
+                            // Linkage binds the chain order to a slot. Drop any
+                            // deferred-orphan record for it: fund accounting counts
+                            // unmatched locks too, so a kept record double-counts
+                            // now that the slot loop also sees the order. Only on
+                            // success — a rejected update leaves the order
+                            // unmatched and the record must stay.
+                            if (linked !== false) {
+                                try { _filterUnmatchedChainOrders(mgr, chainOrderId as string); } catch { /* counting hygiene only */ }
+                            }
                         } else {
                             // Unknown grid id: the broadcast landed but master no
                             // longer holds the slot (grid reset/regen raced the
