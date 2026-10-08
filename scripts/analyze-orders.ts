@@ -49,7 +49,7 @@ interface GridSnapshot {
   meta?: JsonObj;
   grid?: GridSlot[];
   assets?: { assetA?: { symbol?: unknown }; assetB?: { symbol?: unknown } };
-  boundaryIdx?: number;
+  boundaryIdx?: number | null;
   [key: string]: unknown;
 }
 
@@ -135,6 +135,7 @@ interface AnalysisResult {
   asymmetricBounds: AsymmetricBoundsDisplay | null;
   slotData: { buy: GridSlot[]; sell: GridSlot[] };
   distribution: DistributionAnalysis;
+  boundaryLess: boolean;
   gridPriceLabel: unknown;
   gridPriceValue: unknown;
   gridPriceStale: unknown;
@@ -538,9 +539,20 @@ function analyzeOrder(botData: GridSnapshot, config: BotConfig, botKey: string):
    * The grid contains buy slots (prices below market), sell slots (above market),
    * and optional spread slots. Separation enables independent analysis.
    */
-  const boundaryIdx = typeof botData.boundaryIdx === 'number' ? botData.boundaryIdx : 0;
-  const buySlots = grid.filter((s, i) => i <= boundaryIdx && s.type === ORDER_TYPES.BUY);
-  const sellSlots = grid.filter((s, i) => i > boundaryIdx && s.type === ORDER_TYPES.SELL);
+  // A persisted boundary can be absent: GRID-LOAD erases a poisoned boundary
+  // (clearPersistedBoundary) and keeps running boundary-less until fills
+  // re-anchor. Index-based rail slicing then degenerates (null coerces to 0),
+  // hiding live rail orders. Detect it and classify by slot type so every live
+  // order stays visible in the report.
+  const hasBoundary = typeof botData.boundaryIdx === 'number' && Number.isFinite(botData.boundaryIdx);
+  const boundaryIdx = hasBoundary ? (botData.boundaryIdx as number) : 0;
+  const boundaryLess = !hasBoundary;
+  const buySlots = boundaryLess
+    ? grid.filter((s) => s.type === ORDER_TYPES.BUY)
+    : grid.filter((s, i) => i <= boundaryIdx && s.type === ORDER_TYPES.BUY);
+  const sellSlots = boundaryLess
+    ? grid.filter((s) => s.type === ORDER_TYPES.SELL)
+    : grid.filter((s, i) => i > boundaryIdx && s.type === ORDER_TYPES.SELL);
   const spreadSlots = grid.filter((s) => s.type === ORDER_TYPES.SPREAD);
 
   const activeBuySlots = buySlots.filter((s) => s.state === ORDER_STATES.ACTIVE || s.state === ORDER_STATES.PARTIAL);
@@ -567,13 +579,15 @@ function analyzeOrder(botData: GridSnapshot, config: BotConfig, botKey: string):
   // design (a partially-placed grid IS partially masked); it is not a bug, but
   // the output should be read with that caveat in mind.
   const hasOrderId = (s: GridSlot) => !!(s && s.orderId);
-  const placedBuys = grid.slice(0, boundaryIdx + 1).filter((s) => s.type === ORDER_TYPES.BUY && hasOrderId(s));
-  const placedSells = grid.slice(boundaryIdx + 1).filter((s) => s.type === ORDER_TYPES.SELL && hasOrderId(s));
-  const geoBuy = grid.slice(0, boundaryIdx + 1).filter((s) => s.type === ORDER_TYPES.BUY);
-  const geoSell = grid.slice(boundaryIdx + 1).filter((s) => s.type === ORDER_TYPES.SELL);
+  const railBuys = boundaryLess ? grid.filter((s) => s.type === ORDER_TYPES.BUY) : grid.slice(0, boundaryIdx + 1);
+  const railSells = boundaryLess ? grid.filter((s) => s.type === ORDER_TYPES.SELL) : grid.slice(boundaryIdx + 1);
+  const placedBuys = railBuys.filter((s) => s.type === ORDER_TYPES.BUY && hasOrderId(s));
+  const placedSells = railSells.filter((s) => s.type === ORDER_TYPES.SELL && hasOrderId(s));
+  const geoBuy = railBuys.filter((s) => s.type === ORDER_TYPES.BUY);
+  const geoSell = railSells.filter((s) => s.type === ORDER_TYPES.SELL);
   const bestBuySlot = placedBuys.length
     ? placedBuys.reduce((a, b) => (b.price > a.price ? b : a))
-    : (geoBuy.length ? geoBuy.reduce((a, b) => (b.price > a.price ? b : a)) : (grid[boundaryIdx] || null));
+    : (geoBuy.length ? geoBuy.reduce((a, b) => (b.price > a.price ? b : a)) : (boundaryLess ? null : (grid[boundaryIdx] || null)));
   const bestSellSlot = placedSells.length
     ? placedSells.reduce((a, b) => (b.price < a.price ? b : a))
     : (geoSell.length ? geoSell.reduce((a, b) => (b.price < a.price ? b : a)) : null);
@@ -665,6 +679,9 @@ function analyzeOrder(botData: GridSnapshot, config: BotConfig, botKey: string):
     virtualFunds: virtualGridFunds,
     // Slot vs fund distribution analysis
     distribution: distribution,
+    // True when the snapshot carries no boundary (poisoned-boundary erasure):
+    // slot rows are classified by slot type, not rail geometry.
+    boundaryLess: boundaryLess,
     // Slot counts for structure overview
     slots: {
       buy: buySlots.length,
@@ -1310,6 +1327,11 @@ function formatAnalysis(analysisInput: JsonObj): string {
   // Header: Trading pair name
   lines.push(`\n${colors.cyan}📊 ${analysis.pair}${colors.reset} (${analysis.botName})`);
   lines.push(`   ${colors.gray}Update: ${analysis.lastUpdated.toLocaleString()}${colors.reset}`);
+  // Boundary-less snapshot: say so out loud so geometry rows are read as
+  // type-based counts, not rail positions.
+  if (analysis.boundaryLess) {
+    lines.push(`   ${colors.gray}⚠️  boundary-less mode - slot rows by slot type (no rail geometry)${colors.reset}`);
+  }
   lines.push(``);
 
   // Warning: No config available for comparison

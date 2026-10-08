@@ -798,6 +798,76 @@ function testFormatAnalysisGridPriceStale() {
   assert.ok(stripColorCodes(recentLine).includes('AMA3: 100.0'), 'recent line shows label and price');
 }
 
+function testAnalyzeOrderBoundaryLessClassifiesByType() {
+  const { analyzeOrder, formatAnalysis } = loadAnalyzer();
+  const botKey = `boundaryless-${Date.now()}`;
+  const botData = {
+    meta: { assetA: 'BTS', assetB: 'XBTSX.USDT', updatedAt: new Date().toISOString() },
+    // Poisoned-boundary erasure persists null; the bot keeps trading with a
+    // live grid and no boundary until fills re-anchor.
+    boundaryIdx: null,
+    grid: [
+      { type: 'buy', state: 'active', orderId: 'b1', price: 90, size: 1 },
+      { type: 'buy', state: 'active', orderId: 'b2', price: 95, size: 1 },
+      { type: 'sell', state: 'active', orderId: 's1', price: 105, size: 1 },
+      { type: 'sell', state: 'active', orderId: 's2', price: 110, size: 1 },
+    ],
+  };
+  const config = {
+    name: 'boundaryless-test',
+    gridPrice: 'fixed',
+    minPrice: '1.55x',
+    maxPrice: '1.55x',
+    targetSpreadPercent: 2,
+    incrementPercent: 0.5,
+    activeOrders: { buy: 4, sell: 4 },
+    botFunds: { buy: '100%', sell: '100%' },
+    weightDistribution: { buy: 1, sell: 1 },
+  };
+  const analysis = analyzeOrder(botData, config, botKey);
+  assert.strictEqual(analysis.boundaryLess, true, 'null boundary should flag boundary-less mode');
+  assert.strictEqual(analysis.slots.buy, 2, 'boundary-less report must count both buys by type');
+  assert.strictEqual(analysis.slots.sell, 2, 'boundary-less report must count both sells by type');
+  // Legacy index slicing would hide everything past slot 0 and collapse the
+  // spread edges; these assert the real geometry is reported instead.
+  assert.strictEqual(analysis.marketPrice, 100, 'market price uses real max-buy / min-sell');
+  assert.ok(Math.abs(analysis.spread.real - (105 - 95) / 95) < 1e-9, 'spread uses real edges');
+  const stripped = stripColorCodes(formatAnalysis(analysis));
+  assert.ok(stripped.includes('boundary-less mode'), 'report should announce boundary-less mode');
+}
+
+function testAnalyzeOrderNumericBoundaryKeepsRailGeometry() {
+  const { analyzeOrder } = loadAnalyzer();
+  const botKey = `boundary-numeric-${Date.now()}`;
+  const botData = {
+    meta: { assetA: 'BTS', assetB: 'XBTSX.USDT', updatedAt: new Date().toISOString() },
+    boundaryIdx: 1,
+    // A buy placed after the numeric boundary is excluded by rail geometry
+    // (legacy behaviour); the fallback must not alter the numeric path.
+    grid: [
+      { type: 'buy', state: 'active', orderId: 'b1', price: 90, size: 1 },
+      { type: 'sell', state: 'active', orderId: 's1', price: 105, size: 1 },
+      { type: 'buy', state: 'active', orderId: 'b2', price: 95, size: 1 },
+      { type: 'sell', state: 'active', orderId: 's2', price: 110, size: 1 },
+    ],
+  };
+  const config = {
+    name: 'boundary-numeric-test',
+    gridPrice: 'fixed',
+    minPrice: '1.55x',
+    maxPrice: '1.55x',
+    targetSpreadPercent: 2,
+    incrementPercent: 0.5,
+    activeOrders: { buy: 4, sell: 4 },
+    botFunds: { buy: '100%', sell: '100%' },
+    weightDistribution: { buy: 1, sell: 1 },
+  };
+  const analysis = analyzeOrder(botData, config, botKey);
+  assert.strictEqual(analysis.boundaryLess, false, 'numeric boundary must not flag boundary-less mode');
+  assert.strictEqual(analysis.slots.buy, 1, 'numeric boundary keeps index rail (post-boundary buy excluded)');
+  assert.strictEqual(analysis.slots.sell, 1, 'numeric boundary keeps index rail');
+}
+
 async function main() {
   testResolveAmaKey();
   testFormatAnalysisGridPriceLine();
@@ -826,6 +896,8 @@ async function main() {
   testAnalyzeOrderIncludesDynamicWeightForAma();
   testAnalyzeOrderOmitsDynamicWeightForNonAma();
   testAnalyzeOrderFormatsNumericBotFunds();
+  testAnalyzeOrderBoundaryLessClassifiesByType();
+  testAnalyzeOrderNumericBoundaryKeepsRailGeometry();
   console.log('analyze-orders dynamic weight tests passed');
 }
 
