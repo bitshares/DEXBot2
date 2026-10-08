@@ -52,7 +52,7 @@ funds.allocated → _getSizingContext()       (budget for spread correction)
 **Key points:**
 - `botFunds` percentage applies to **total** capital (free + locked in orders), not just free. A bot at `"50%"` gets half of everything, not half of what's currently idle.
 - `funds.allocated` is the ceiling for each side. Existing orders already consume part of it; the remaining free portion is available for new placements.
-- The downstream `applyBotFundsAllocation()` (`manager.ts:1234`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
+- The downstream `applyBotFundsAllocation()` (`manager.ts:1277`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
 
 ---
 
@@ -154,7 +154,7 @@ SHRINK: overAlloc = (gridTracked - allocatedCapital) / allocatedCapital * 100
             → Trigger grid regeneration (resize affected orders down)
 ```
 
-Deliberately no per-side chain-total-drop leg: a normal fill moves value across sides (pays one asset, receives the other — see `recordFillBalances`), so one side's total routinely drops ≥3% on ordinary fills, and the fill pipeline already re-sizes from the post-fill budget.
+Deliberately no per-side chain-total-drop leg: a normal fill moves value across sides (pays one asset, receives the other — see `processFillAccounting`), so one side's total routinely drops ≥3% on ordinary fills, and the fill pipeline already re-sizes from the post-fill budget.
 
 **How It Works (grow)**:
 1. Fill occurs → proceeds added to `chainFree`

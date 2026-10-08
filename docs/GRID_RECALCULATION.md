@@ -645,7 +645,7 @@ Removed trigger file.
 
 ## Visualizing the AMA Triggers (§3 and §4)
 
-`dexbot tv <bot>` (and `analysis/tradingview/analyze_tradingview.js`) replays the
+`dexbot tv <bot>` (and `dist/analysis/tradingview/analyze_tradingview.js`) replays the
 two market-adapter recentering triggers over the chart's candle history and draws
 the accepted grid center, the range that center would own, and one marker per
 reset (amber = AMA-price Δ, cyan = AMA-slope Δ, grey = first snapshot). The

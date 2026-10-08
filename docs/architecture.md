@@ -146,6 +146,7 @@ graph TB
 
         WORKGRID[WorkingGrid<br/>working_grid.ts]
         GRID_RECONCILE[GridReconcile<br/>grid_reconcile.ts]
+        COW_RUNTIME[COWRuntime<br/>dexbot_cow_runtime.ts]
         UTILS[Utils<br/>utils/]
         LOGGER[Logger<br/>logger.ts]
         FILL_STORE[ProcessedFillStore<br/>processed_fill_store.ts]
@@ -190,7 +191,7 @@ graph TB
     MANAGER --> GRID_RECONCILE
     MANAGER --> UTILS
     MANAGER --> LOGGER
-    MANAGER --> RUNNER
+    MANAGER --> COW_RUNTIME
     MANAGER --> FILL_STORE
 
     ACCOUNTANT --> FUND_REGISTRY
@@ -198,7 +199,7 @@ graph TB
     SYNC --> UTILS
     GRID --> UTILS
 
-    RUNNER --> CHAIN_ORDERS
+    COW_RUNTIME --> CHAIN_ORDERS
     SYNC --> ACCOUNT_ORDERS
     MANAGER --> ACCOUNT_BOTS
 
@@ -1110,13 +1111,15 @@ The system continuously monitors three mathematical invariants:
 ### Metrics Tracking
 
 ```javascript
-manager.getMetrics()
-// Returns:
-// - fundRecalcCount
-// - invariantViolations
-// - lockAcquisitions
-// - stateTransitions
-// - lastSyncDurationMs
+bot.getMetrics()
+// Returns (OrderManager._metrics plus live pipeline state):
+// - fillsProcessed, batchesExecuted, fillProcessingTimeMs, maxQueueDepth
+// - fundRecalcCount, lastSyncDurationMs, metricsStartTime
+// - lockAcquisitions, lockContentionEvents, lockContentionSkips, gridLockContention
+// - spreadRoleConversionBlocked
+// - queueDepth, fillProcessingLockActive, divergenceLockActive, shadowLocksActive
+// - recoveryExhaustedAt, recentFillsTracked
+// - unmatchedChainOrders, heldChainOrders, blockingChainOrders
 ```
 
 ---

@@ -44,8 +44,8 @@ Follow this path through the codebase:
 - `modules/constants.ts::MARKET_ADAPTER` - AMA, dynamic weight, and regime detection defaults
 - `modules/constants.ts::REGIME_TABLE` - Hurst/PE regime signal-strength table
 - `modules/dexbot_class.ts::_handleBatchHardAbort()` - Hard-abort recovery handler
-- `modules/dexbot_class.ts::_staleCleanedOrderIds` - Orphan-fill deduplication tracking
-- `modules/dexbot_class.ts::_cancelDustOrders()` - Auto-cancel dust partials on-chain immediately (no timer)
+- `bot._staleCleanedOrderIds` (`modules/dexbot_fill_runtime.ts`, typed in `modules/types.ts`) - Orphan-fill deduplication tracking
+- `bot._cancelDustOrders()` (`modules/dexbot_maintenance_runtime.ts` / `modules/dexbot_fill_runtime.ts`) - Auto-cancel dust partials on-chain immediately (no timer)
 - `modules/credit_runtime.ts` - Debt workflow executor (MPA and credit offer)
 - `market_adapter/core/market_adapter_service.ts` - Signal pipeline (AMA, dynamic weights, collateral advisory)
 
@@ -909,7 +909,7 @@ convention marker — AsyncLock does not enforce it at runtime.
 
 **`adjustTotalBalance` Locking Contract** (v1.4.7):
 
-The public `adjustTotalBalance()` (Level 4) is now async and **acquires `_fundLock` internally**. Callers that already hold `_fundLock` (e.g. `recordFillBalances`) must use the private `_adjustTotalBalanceLocked()` sync helper instead to avoid redundant nested re-entrancy. Callers outside any `_fundLock` region (e.g. `_applyBalanceAdjustments`, fee settlement, rollback) should continue using `adjustTotalBalance()` with `await`.
+The public `adjustTotalBalance()` (Level 4) is now async and **acquires `_fundLock` internally**. Callers that already hold `_fundLock` (e.g. the fee-settlement paths inside `modules/order/accounting.ts`) must use the private `_adjustTotalBalanceLocked()` sync helper instead to avoid redundant nested re-entrancy. Callers outside any `_fundLock` region (e.g. `_applyBalanceAdjustments`, rollback, and the maintenance/sync/cow-runtime call sites) should continue using `adjustTotalBalance()` with `await`.
 
 **Example: Safe Pattern**
 
@@ -976,9 +976,9 @@ async start() {
 
 All new orders pass through two validation gates:
 
-1. **Strategy/Grid Logic** (`strategy.ts`, `grid.ts`):
+1. **Strategy/Grid Logic** (`strategy.ts`, `grid.ts`, `utils/validate.ts`):
    - Check: `size >= getMinOrderSize(type, assets, factor)`
-   - Double-dust threshold: `size >= minHealthySize`
+   - Double-dust threshold: `size >= getDoubleDustThreshold(idealSize, dustThresholdPercent)` (`utils/validate.ts` `isCreateHealthy`)
    - Prevents undersized placement attempts
 
 2. **Broadcast Validation** (`dexbot_class.ts`):
@@ -1490,7 +1490,7 @@ manager.logger.logFundsStatus(manager, 'CONTEXT');
 
 ### View Metrics
 ```javascript
-console.log(manager.getMetrics());
+console.log(dexbot.getMetrics());  // OrderManager._metrics plus live pipeline state
 ```
 
 ### Check Order Map Integrity

@@ -125,10 +125,21 @@ but likewise causes no plans to execute because no target remains present.
 This closes stale-cancellation replays without requiring the whole book to
 remain unchanged.
 
+**Fresh-placement grace (`TIMING.SURPLUS_CANCEL_GRACE_MS`, 15 min):** surplus
+and cancel-only cancellations also skip any order whose `orderId` was placed
+inside the grace window. The timestamp is written by `recordOrderPlacement` into
+`manager._placedAt` and tested with `isFreshlyPlacedOrder`; the reconciler's CANCEL
+actions are filtered by `COWRebalanceEngine.execute`, which drops the whole slot's
+action group (a paired CANCEL+CREATE must not lose only its CANCEL, or the CREATE
+folds back into an UPDATE and re-materializes the placement) and re-syncs the
+deferred slots from master via `workingGrid.syncFromMaster` before commit. The
+order stays ACTIVE and is re-drained once the window expires. `grid-load`/
+`grid-init` contexts are excluded so a restart does not suppress the sweep.
+
 Surplus settlement uses the same live-ownership decision. Only an order that is
-still untracked and signature-unchanged reaches `_cancelChainOrder`; a now-owned
-or geometry-changed order is skipped rather than released from the stale
-snapshot.
+still untracked, signature-unchanged, and outside the fresh-placement grace
+window reaches `_cancelChainOrder`; a now-owned or geometry-changed order is
+skipped rather than released from the stale snapshot.
 
 **Updates:**
 - Batch via `_executeStartupUpdateBatch` when `supportsBatchUpdate` is available

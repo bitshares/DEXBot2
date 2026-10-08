@@ -113,6 +113,7 @@ modules/
 │       └── withPoolRef.ts         startPrice mode + poolRef resolution
 │
 ├── launcher/                      process lifecycle (PM2, unlock, isolated)
+│   ├── adapter_requirement.ts     canonical market-adapter requirement (single source of truth)
 │   ├── bot_supervisor.ts          per-bot process supervision
 │   ├── child_env.ts               child process environment
 │   ├── credential_bootstrap.ts    daemon startup

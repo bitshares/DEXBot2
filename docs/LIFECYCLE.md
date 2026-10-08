@@ -90,7 +90,7 @@ sequenceDiagram
     participant CO as chain_orders (broadcast)
     participant STORE as Storage
 
-    CH->>Q: enqueue fill(s)  (dexbot_fill_runtime.ts:454)
+    CH->>Q: enqueue fill(s)  (dexbot_fill_runtime.ts:458)
     FR->>FR: drain queue -> _processFillsWithBatching
     FR->>OM: processFilledOrders()  (manager.ts)
     OM->>AC: processFillAccounting()  (single call, batch)
@@ -135,9 +135,9 @@ sequenceDiagram
 
     MA->>CL: AMA center snapshot updated
     CL->>CL: _performPeriodicGridChecks()  (dexbot_class.ts:1685)
-    CL->>RT: performPeriodicGridChecks()  (dexbot_maintenance_runtime.ts:1632)
-    RT->>RT: runGridMaintenance(bot,'periodic')  (dexbot_maintenance_runtime.ts:2931)
-    RT->>RT: executeMaintenanceLogic()  (dexbot_maintenance_runtime.ts:2430)
+    CL->>RT: performPeriodicGridChecks()  (dexbot_maintenance_runtime.ts:1645)
+    RT->>RT: runGridMaintenance(bot,'periodic')  (dexbot_maintenance_runtime.ts:2944)
+    RT->>RT: executeMaintenanceLogic()  (dexbot_maintenance_runtime.ts:2443)
     RT->>AC: recalculate funds from balances
     RT->>GD: promote AMA center -> grid center
     RT->>GD: recalculateGrid()  (grid.ts)
@@ -157,13 +157,13 @@ The AMA signal stack (AMA/Kalman/Hurst/PE) is *research-tuned* in `analysis/` an
 the parameters.
 
 > Note: `runMaintenance()` is a **different** subsystem — the credit/MPA debt
-> runtime (`modules/credit_runtime.ts:3166`, reached via
+> runtime (`modules/credit_runtime.ts:3468`, reached via
 > `_runCreditRuntimeMaintenance` at `dexbot_class.ts:1802`). The grid maintenance
 > chain above is the one that matters for order/price upkeep.
 
 References: `modules/dexbot_class.ts:1685` (`_performPeriodicGridChecks`) →
-`modules/dexbot_maintenance_runtime.ts:1632` (`performPeriodicGridChecks`) →
-`:2931` (`runGridMaintenance`) → `:2430` (`executeMaintenanceLogic`),
+`modules/dexbot_maintenance_runtime.ts:1645` (`performPeriodicGridChecks`) →
+`:2944` (`runGridMaintenance`) → `:2443` (`executeMaintenanceLogic`),
 `docs/GRID_RECALCULATION.md`, `docs/GRID_RECONCILE.md`.
 
 ---

@@ -229,6 +229,7 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
   - Cancelled IDs are filtered out of `unmatchedParsed` to prevent reprocessing.
   - No size guard — any duplicate at the same price is a violation.
   - The earlier fuzzy `SUSPECTED_DUPLICATE_TOLERANCE_MULTIPLIER` (5× `calculatePriceTolerance`) and `SUSPECTED_DUPLICATE_TOLERANCE_FLOOR` are removed; only exact price-level equality triggers a reconcile cancel.
+  - Cancel deferral under `INV-RECON-006` applies before submission.
 
 - `INV-RECON-004` Rebalance must not convert on-chain slots to SPREAD via CREATE
   - `performSafeRebalance` must not emit `CREATE` actions that convert existing on-chain slots into SPREAD orders.
@@ -237,6 +238,12 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
 - `INV-RECON-005` Extreme placement ordering
   - BUY placements must use nearest available free slots first (descending price, so the nearest-to-center slots fill first — `order/utils/order.ts` `buildOutsideInPairGroups`).
   - SELL placements must use nearest available free slots first (ascending price).
+
+- `INV-RECON-006` Fresh-placement cancels are deferred for a grace window
+  - A CANCEL action targeting an `orderId` placed within `TIMING.SURPLUS_CANCEL_GRACE_MS` (15 min) is deferred. The timestamp is written by `recordOrderPlacement` into `manager._placedAt` and tested by `isFreshlyPlacedOrder`.
+  - `COWRebalanceEngine.execute` drops the whole slot's action group for a deferred cancel (dropping only the CANCEL would let a paired CREATE fold back into an UPDATE and re-materialize the placement), then re-syncs the deferred slots from master via `workingGrid.syncFromMaster` so the commit does not virtualize a still-live order.
+  - Divergence correction (`applyGridDivergenceCorrections`) applies the same guard after dropping any queued committed-size UPDATE for the not-desired/size-0 slot.
+  - `grid-load`/`grid-init` load contexts are excluded so restarts do not suppress the sweep.
 
 ---
 

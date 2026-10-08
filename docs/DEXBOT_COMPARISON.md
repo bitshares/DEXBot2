@@ -616,7 +616,7 @@ Where:
 ### DEXBot2
 
 - **Framework:** Native Node `assert` module (no external test framework)
-- **256 `test_*.ts` files** auto-discovered via `globSync` (`tests/test_*.ts` + `claw/tests/test_*.ts`), covering:
+- **330 `test_*.ts` files** auto-discovered via `globSync` (`tests/test_*.ts` + `claw/tests/test_*.ts`), covering:
   - Unit tests: accounting, strategy, grid, manager logic
   - Copy-on-Write semantics: COW commits, guards, concurrent fills
   - Edge cases: authoritative full-fill resolution, partial fills, BTS fee accounting, precision
@@ -778,11 +778,11 @@ Where:
 |---|---|---|
 | **Release Track** | 1.0.0 | v1.6.11 |
 | **Active Since** | ~2018 | December 2025 |
-| **Last Commit** | May 23, 2020 | 2026-09-02 |
-| **Total Commits** | 2281 | 2,125 (v1.4.25) |
+| **Last Commit** | May 23, 2020 | 2026-10-08 |
+| **Total Commits** | 2281 | 2,348 (current HEAD, v1.6.11 line) |
 | **Lines of Code** | ~10,846 Python LOC in `dexbot/` | Large TypeScript runtime + adapter + Claw + analysis + tests |
-| **Source Files** | 72 Python files in `dexbot/` | ~544 TS files across the repo |
-| **Test Files** | 16 Python test files | 248 `test_*.ts` files (248 auto-discovered via `globSync`) |
+| **Source Files** | 72 Python files in `dexbot/` | ~656 TS files across the repo |
+| **Test Files** | 16 Python test files | 330 `test_*.ts` files (313 `tests/` + 17 `claw/tests/`, auto-discovered via `globSync`) |
 | **Documentation** | Sphinx docs + README | 60+ Markdown docs plus Claw skills/references |
 | **Strategies** | 3 + plugins | 1 |
 | **Max Concurrent Bots** | Many (one process) | Many (one monolithic process by default; per-bot via `--isolated`/PM2) |

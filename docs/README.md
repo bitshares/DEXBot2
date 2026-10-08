@@ -62,10 +62,16 @@ This directory contains the comprehensive technical documentation for the DEXBot
 - **Configuration**: Per-source thresholds, whitelist requirements, and defaults
 - **Trigger Execution**: How `profiles/recalculate.<botKey>.trigger` is consumed under the fill-processing lock
 
+### 📉 [AMA-Slope Window](AMA_SLOPE_WINDOW.md)
+*Why the Huber slope window is 16h and gated by a 3-bar persistence check.*
+- **Decision**: `DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS` 20 → 16, `AMA_SLOPE_PERSIST_ENABLED` false → true (`AMA_SLOPE_PERSIST_BARS = 3`)
+- **Rationale**: shorter, more responsive window plus the persistence gate cuts slope-reset churn (~35%) and whipsaw without changing the estimator
+- **Evidence**: measured reset/lag/whipsaw table from a live 1h pool via `backtest_ama_slope_huber.ts`
+
 ### 🔁 [Grid Reconciliation](GRID_RECONCILE.md)
 *How the bot re-aligns its intended grid with on-chain reality at startup.*
 - **3-Phase Plan-then-Execute**: Phase 1 pure in-memory planning under `_gridLock`, Phase 2 blockchain execution outside the lock, Phase 3 fresh re-read and stale surplus cleanup
-- **Safety Guardrails**: Fresh-grid `matchedOnGrid > 0` guard, exact slot-price duplicate cancel, freshly-assigned deferral, and truncated-read ambiguity handling
+- **Safety Guardrails**: Fresh-grid `matchedOnGrid > 0` guard, exact slot-price duplicate cancel, freshly-assigned deferral, the `SURPLUS_CANCEL_GRACE_MS` fresh-placement grace, and truncated-read ambiguity handling
 - **Partial Failure State**: No rollback on partial Phase 2 success; remaining mismatches caught by the next maintenance or startup cycle
 - **Lock Hierarchy**: Canonical `_syncLock`/`_gridLock` level reference and the 1.4.6 ABBA deadlock correction
 
@@ -188,6 +194,11 @@ This directory contains the comprehensive technical documentation for the DEXBot
 ### 🗒️ [Changelog](../CHANGELOG.md)
 *Release notes and documentation history.*
 - **Scope**: Versioned notes per release
+
+### 📐 [DEXBot2 vs the Power-Law Liquidity Curve](DEXBOT2_VS_POWER_LAW_CURVE.md)
+*Design proposal comparing DEXBot2's weight + range allocation with AMM liquidity curves.*
+- **Scope**: Constant-product, weighted-geometric-mean, and Reciprocal-CES curves vs the bot's order-book allocation
+- **Audience**: Protocol designers evaluating an AMM that reproduces DEXBot2's allocation
 
 ### 🧮 [DEXBot vs DEXBot2 Comparison](DEXBOT_COMPARISON.md)
 *Architectural, functional, and operational comparison with the original Python DEXBot.*
