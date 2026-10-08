@@ -94,7 +94,7 @@ import {
 import { normalizeBotEntry } from './bot_settings.js';
 import type { FillOpLike, FillLike, ReplayMessageFn } from './dexbot_fill_runtime.js';
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
-import type {BotLike, AssetPair, IncomingFill, ManagerLogger, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken} from './types.js';
+import type {BotLike, AssetPair, IncomingFill, ManagerLogger, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken, SpreadCorrectionStall} from './types.js';
 
 function waitForConnected(...args: unknown[]) { return require('./bitshares_client').waitForConnected(...args); }
 function getKeyStore(...args: unknown[]) { return require('./key_store').getKeyStore(...args); }
@@ -209,6 +209,7 @@ class DEXBot implements BotLike {
     _postRecoveryRebalanceDefers!: number;
     _skipEmptyReadConfirmDelay!: boolean;
     _spreadFundsExhausted!: boolean;
+    _spreadCorrectionStall!: SpreadCorrectionStall | null;
     _strandedHoldSince!: Map<string, number>;
     _structuralGridResyncDeferCount!: number;
     _structuralGridResyncDeferStartedAt!: number;
@@ -331,6 +332,11 @@ class DEXBot implements BotLike {
         this._postRecoveryRebalanceTimer = null;
         this._deferredFillRetryTimer = null;
         this._lastTargetedDriftSyncAt = 0;
+        // Spread-correction stall state: the boolean gate and its companion cause
+        // are read by getTargetedSyncReason before the first spread check, so
+        // initialize both rather than leaving them undefined.
+        this._spreadFundsExhausted = false;
+        this._spreadCorrectionStall = null;
         this._lightweightSyncCheckAt = 0;
         this._targetedDriftSyncCooldownMs = this.config.timing?.TARGETED_DRIFT_SYNC_COOLDOWN_MS as number;
         this._maintenanceCooldownCycles = 0;

@@ -313,6 +313,147 @@ async function testAllBlockedReasonsAreDistinguishable() {
     console.log('  ✓ reserve-blocked and no-contiguous-run are both named');
 }
 
+// --- 6. Null-price orphan must not evict a valid candidate (F3) ------------
+// A virtual, order-less rail slot with no price classifies as a rail orphan.
+// JS coerces null to 0 in the fallback comparator, so it sorted FIRST on the
+// SELL rail, consumed the slice(0, missingSlots) seat, and was then dropped by
+// the duplicate-price filter — leaving the cycle with nothing to place while a
+// valid window-nearest slot existed one position away.
+async function testNullPriceOrphanDoesNotEvictCandidate() {
+    console.log('Running test: null-price orphan cannot evict a valid candidate');
+
+    const manager = newManager();
+    await buildProductionGeometry(manager, [131, 150], [165, 175]);
+    (manager.orders as Map<string, any>).set('slot-null', {
+        id: 'slot-null',
+        price: null,
+        type: ORDER_TYPES.SELL,
+        state: ORDER_STATES.VIRTUAL,
+        size: 0,
+        orderId: ''
+    });
+
+    const correction = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 1);
+    const placed = correction.ordersToPlace.map((o: any) => o.id);
+
+    assert.deepStrictEqual(
+        placed, ['slot-164'],
+        `A price-less orphan must be ignored so the window-nearest valid sell wins; got ${JSON.stringify(placed)}`
+    );
+    console.log('  ✓ null-price orphan ignored; window-nearest candidate preserved');
+}
+
+// --- 7. Structural stall is reported as 'no-candidates' (F1) ----------------
+// The locked gap cannot be repaired by placing an order. checkSpreadCondition
+// must say so with the structural cause, NOT a fund cause, so the maintenance
+// loop does not reload account totals/open orders every cooldown for a grid the
+// refresh cannot change (the staleness watchdog owns re-centering instead).
+async function testLockedGapReportsNoCandidatesStall() {
+    console.log('Running test: locked gap reports a structural no-candidates stall');
+
+    const manager = newManager();
+    await buildProductionGeometry(manager, [131, 150], [156, 175]);
+
+    const result = await manager.checkSpreadCondition({}, async () => ({ executed: true }));
+
+    assert.strictEqual(result.ordersPlaced, 0, 'locked gap must place nothing');
+    assert.strictEqual(
+        result.stall, 'no-candidates',
+        `A structural stall must be reported as 'no-candidates', got ${JSON.stringify(result.stall)}`
+    );
+    console.log('  ✓ structural stall carries the no-candidates cause');
+}
+
+// --- 8. Mixed-case stall must be classified as funds, not structural (regression) ---
+// The reported regression: the chosen side (BUY) has a spread-tightening hole but
+// only dust free (planned > 0, placed 0), while the opposite side (SELL) has a
+// non-zero budget but is locked (planned 0). The starvation fallback overwrote
+// plannedCount with the opposite side's 0, so checkSpreadCondition reported
+// 'no-candidates' and the maintenance refresh never armed — dropping exactly the
+// stale-balance case the refresh exists for.
+async function testMixedCaseStallIsUnfunded() {
+    console.log('Running test: mixed-case stall is reported as unfunded');
+
+    // Derive the buy-side committed (virtual) rail size from a probe so the dust
+    // budget is self-documenting rather than a magic constant: free = a tiny
+    // fraction of committed — enough for the BUY side to be selected, too little
+    // to fund any create.
+    const probe = newManager({ buy: 100000, sell: 0 });
+    await buildProductionGeometry(probe, [131, 145], [156, 175], { buy: 100000, sell: 0 });
+    const virtualBuy = Number(probe.funds?.virtual?.buy || 0);
+    const dustBuy = virtualBuy + virtualBuy * 0.0002;
+
+    // SELL gets a non-zero allocation (>0 sizing budget) so its empty result is a
+    // structural 'no-candidates', not a zero-budget fund hint — otherwise the two
+    // fixes would overlap and the test would not pin the overwrite bug.
+    const sellAlloc = 0.001;
+
+    const manager = newManager({ buy: dustBuy, sell: sellAlloc });
+    await buildProductionGeometry(manager, [131, 145], [156, 175], { buy: dustBuy, sell: sellAlloc });
+
+    // Precondition: side selection picks BUY, which plans a hole but funds none;
+    // the locked SELL side plans nothing.
+    assert.strictEqual(
+        Grid.determineOrderSideByFunds(manager, price(150)).side, ORDER_TYPES.BUY,
+        'precondition: the dust-free BUY side must be selected'
+    );
+    const buyCorrection = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.BUY, 6);
+    assert(
+        Number(buyCorrection.plannedCount || 0) > 0 && buyCorrection.ordersToPlace.length === 0,
+        `precondition: BUY must plan (${buyCorrection.plannedCount}) yet place 0`
+    );
+    const sellCorrection = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 6);
+    assert.strictEqual(
+        Number(sellCorrection.plannedCount || 0), 0,
+        'precondition: the locked SELL side plans nothing'
+    );
+
+    const result = await manager.checkSpreadCondition({}, async () => ({ executed: true }));
+    assert.strictEqual(result.ordersPlaced, 0, 'no order can be placed');
+    assert.strictEqual(
+        result.stall, 'unfunded',
+        `A planned-but-unfunded side must not be masked by an empty opposite side; got ${JSON.stringify(result.stall)}`
+    );
+    console.log('  ✓ unfunded plan survives an empty opposite side (reports unfunded, not no-candidates)');
+}
+
+// --- 9. Each stall cause is reachable (coverage) ---------------------------
+// The classification is only useful if each branch is exercised end to end.
+
+async function testNoFreeFundsStall() {
+    console.log('Running test: zero free funds reports no-free-funds');
+    const manager = newManager({ buy: 0, sell: 0 });
+    await buildProductionGeometry(manager, [131, 150], [156, 175], { buy: 0, sell: 0 });
+    const result = await manager.checkSpreadCondition({}, async () => ({ executed: true }));
+    assert.strictEqual(result.ordersPlaced, 0, 'no funds -> nothing placed');
+    assert.strictEqual(result.stall, 'no-free-funds',
+        `zero funds must report no-free-funds, got ${JSON.stringify(result.stall)}`);
+    console.log('  ✓ no-free-funds reported when neither side has funds');
+}
+
+async function testBatchNotExecutedStall() {
+    console.log('Running test: unexecuted batch reports batch-not-executed');
+    // Live sells 165-175 leave a funded hole (156-164) the correction can fill.
+    const manager = newManager();
+    await buildProductionGeometry(manager, [131, 150], [165, 175]);
+    const result = await manager.checkSpreadCondition({}, async () => ({ executed: false }));
+    assert.strictEqual(result.ordersPlaced, 0, 'an unexecuted batch places nothing');
+    assert.strictEqual(result.stall, 'batch-not-executed',
+        `a prepared-but-unexecuted batch must report batch-not-executed, got ${JSON.stringify(result.stall)}`);
+    console.log('  ✓ batch-not-executed reported when the COW batch did not run');
+}
+
+async function testApplyErrorStall() {
+    console.log('Running test: broadcast throw reports apply-error');
+    const manager = newManager();
+    await buildProductionGeometry(manager, [131, 150], [165, 175]);
+    const result = await manager.checkSpreadCondition({}, async () => { throw new Error('boom'); });
+    assert.strictEqual(result.ordersPlaced, 0, 'a broadcast throw places nothing');
+    assert.strictEqual(result.stall, 'apply-error',
+        `a throwing batch must report apply-error, got ${JSON.stringify(result.stall)}`);
+    console.log('  ✓ apply-error reported when the broadcast throws');
+}
+
 (async () => {
     await testSellNeverTargetsTheCeiling();
     await testBuyNeverTargetsTheRailFloor();
@@ -320,6 +461,12 @@ async function testAllBlockedReasonsAreDistinguishable() {
     await testLockedGapPlacesNothing();
     await testAllBlockedReasonsAreDistinguishable();
     await testEmptyRailStillPlaces();
+    await testNullPriceOrphanDoesNotEvictCandidate();
+    await testLockedGapReportsNoCandidatesStall();
+    await testMixedCaseStallIsUnfunded();
+    await testNoFreeFundsStall();
+    await testBatchNotExecutedStall();
+    await testApplyErrorStall();
     console.log('PASS test_spread_correction_market_nearest');
 })().catch((err) => {
     console.error(err);

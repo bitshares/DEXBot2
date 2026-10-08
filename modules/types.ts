@@ -14,6 +14,21 @@
 export type OrderType = 'sell' | 'buy' | 'spread';
 export type OrderState = 'virtual' | 'active' | 'partial';
 
+/**
+ * Why a spread correction placed no effective order. Carried from
+ * checkSpreadCondition to the maintenance loop so the funds/open-orders refresh
+ * is requested only when it can repair the cause, and so the log states the
+ * truth instead of always blaming free funds.
+ *
+ *   no-free-funds     — determineOrderSideByFunds found no fundable side.
+ *   unfunded          — candidates existed but free funds funded none.
+ *   no-candidates     — no spread-tightening slot exists (structural; owned by
+ *                       the out-of-spread staleness watchdog, NOT the refresh).
+ *   batch-not-executed— a plan was prepared but the COW batch did not run.
+ *   apply-error       — the broadcast threw.
+ */
+export type SpreadCorrectionStall = 'no-free-funds' | 'unfunded' | 'no-candidates' | 'batch-not-executed' | 'apply-error';
+
 // ============================================================
 // SHARED PRIMITIVES (replacements for explicit `any`)
 // ============================================================
@@ -224,6 +239,7 @@ export interface BotLike {
   _blockchainFetchInFlight: number;
   _blockchainFetchIntervalMin: number;
   _spreadFundsExhausted: boolean;
+  _spreadCorrectionStall: SpreadCorrectionStall | null;
   _skipEmptyReadConfirmDelay: boolean;
   _testPollIntervalMs?: number;
   _appliedBotConfigEntry: unknown;
@@ -1042,7 +1058,7 @@ export interface OrderManagerLike {
   syncFromOpenOrders(orders: unknown, info?: unknown): Promise<SyncResult>;
   syncFromFillHistory(fill: unknown, options?: UnknownRecord): Promise<FillHistorySyncResult>;
   syncFromFillHistoryBatch(fills: unknown, options?: UnknownRecord): Promise<FillHistorySyncResult>;
-  checkSpreadCondition(...args: unknown[]): Promise<{ ordersPlaced?: number; [key: string]: unknown }>;
+  checkSpreadCondition(...args: unknown[]): Promise<{ ordersPlaced?: number; partialsMoved?: number; stall?: SpreadCorrectionStall; [key: string]: unknown }>;
   _fetchAccountBalancesAndSetTotals(...args: unknown[]): Promise<unknown>;
   getInitialOrdersToActivate(): ManagedOrder[];
   seedLastFilledPricesFromBook(...args: unknown[]): void;

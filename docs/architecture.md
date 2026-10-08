@@ -476,16 +476,22 @@ The correction path is fund-only and never manufactures budget by shrinking a re
 
 ```
 1. Detect that the live window is wider than targetSpreadPercent.
-2. Select up to `outOfSpread` eligible holes in safe window/gap order.
-3. If the funded edge holds a non-dust PARTIAL, optionally top it up, but only
-   when `ideal - current` is positive and free funds can cover the increase.
-4. Create replacements from free available/chainFree funds; contiguous gap-slot
-   promotion may extend the window while preserving MIN_SPREAD_ORDERS and the
-   opposite placed rail.
-5. If free funds cannot cover every target, place/top up the affordable prefix,
-   stop without shrinking inventory, and log the fund-constrained remainder.
-6. If neither side has free funds, skip correction and let the maintenance
-   runtime refresh balances and open orders rather than recycle stale inventory.
+2. Select up to `outOfSpread` spread-tightening empty slots (below the lowest
+   live sell / above the highest live buy), ordered window-contiguous first, with
+   a market-nearest fallback when the rail has no live order.
+3. Create those slots from free available/chainFree funds only. A resting PARTIAL
+   is never a correction target: a top-up grows an order at its current price, so
+   it cannot move bestBuy/bestSell and cannot narrow the spread.
+4. Contiguous gap-slot promotion may extend the window while preserving
+   MIN_SPREAD_ORDERS and the opposite placed rail.
+5. If free funds cannot cover every target, place the affordable prefix, stop
+   without shrinking inventory, and log the fund-constrained remainder.
+6. If neither side places an effective order, `checkSpreadCondition` reports a
+   `stall` cause (`no-free-funds` / `unfunded` / `no-candidates` /
+   `batch-not-executed` / `apply-error`). The maintenance runtime refreshes
+   balances and open orders for the fund/batch causes; a structural
+   `no-candidates` stall is left to the out-of-spread staleness watchdog, which
+   escalates to a re-center. No resting order is ever recycled.
 ```
 
 Detected dust partials never enter this path: `cancelDustOrders()` cancels them

@@ -107,20 +107,34 @@ async function runTests() {
 
     // Pure fund-driven spread correction: when it finds no free funds it sets
     // _spreadFundsExhausted; the next tick's targeted-sync gate must refresh
-    // account totals + open orders from that flag (the only fallback).
+    // account totals + open orders from that flag (the only fallback). The gate
+    // reports the exact stall cause now, and a purely structural
+    // 'no-candidates' stall must NOT arm the refresh at all.
     console.log(' - Testing funds-exhausted spread fallback trigger...');
     {
-        const makeBot = (exhausted: boolean) => ({
+        const makeBot = (exhausted: boolean, stall: string | null = null) => ({
             config: { dryRun: false, activeOrders: { buy: 0, sell: 0 } },
             manager: { checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }) },
             _spreadFundsExhausted: exhausted,
+            _spreadCorrectionStall: stall,
         });
-        const reason = MaintenanceRuntime.getTargetedSyncReason(makeBot(true));
+        const reason = MaintenanceRuntime.getTargetedSyncReason(makeBot(true, 'funds-exhausted'));
         assert(reason, 'funds-exhausted flag must produce a targeted sync reason');
-        assert(/spread correction had no free funds/.test(reason.reason),
-            `reason must name the funds-exhausted cause, got: ${reason.reason}`);
+        assert(/spread correction stalled \(funds-exhausted\)/.test(reason.reason),
+            `reason must name the stall cause, got: ${reason.reason}`);
+        const unfunded = MaintenanceRuntime.getTargetedSyncReason(makeBot(true, 'unfunded'));
+        assert(/spread correction stalled \(unfunded\)/.test(unfunded.reason),
+            `reason must name the unfunded cause, got: ${unfunded.reason}`);
         assert.strictEqual(MaintenanceRuntime.getTargetedSyncReason(makeBot(false)), null,
             'cleared flag must not trigger a refresh');
+        // A structural stall is flagged by the maintenance mirror as
+        // _spreadFundsExhausted=false, so the refresh gate stays shut; the
+        // out-of-spread staleness watchdog owns re-centering instead.
+        assert.strictEqual(
+            MaintenanceRuntime.getTargetedSyncReason(makeBot(false, 'no-candidates')),
+            null,
+            'a structural no-candidates stall must not request a funds/open-orders refresh'
+        );
     }
 
     // Option (a): the funds-exhausted trigger is a REFRESH, not a standing
@@ -143,6 +157,7 @@ async function runTests() {
                     persistGrid: async () => {},
                 },
                 _spreadFundsExhausted: true,
+                _spreadCorrectionStall: 'unfunded',
                 _targetedDriftSyncCooldownMs: 0,
                 _lastTargetedDriftSyncAt: 0,
                 _log: () => {},
@@ -161,6 +176,8 @@ async function runTests() {
         assert.strictEqual(okState.syncCalls, 1, 'refresh must fetch open orders exactly once');
         assert.strictEqual(ok._spreadFundsExhausted, false,
             'a successful refresh must clear the funds-exhausted flag so the reconcile is conditional');
+        assert.strictEqual(ok._spreadCorrectionStall, null,
+            'a successful refresh must also clear the companion stall cause');
         assert(ok._lastTargetedDriftSyncAt > 0, 'a successful refresh must stamp the cooldown');
 
         const { bot: abort, state: abortState } = makeRefreshBot(true);
@@ -169,6 +186,8 @@ async function runTests() {
         assert.strictEqual(abortState.syncCalls, 1, 'aborted refresh must still have attempted the sync');
         assert.strictEqual(abort._spreadFundsExhausted, true,
             'an aborted refresh must retain the funds-exhausted flag so the next tick retries');
+        assert.strictEqual(abort._spreadCorrectionStall, 'unfunded',
+            'an aborted refresh must retain the stall cause with the flag');
         assert.strictEqual(abort._lastTargetedDriftSyncAt, 0,
             'an aborted refresh must not stamp the cooldown (retry must not be locked out)');
     }

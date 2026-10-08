@@ -108,7 +108,20 @@ type FundStateSnapshot = { buyFree: number; buyLocked: number; sellFree: number;
 
 interface SpreadCorrection {
     ordersToPlace: ManagedOrder[];
+    // Create-only since the spread repair stopped top-uping partials (a PARTIAL
+    // cannot be grown in place — clampPostFillUpdateSize). Kept as an explicit
+    // empty array because updateOrdersOnChainBatch expects the field.
     ordersToUpdate: Array<{ partialOrder: ManagedOrder; newSize: number }>;
+    // Number of spread-tightening create targets found before the funding loop
+    // ran. Lets the caller distinguish "no actionable candidate exists" from
+    // "candidates existed but free funds could not fund any" (see
+    // SpreadCorrectionStall). 0 whenever the candidate search itself was empty.
+    plannedCount?: number;
+    // Why no create target was produced when plannedCount is 0. A zero sizing
+    // budget is a FUND condition ('unfunded'), not a structural one, so the
+    // caller must not misclassify it as 'no-candidates' and suppress a refresh
+    // that could actually repair a stale-balance read.
+    stallHint?: 'unfunded' | 'no-candidates';
     boundaryIdx?: number;
     origin?: string;
     [key: string]: unknown;
@@ -118,6 +131,19 @@ interface PrioritizedTarget {
     kind: 'create';
     order: ManagedOrder;
     ideal: number;
+}
+
+/**
+ * Fold a prepared correction (or the absence of one) into the stall cause the
+ * caller reports. A plan that existed but funded nothing ('unfunded'), or a
+ * zero sizing budget ('stallHint: unfunded'), is a FUND condition; anything
+ * else is a structural 'no-candidates'. The two sides are merged with this so
+ * an unfunded plan on one side is never masked by an empty plan on the other
+ * (e.g. chosen side planned 1 / placed 0, opposite side planned 0).
+ */
+function classifySpreadStall(c: SpreadCorrection | null | undefined): 'unfunded' | 'no-candidates' {
+    if (Number(c?.plannedCount || 0) > 0 || c?.stallHint === 'unfunded') return 'unfunded';
+    return 'no-candidates';
 }
 
 interface AmaSnapshot {
@@ -228,7 +254,7 @@ import {
 } from './genesis_policy.js';
 
 import { WorkingGrid } from './working_grid.js';
-import type { OrderManagerLike, ChainFundsSnapshot, ManagedOrder, GridConfig, OrderType, OrderState, AccountTotals, CowAction, AssetPair } from '../types.js';
+import type { OrderManagerLike, ChainFundsSnapshot, ManagedOrder, GridConfig, OrderType, OrderState, AccountTotals, CowAction, AssetPair, SpreadCorrectionStall } from '../types.js';
 import type { GridGenesis } from './utils/math.js';
 import { getErrorMessage } from '../utils/errors.js';
 
@@ -2331,15 +2357,17 @@ export function calculateCurrentSpread(manager: OrderManagerLike): number {
      * @param {Function|null} [updateOrdersOnChainBatch=null] - Optional batch update function
      * @returns {Promise<any>}
      */
-export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares: unknown, updateOrdersOnChainBatch: ((correction: SpreadCorrection) => Promise<{ executed?: boolean }>) | null = null): Promise<{ ordersPlaced: number; partialsMoved: number; fundsExhausted?: boolean }> {
+export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares: unknown, updateOrdersOnChainBatch: ((correction: SpreadCorrection) => Promise<{ executed?: boolean }>) | null = null): Promise<{ ordersPlaced: number; partialsMoved: number; stall?: SpreadCorrectionStall }> {
         // CRITICAL: Acquire corrections lock to serialize spread correction operations
         // This prevents concurrent fill processing from modifying funds while we're making decisions
         let correction: SpreadCorrection | null = null;
         let shouldApplyCorrection = false;
-        // Set when determineOrderSideByFunds finds no side to fund: the caller
-        // refreshes account totals + open orders so the next cycle re-checks
-        // against fresh balances instead of recycling resting orders.
-        let fundsExhausted = false;
+        // Why no effective order landed, when that happens. The caller uses the
+        // exact cause (not a boolean) to decide whether a funds/open-orders
+        // refresh can help and to log the truth: 'no-candidates' is structural
+        // and owned by the out-of-spread staleness watchdog, while the fund and
+        // batch causes are what a refresh actually repairs.
+        let stall: SpreadCorrectionStall | undefined;
 
         if (!manager._gridLock) {
             manager.logger?.log?.('Spread check skipped: no grid lock available', 'warn');
@@ -2449,17 +2477,24 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
             // point are covered by the TOCTOU re-plan before broadcast.
             try { await manager.recalculateFunds(); } catch { /* best-effort */ }
             const decision = determineOrderSideByFunds(manager, lastPrice);
-            if (!decision.side) { fundsExhausted = true; return false; }
+            if (!decision.side) { stall = 'no-free-funds'; return false; }
 
             // Perform spread correction by placing orders on the chosen side.
             correction = await prepareSpreadCorrectionOrders(manager, decision.side, manager.outOfSpread);
-            if (!correction) return false;
+            if (!correction) { stall = 'no-candidates'; return false; }
             let placeCount = correction.ordersToPlace?.length || 0;
-            let updateCount = correction.ordersToUpdate?.length || 0;
+            // Fold each side into the stall cause; merge (never overwrite) across
+            // the starvation fallback so an UNFUNDED plan on the chosen side is
+            // not masked by an empty plan on the opposite side. The old code
+            // overwrote plannedCount with the opposite side's 0, so a
+            // planned-1/placed-0 side followed by a planned-0 opposite reported
+            // 'no-candidates' and the maintenance refresh never armed — exactly
+            // the stale-balance case the refresh exists for.
+            let sideStall = classifySpreadStall(correction);
 
             // STARVATION FALLBACK: If the selected side has no correctable slots (e.g.
             // all SPREAD slots already filled or misaligned), try the opposite side.
-            if ((placeCount + updateCount) === 0) {
+            if (placeCount === 0) {
                 const oppositeSide = decision.side === ORDER_TYPES.BUY ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
                 manager.logger?.log?.(
                     `[SPREAD] Side ${decision.side} produced zero candidates; ` +
@@ -2470,20 +2505,26 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                 if (oppositeCorrection) {
                     correction = oppositeCorrection;
                     placeCount = oppositeCorrection.ordersToPlace?.length || 0;
-                    updateCount = oppositeCorrection.ordersToUpdate?.length || 0;
+                    const oppositeStall = classifySpreadStall(oppositeCorrection);
+                    sideStall = (sideStall === 'unfunded' || oppositeStall === 'unfunded')
+                        ? 'unfunded'
+                        : 'no-candidates';
                 }
             }
 
             // Capture fund snapshot under lock for pre-flight verification before broadcast
             fundSnapshot = _snapshotFundState(manager);
-            // No executable correction on EITHER side: the balances/holds may be a
-            // stale snapshot (the grid does not lose funds, it holds them in
-            // resting/virtual slots), so ask the caller to refresh account totals +
-            // open orders instead of re-deriving the identical starved plan next
-            // tick. Previously only the "no side at all" case set this flag, so a
-            // fund-constrained plan on a chosen side never triggered a refresh.
-            if ((placeCount + updateCount) === 0) fundsExhausted = true;
-            return (placeCount + updateCount) > 0;
+            // No executable correction on EITHER side. Carry the exact cause so the
+            // caller refreshes only when a refresh can actually repair something:
+            //   * 'no-candidates' — no spread-tightening slot exists at all. This is
+            //     structural; the out-of-spread staleness watchdog escalates it to a
+            //     re-center, so it must NOT re-arm the per-cooldown fund/open-orders
+            //     refresh (previously every zero-placement did, churning a full
+            //     account + open-orders reload on a structurally stalled grid).
+            //   * 'unfunded' — a plan existed but free funds could not fund any of it;
+            //     the balances/holds may be a stale snapshot, so a refresh is warranted.
+            if (placeCount === 0) stall = sideStall;
+            return placeCount > 0;
         };
 
         try {
@@ -2535,11 +2576,11 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                     );
                     // Same no-free-funds condition as the initial decision:
                     // signal the caller to refresh account totals/open orders.
-                    fundsExhausted = true;
-                    return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted };
+                    stall = 'no-free-funds';
+                    return { ordersPlaced: 0, partialsMoved: 0, stall };
                 }
                 const rePlanCorrection = await prepareSpreadCorrectionOrders(manager, rePlanDecision.side, manager.outOfSpread);
-                if (rePlanCorrection && ((rePlanCorrection.ordersToPlace?.length || 0) + (rePlanCorrection.ordersToUpdate?.length || 0) > 0)) {
+                if (rePlanCorrection && (rePlanCorrection.ordersToPlace?.length || 0) > 0) {
                     activeCorrection = rePlanCorrection;
                     activeSnapshot = currentFunds;
                     manager.logger?.log?.(
@@ -2552,7 +2593,12 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                         `[SPREAD] Fund state changed; re-plan produced no viable orders. Skipping cycle.`,
                         'warn'
                     );
-                    return { ordersPlaced: 0, partialsMoved: 0 };
+                    // A plan existed before the fund change but the re-plan found
+                    // nothing executable. Carry the cause here too (F2): this is the
+                    // most fund-relevant outcome of all, so it must not silently skip
+                    // the refresh request while every sibling branch signals it.
+                    stall = classifySpreadStall(rePlanCorrection);
+                    return { ordersPlaced: 0, partialsMoved: 0, stall };
                 }
             }
             try {
@@ -2562,18 +2608,17 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                     // Nothing landed: ask the caller to refresh account totals +
                     // open orders (stale holds/balances can make the same plan
                     // re-derive every cycle).
-                    return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted: true };
+                    return { ordersPlaced: 0, partialsMoved: 0, stall: 'batch-not-executed' };
                 }
             await manager.recalculateFunds();
                 const placed = activeCorrection.ordersToPlace?.length || 0;
-                const updated = activeCorrection.ordersToUpdate?.length || 0;
-                return { ordersPlaced: placed + updated, partialsMoved: updated };
+                return { ordersPlaced: placed, partialsMoved: 0 };
             } catch (err) {
                 manager.logger?.log?.(`Error applying spread correction on-chain: ${getErrorMessage(err)}`, 'warn');
-                return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted: true };
+                return { ordersPlaced: 0, partialsMoved: 0, stall: 'apply-error' };
             }
         }
-        return { ordersPlaced: 0, partialsMoved: 0, fundsExhausted };
+        return { ordersPlaced: 0, partialsMoved: 0, stall };
     }
 
     /**
@@ -3106,8 +3151,15 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // With no live order on the side there is no reference to improve, so
         // the market-nearest slot is by definition the best available and the
         // guard stays open.
+        // F3: a null/non-finite price must never enter a candidate pool. The
+        // pools are sorted by distance and sliced to missingSlots BEFORE the
+        // duplicate-price filter drops null prices, so a null-price orphan would
+        // otherwise consume a quota seat (JS coerces null to 0, sorting it first
+        // on a SELL rail) and evict the window-nearest valid slot. Rejecting it
+        // here is the single chokepoint both pools already pass through.
         const tightensSpread = (c: ManagedOrder): boolean => {
-            if (bestLiveOnRail == null || c?.price == null) return true;
+            if (c?.price == null || !Number.isFinite(c.price)) return false;
+            if (bestLiveOnRail == null) return true;
             return railBestIsMax ? c.price > bestLiveOnRail : c.price < bestLiveOnRail;
         };
         const typedSpreadCandidates = allOrders
@@ -3123,8 +3175,17 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // Secondary candidates: orphaned virtual slots that have lost their
         // order (e.g. stale-cleaned after a race condition during a crash, or a
         // lowest-sell slot dust-cancelled and then left unplaced after a
-        // boundary shift). These sit inside the active window and are invisible
-        // to the gap-band SPREAD filter above.
+        // boundary shift). They are invisible to the gap-band SPREAD filter
+        // above because they are stored as railType (not SPREAD).
+        //
+        // SCOPE (F4): this path repairs only orphans at the window's market
+        // edge — the tightensSpread guard below keeps a SELL below the lowest
+        // live sell and a BUY above the highest live buy. An orphan that sits
+        // in the rail INTERIOR (between two live orders) leaves bestBuy/bestSell
+        // bit-for-bit unchanged, so it is deliberately excluded here; interior
+        // holes are a divergence/reconcile concern, not a spread repair. Do not
+        // "fix" the guard to admit them — filling them would not tighten a
+        // spread and would fight the window-contiguous placement strategy.
         //
         // Empty slots are stored SPREAD (side-neutral) after normalization, so
         // the stored type can be railType OR SPREAD — what matters is that the
@@ -3297,7 +3358,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                     : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
                 'warn'
             );
-            return { ordersToPlace: [], ordersToUpdate: [], origin: 'spread-correction' };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: 'spread-correction' };
         }
 
         const orphanedIds = new Set(orphanedVirtualCandidates.map((o) => o.id));
@@ -3311,7 +3372,12 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
 
         const ctx = await _getSizingContext(manager, sideName);
         if (!ctx || ctx.budget <= 0 || syntheticSideSlots.length === 0) {
-            return { ordersToPlace: [], ordersToUpdate: [], origin: 'spread-correction' };
+            // A zero sizing budget is a FUND condition (stale/empty free balance),
+            // not a structural one — mark it 'unfunded' so the caller keeps
+            // arming the refresh for it. A missing context or an empty rail is
+            // genuinely structural.
+            const stallHint = (ctx && Number(ctx.budget) <= 0) ? 'unfunded' : 'no-candidates';
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint, origin: 'spread-correction' };
         }
         const precisionEpsilon = getPrecisionSlack(ctx.precision, 1);
 
@@ -3367,7 +3433,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         }
 
         if (prioritizedTargets.length === 0) {
-            return { ordersToPlace: [], ordersToUpdate: [], origin: 'spread-correction' };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: 'spread-correction' };
         }
 
         let remainingBudget = availableFund;
@@ -3503,5 +3569,5 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             );
         }
 
-        return { ordersToPlace, ordersToUpdate: [], ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: 'spread-correction' };
+        return { ordersToPlace, ordersToUpdate: [], plannedCount: prioritizedTargets.length, ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: 'spread-correction' };
     }

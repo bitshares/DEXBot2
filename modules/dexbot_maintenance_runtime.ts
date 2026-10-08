@@ -740,14 +740,21 @@ function getTargetedSyncReason(bot: BotLike) {
         return { reason: `fund drift: ${drift.reason}`, targetBuy, targetSell, liveBuy, liveSell, drift };
     }
 
-    // Spread correction placed no effective orders: either it found no free
-    // funds on either side, or the prepared batch did not execute. The balances
-    // or holds may simply be a stale snapshot (the grid does not lose funds, it
-    // holds them in resting/virtual slots), so the only fallback is to refresh
-    // account totals + open orders and let the next correction cycle re-check.
-    // Never recycle resting inventory.
+    // Spread correction placed no effective order for a cause a refresh can
+    // plausibly repair (no free funds, an unfunded plan, or a batch that did not
+    // execute). The balances or holds may simply be a stale snapshot (the grid
+    // does not lose funds, it holds them in resting/virtual slots), so the
+    // fallback is to refresh account totals + open orders and let the next
+    // correction cycle re-check. Never recycle resting inventory.
+    //
+    // NOTE: a purely structural stall ('no-candidates' — no spread-tightening
+    // slot exists) does NOT arm this gate. A refresh cannot conjure a slot, and
+    // the out-of-spread staleness watchdog owns that case (it escalates to a
+    // structural re-center). Refreshing on it only churned an account + open-
+    // orders reload every cooldown on a grid the refresh cannot change.
     if (bot._spreadFundsExhausted === true) {
-        return { reason: 'spread correction had no free funds', targetBuy, targetSell, liveBuy, liveSell, drift };
+        const cause = bot._spreadCorrectionStall || 'funds-exhausted';
+        return { reason: `spread correction stalled (${cause})`, targetBuy, targetSell, liveBuy, liveSell, drift };
     }
 
     if (shortfalls.length > 0) {
@@ -798,6 +805,9 @@ async function maybeRunTargetedDriftReconciliation(bot: BotLike, context: string
         // from fresh state, so a genuinely empty balance re-arms it for the next
         // tick (subject to the cooldown below).
         if (bot._spreadFundsExhausted === true) bot._spreadFundsExhausted = false;
+        // Clear the companion cause with the flag so the two never drift apart
+        // (a leftover cause would mislabel the next tick's reason).
+        bot._spreadCorrectionStall = null;
 
         const remaining = getTargetedSyncReason(bot);
         const unmatchedCount = Number(syncResult?.unmatchedChainOrders?.length || 0);
@@ -2717,10 +2727,14 @@ async function executeMaintenanceLogic(bot: BotLike, context: string) {
             } else {
                 const spreadResult = await bot.manager.checkSpreadCondition(BitShares, bot.updateOrdersOnChainPlan.bind(bot));
                 if (await bot._abortFlowIfIllegalState(`${context} spread check`)) return;
-                // Mirror the check result so the next tick's targeted-sync gate
-                // (getTargetedSyncReason) refreshes funds/open orders when the
-                // correction could not find any free funds.
-                bot._spreadFundsExhausted = spreadResult?.fundsExhausted === true;
+                // Mirror the exact stall cause so the next tick's targeted-sync
+                // gate can (a) log the truth and (b) refresh funds/open orders
+                // only when a refresh can repair the stall. A structural
+                // 'no-candidates' stall is handled by trackOutOfSpreadStaleness
+                // below (structural re-center), not by a balance reload.
+                const spreadStall = spreadResult?.stall ?? null;
+                bot._spreadCorrectionStall = spreadStall;
+                bot._spreadFundsExhausted = spreadStall !== null && spreadStall !== 'no-candidates';
                 const spreadPlaced = Number(spreadResult?.ordersPlaced) || 0;
                 if (spreadPlaced > 0) {
                     bot._log(`✓ Spread correction during ${context}: ${spreadResult.ordersPlaced} order(s) placed`);
