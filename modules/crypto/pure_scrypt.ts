@@ -115,8 +115,12 @@ function romixBlock(block: Uint8Array, N: number, r: number): void {
     V[i] = cur;
   }
 
-  // Phase 2: mix using V
-  let X = new Uint8Array(block);
+  // Phase 2: start from X_N = BlockMix(X_{N-1}), the state at the end of
+  // phase 1 per RFC 7914 section 5. V[N - 1] holds X_{N-1}; the block produced
+  // by mixing it is X_N. (Starting from `block` here resets to X_0 and yields
+  // a different key than native scrypt.)
+  let X = new Uint8Array(blockSize);
+  blockMix(X, V[N - 1], r);
   for (let i = 0; i < N; i++) {
     const j = integerify(X, r) % N;
     const vBlock = V[j];
@@ -130,18 +134,44 @@ function romixBlock(block: Uint8Array, N: number, r: number): void {
 
 interface SubtleLike {
   importKey(...args: unknown[]): Promise<unknown>;
-  deriveBits(...args: unknown[]): Promise<ArrayBuffer>;
+  sign(...args: unknown[]): Promise<ArrayBuffer>;
 }
 
 async function pbkdf2HmacSha256(password: Uint8Array, salt: Uint8Array, iterations: number, keyLength: number): Promise<Uint8Array> {
   const subtle = (globalThis as { crypto?: { subtle?: SubtleLike } })?.crypto?.subtle;
   if (!subtle) throw new Error('Web Crypto API not available');
-  const key = await subtle.importKey('raw', password, { name: 'PBKDF2' }, false, ['deriveBits']);
-  return new Uint8Array(await subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-    key,
-    keyLength * 8,
-  ));
+
+  // RFC 8018 block-wise PBKDF2-HMAC-SHA256. Deriving one HMAC block at a time
+  // avoids Web Crypto deriveBits output-length limits (Firefox caps deriveBits,
+  // which breaks scrypt's first call: p * 128 * r is 1024 bytes at r=8, p=1).
+  const hLen = 32;
+  // WebCrypto rejects zero-length HMAC keys, but HMAC zero-pads any key shorter
+  // than its 64-byte block, so a single zero byte is equivalent to an empty key.
+  const keyBytes = password.length === 0 ? new Uint8Array(1) : password;
+  const key = await subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const hmac = async (data: Uint8Array): Promise<Uint8Array> =>
+    new Uint8Array(await subtle.sign('HMAC', key, data));
+
+  const blocks = Math.ceil(keyLength / hLen);
+  const dk = new Uint8Array(blocks * hLen);
+  for (let block = 1; block <= blocks; block++) {
+    // U_1 = HMAC(P, S || INT_32_BE(block))
+    const saltBlock = new Uint8Array(salt.length + 4);
+    saltBlock.set(salt, 0);
+    saltBlock[salt.length] = (block >>> 24) & 0xff;
+    saltBlock[salt.length + 1] = (block >>> 16) & 0xff;
+    saltBlock[salt.length + 2] = (block >>> 8) & 0xff;
+    saltBlock[salt.length + 3] = block & 0xff;
+
+    let u = await hmac(saltBlock);
+    const t = new Uint8Array(u);
+    for (let i = 1; i < iterations; i++) {
+      u = await hmac(u);
+      for (let j = 0; j < hLen; j++) t[j] ^= u[j];
+    }
+    dk.set(t.subarray(0, Math.min(hLen, keyLength - (block - 1) * hLen)), (block - 1) * hLen);
+  }
+  return dk.subarray(0, keyLength);
 }
 
 /**

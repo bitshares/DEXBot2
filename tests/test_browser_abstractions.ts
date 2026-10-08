@@ -929,6 +929,51 @@ async function testPureScrypt() {
     );
     assert.notStrictEqual(toHex(result), toHex(result3));
 
+    // RFC 7914 section 12 known-answer tests. A previous version reset the
+    // ROMix phase-2 state to the input block and derived a different key than
+    // native scrypt; these vectors catch that regression.
+    const rfcVectors = [
+        {
+            password: '', salt: '', keyLength: 64, options: { N: 16, r: 1, p: 1 },
+            expected: '77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906',
+        },
+        {
+            password: 'password', salt: 'NaCl', keyLength: 64, options: { N: 1024, r: 8, p: 16 },
+            expected: 'fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640',
+        },
+        {
+            password: 'pleaseletmein', salt: 'SodiumChloride', keyLength: 64, options: { N: 16384, r: 8, p: 1 },
+            expected: '7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887',
+        },
+    ];
+    for (const vector of rfcVectors) {
+        const derived = await scrypt(
+            new TextEncoder().encode(vector.password),
+            new TextEncoder().encode(vector.salt),
+            vector.keyLength,
+            vector.options,
+        );
+        assert.strictEqual(toHex(derived), vector.expected, `RFC 7914 KAT N=${vector.options.N} r=${vector.options.r} p=${vector.options.p}`);
+    }
+
+    // Cross-check against native scrypt, including a key length that is not a
+    // multiple of the SHA-256 output size (exercises multi-block PBKDF2).
+    const nativeCrypto = require('crypto');
+    const crossChecks = [
+        { password: 'password', salt: 'salt', keyLength: 32, options: { N: 16384, r: 8, p: 1 } },
+        { password: 'password', salt: 'salt', keyLength: 100, options: { N: 1024, r: 8, p: 2 } },
+    ];
+    for (const check of crossChecks) {
+        const derived = await scrypt(
+            new TextEncoder().encode(check.password),
+            new TextEncoder().encode(check.salt),
+            check.keyLength,
+            check.options,
+        );
+        const native = nativeCrypto.scryptSync(check.password, check.salt, check.keyLength, check.options);
+        assert.strictEqual(toHex(derived), native.toString('hex'), `matches native scrypt N=${check.options.N} r=${check.options.r} p=${check.options.p}`);
+    }
+
     console.log('  ✓ pure_scrypt');
 }
 
