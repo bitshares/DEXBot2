@@ -488,10 +488,13 @@ The correction path is fund-only and never manufactures budget by shrinking a re
    without shrinking inventory, and log the fund-constrained remainder.
 6. If neither side places an effective order, `checkSpreadCondition` reports a
    `stall` cause (`no-free-funds` / `unfunded` / `no-candidates` /
-   `batch-not-executed` / `apply-error`). The maintenance runtime refreshes
-   balances and open orders for the fund/batch causes; a structural
-   `no-candidates` stall is left to the out-of-spread staleness watchdog, which
-   escalates to a re-center. No resting order is ever recycled.
+   `batch-not-executed` / `apply-error`). Every cause arms the targeted
+   balances + open-orders refresh: the local snapshot the check reasoned over
+   may be stale (`no-candidates` can mean a missed fill left an ACTIVE slot
+   occupying the window edge, so no tightening slot appears to exist), and only
+   a chain sync can tell a stale snapshot from structural geometry. The
+   out-of-spread staleness watchdog remains the backstop if the sync heals
+   nothing. No resting order is ever recycled.
 ```
 
 Detected dust partials never enter this path: `cancelDustOrders()` cancels them

@@ -22,8 +22,13 @@ export type OrderState = 'virtual' | 'active' | 'partial';
  *
  *   no-free-funds     — determineOrderSideByFunds found no fundable side.
  *   unfunded          — candidates existed but free funds funded none.
- *   no-candidates     — no spread-tightening slot exists (structural; owned by
- *                       the out-of-spread staleness watchdog, NOT the refresh).
+ *   no-candidates     — no spread-tightening slot exists in the LOCAL snapshot.
+ *                       This can be genuine structural geometry, or a stale
+ *                       local order state (a missed fill leaves an ACTIVE slot
+ *                       occupying the window edge, hiding the tightening slot
+ *                       behind it). Only a chain sync can tell the two apart,
+ *                       so it arms the refresh too; the out-of-spread staleness
+ *                       watchdog remains the backstop if the sync heals nothing.
  *   batch-not-executed— a plan was prepared but the COW batch did not run.
  *   apply-error       — the broadcast threw.
  */

@@ -108,8 +108,9 @@ async function runTests() {
     // Pure fund-driven spread correction: when it finds no free funds it sets
     // _spreadFundsExhausted; the next tick's targeted-sync gate must refresh
     // account totals + open orders from that flag (the only fallback). The gate
-    // reports the exact stall cause now, and a purely structural
-    // 'no-candidates' stall must NOT arm the refresh at all.
+    // reports the exact stall cause now, and EVERY cause — including a
+    // structural 'no-candidates' stall — must arm the refresh so a stale local
+    // snapshot is synced rather than left to the 30min staleness watchdog.
     console.log(' - Testing funds-exhausted spread fallback trigger...');
     {
         const makeBot = (exhausted: boolean, stall: string | null = null) => ({
@@ -125,16 +126,33 @@ async function runTests() {
         const unfunded = MaintenanceRuntime.getTargetedSyncReason(makeBot(true, 'unfunded'));
         assert(/spread correction stalled \(unfunded\)/.test(unfunded.reason),
             `reason must name the unfunded cause, got: ${unfunded.reason}`);
+        // A structural stall still arms the refresh: the local snapshot may be
+        // stale (a missed fill hides the tightening slot), and only a chain sync
+        // can distinguish that from real geometry. The gate must not stay shut.
+        const noCandidates = MaintenanceRuntime.getTargetedSyncReason(makeBot(true, 'no-candidates'));
+        assert(noCandidates, 'a no-candidates stall must arm the targeted sync');
+        assert(/spread correction stalled \(no-candidates\)/.test(noCandidates.reason),
+            `reason must name the no-candidates cause, got: ${noCandidates.reason}`);
         assert.strictEqual(MaintenanceRuntime.getTargetedSyncReason(makeBot(false)), null,
             'cleared flag must not trigger a refresh');
-        // A structural stall is flagged by the maintenance mirror as
-        // _spreadFundsExhausted=false, so the refresh gate stays shut; the
-        // out-of-spread staleness watchdog owns re-centering instead.
-        assert.strictEqual(
-            MaintenanceRuntime.getTargetedSyncReason(makeBot(false, 'no-candidates')),
-            null,
-            'a structural no-candidates stall must not request a funds/open-orders refresh'
-        );
+
+        // The maintenance mirror must arm the flag for EVERY stall cause. This
+        // is the regression guard for the stale-order-state case: a
+        // 'no-candidates' result (phantom ACTIVE slot hiding the tightening
+        // slot) previously left the refresh disarmed and waited for the watchdog.
+        const mirrorBot: any = { _spreadFundsExhausted: false, _spreadCorrectionStall: null };
+        for (const cause of ['no-free-funds', 'unfunded', 'no-candidates', 'batch-not-executed', 'apply-error']) {
+            MaintenanceRuntime.mirrorSpreadStall(mirrorBot, cause);
+            assert.strictEqual(mirrorBot._spreadFundsExhausted, true,
+                `mirrorSpreadStall must arm the refresh for '${cause}'`);
+            assert.strictEqual(mirrorBot._spreadCorrectionStall, cause,
+                `mirrorSpreadStall must keep the companion cause '${cause}'`);
+        }
+        MaintenanceRuntime.mirrorSpreadStall(mirrorBot, null);
+        assert.strictEqual(mirrorBot._spreadFundsExhausted, false,
+            'a cleared stall must disarm the refresh');
+        assert.strictEqual(mirrorBot._spreadCorrectionStall, null,
+            'a cleared stall must clear the companion cause');
     }
 
     // Option (a): the funds-exhausted trigger is a REFRESH, not a standing

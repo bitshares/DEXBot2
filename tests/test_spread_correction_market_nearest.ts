@@ -454,6 +454,59 @@ async function testApplyErrorStall() {
     console.log('  ✓ apply-error reported when the broadcast throws');
 }
 
+// --- 10. Stale ACTIVE order hides the tightening slot, then a sync heals it --
+// A missed fill leaves the window-floor slot locally ACTIVE although its chain
+// order is gone. `_getOnChainOrders` reads LOCAL state, so the phantom becomes
+// bestLiveOnRail and every real empty sell sits on the non-tightening side;
+// prepareSpreadCorrectionOrders reports 'no-candidates' even though geometry
+// exists. This is the regression the targeted refresh must cover: the stall is
+// stale local state, not structure, and only a chain sync can tell them apart.
+// The test pins both halves: the phantom produces the stall, and virtualizing
+// it (exactly what synchronizeWithChain does for an order absent from the
+// open-orders window) restores the correction.
+async function testStaleActiveOrderYieldsNoCandidatesThenRecovers() {
+    console.log('Running test: stale ACTIVE order reports no-candidates, then a sync heals it');
+
+    const manager = newManager();
+    await buildProductionGeometry(manager, [131, 150], [165, 175]);
+    // Phantom: locally ACTIVE at the sell-window floor with no matching chain
+    // order. `price(156)` is below every live sell (165-175), so it pins
+    // bestLiveOnRail below every remaining empty sell slot.
+    await manager._updateOrder({
+        id: 'slot-156',
+        price: price(156),
+        type: ORDER_TYPES.SELL,
+        state: ORDER_STATES.ACTIVE,
+        size: 2,
+        orderId: '1.7.phantom'
+    });
+
+    const staleResult = await manager.checkSpreadCondition({}, async () => ({ executed: true }));
+    assert.strictEqual(staleResult.ordersPlaced, 0, 'a phantom anchor leaves nothing placeable');
+    assert.strictEqual(
+        staleResult.stall, 'no-candidates',
+        `a stale ACTIVE slot must surface as a no-candidates stall, got ${JSON.stringify(staleResult.stall)}`
+    );
+
+    // Apply what the armed targeted chain sync does: the phantom is absent from
+    // the open-orders window, so synchronizeWithChain virtualizes the slot.
+    await manager._updateOrder({
+        id: 'slot-156',
+        price: price(156),
+        type: ORDER_TYPES.SELL,
+        state: ORDER_STATES.VIRTUAL,
+        size: 1.5,
+        orderId: ''
+    });
+
+    const healedResult = await manager.checkSpreadCondition({}, async () => ({ executed: true }));
+    assert(
+        healedResult.ordersPlaced >= 1,
+        `after the stale order is virtualized the correction must place, got ${JSON.stringify(healedResult)}`
+    );
+    console.log('  ✓ stale ACTIVE order stalls as no-candidates and the chain sync heals it');
+}
+
 (async () => {
     await testSellNeverTargetsTheCeiling();
     await testBuyNeverTargetsTheRailFloor();
@@ -467,6 +520,7 @@ async function testApplyErrorStall() {
     await testNoFreeFundsStall();
     await testBatchNotExecutedStall();
     await testApplyErrorStall();
+    await testStaleActiveOrderYieldsNoCandidatesThenRecovers();
     console.log('PASS test_spread_correction_market_nearest');
 })().catch((err) => {
     console.error(err);

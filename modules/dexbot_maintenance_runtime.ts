@@ -29,7 +29,7 @@ import { BroadcastUncertainError } from './dexbot_credential_client.js';
 import * as configModule from './config.js';
 const { Config } = configModule;
 import { getErrorMessage } from './utils/errors.js';
-import type { BotLike, OrderManagerLike, ManagedOrder, OrderType } from './types.js';
+import type { BotLike, OrderManagerLike, ManagedOrder, OrderType, SpreadCorrectionStall } from './types.js';
 
 /** Loose JSON-object view used across the maintenance runtime. */
 type JsonObj = Record<string, unknown>;
@@ -700,6 +700,26 @@ function _hasBudgetForSide(manager: OrderManagerLike, config: JsonObj, side: unk
     } catch { return true; }
 }
 
+/**
+ * Mirror a spread-check stall into the flags the targeted-sync gate reads.
+ *
+ * ANY stall — fund, batch, or structural — arms the refresh. When the
+ * correction cannot act on the local snapshot, that snapshot may simply be
+ * stale relative to the chain: a missed fill leaves an ACTIVE slot occupying
+ * the window edge, so `isSlotAvailable` hides every tightening slot and the
+ * check reports 'no-candidates' even though real geometry exists. A refresh is
+ * the only way to tell a genuinely structural stall from a stale one, so we
+ * sync rather than wait for the out-of-spread staleness watchdog to re-center.
+ * The stall cause is kept alongside the flag so the log states the truth.
+ * Exported for tests.
+ * @param {BotLike} bot
+ * @param {SpreadCorrectionStall|null|undefined} stall
+ */
+export function mirrorSpreadStall(bot: BotLike, stall: SpreadCorrectionStall | null | undefined) {
+    bot._spreadCorrectionStall = stall ?? null;
+    bot._spreadFundsExhausted = stall != null;
+}
+
 function getTargetedSyncReason(bot: BotLike) {
     if (!bot.manager || bot.config?.dryRun) return null;
 
@@ -740,18 +760,15 @@ function getTargetedSyncReason(bot: BotLike) {
         return { reason: `fund drift: ${drift.reason}`, targetBuy, targetSell, liveBuy, liveSell, drift };
     }
 
-    // Spread correction placed no effective order for a cause a refresh can
-    // plausibly repair (no free funds, an unfunded plan, or a batch that did not
-    // execute). The balances or holds may simply be a stale snapshot (the grid
-    // does not lose funds, it holds them in resting/virtual slots), so the
-    // fallback is to refresh account totals + open orders and let the next
-    // correction cycle re-check. Never recycle resting inventory.
-    //
-    // NOTE: a purely structural stall ('no-candidates' — no spread-tightening
-    // slot exists) does NOT arm this gate. A refresh cannot conjure a slot, and
-    // the out-of-spread staleness watchdog owns that case (it escalates to a
-    // structural re-center). Refreshing on it only churned an account + open-
-    // orders reload every cooldown on a grid the refresh cannot change.
+    // Spread correction placed no effective order for ANY cause. The local
+    // snapshot the check reasoned over may be stale relative to the chain —
+    // balances/holds can be a stale read (the grid does not lose funds, it
+    // holds them in resting/virtual slots), and a missed fill can leave an
+    // ACTIVE slot occupying the window edge so no tightening slot appears to
+    // exist ('no-candidates'). Only a chain sync can tell a genuinely
+    // structural stall from a stale one, so arm the refresh for every cause
+    // instead of waiting up to SPREAD_STALE_ESCALATE_MS for the watchdog.
+    // Never recycle resting inventory.
     if (bot._spreadFundsExhausted === true) {
         const cause = bot._spreadCorrectionStall || 'funds-exhausted';
         return { reason: `spread correction stalled (${cause})`, targetBuy, targetSell, liveBuy, liveSell, drift };
@@ -2727,14 +2744,13 @@ async function executeMaintenanceLogic(bot: BotLike, context: string) {
             } else {
                 const spreadResult = await bot.manager.checkSpreadCondition(BitShares, bot.updateOrdersOnChainPlan.bind(bot));
                 if (await bot._abortFlowIfIllegalState(`${context} spread check`)) return;
-                // Mirror the exact stall cause so the next tick's targeted-sync
-                // gate can (a) log the truth and (b) refresh funds/open orders
-                // only when a refresh can repair the stall. A structural
-                // 'no-candidates' stall is handled by trackOutOfSpreadStaleness
-                // below (structural re-center), not by a balance reload.
-                const spreadStall = spreadResult?.stall ?? null;
-                bot._spreadCorrectionStall = spreadStall;
-                bot._spreadFundsExhausted = spreadStall !== null && spreadStall !== 'no-candidates';
+                // Mirror the stall cause and arm the targeted-sync refresh for
+                // every cause. The check can report 'no-candidates' on a stale
+                // local snapshot (a missed fill leaves an ACTIVE slot hiding the
+                // tightening slot), so the refresh must fire here too rather than
+                // wait for trackOutOfSpreadStaleness to re-center. The stall cause
+                // is kept so the next tick's reason names the truth.
+                mirrorSpreadStall(bot, spreadResult?.stall ?? null);
                 const spreadPlaced = Number(spreadResult?.ordersPlaced) || 0;
                 if (spreadPlaced > 0) {
                     bot._log(`✓ Spread correction during ${context}: ${spreadResult.ordersPlaced} order(s) placed`);
@@ -3575,6 +3591,7 @@ export default {
     stopBotsConfigPollInterval,
     executeMaintenanceLogic,
     getTargetedSyncReason,
+    mirrorSpreadStall,
     countLiveReserveOrders,
     maybeRunTargetedDriftReconciliation,
     cancelDustOrders,
