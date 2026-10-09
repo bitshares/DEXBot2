@@ -5,7 +5,7 @@ import { PATHS } from '../modules/paths.js';
 import { MARKET_ADAPTER } from '../modules/constants.js';
 import { createSource } from './price_sources.js';
 import { resolveCandleFile, resolveAmaConfig, resolveAmaKey, loadBotSettings, computeBotKey } from './bot_key_utils.js';
-import { findLatestLpData } from '../market_adapter/utils/data_discovery.js';
+import { loadLatestLpSeries, loadLpSeriesFromPath } from '../market_adapter/utils/data_discovery.js';
 import { loadCandleFile } from './math_utils.js';
 
 const INTERVAL_LABEL = MARKET_ADAPTER.RUNTIME_DEFAULTS.intervalLabel;
@@ -74,17 +74,39 @@ function resolveSource(config: SourceConfig, options: { quiet?: boolean } = {}):
     }
 
     if (config.type === 'json') {
-        let filePath = config.filePath;
+        const filePath = config.filePath;
         if (!filePath) {
-            const autoFile = findLatestLpData();
-            if (autoFile) {
-                filePath = autoFile;
-                if (!quiet) console.log(`[Source] Auto-discovered LP data: ${autoFile}`);
-            } else {
+            const series = loadLatestLpSeries();
+            if (!series) {
                 throw new Error('No --file provided and no LP data auto-discovered in market_adapter/data/lp');
             }
+            if (!quiet) {
+                console.log(`[Source] Auto-discovered LP data: ${series.path}${series.assembled ? ' (assembled from month shards)' : ''}`);
+            }
+            const source = createSource('inline', {
+                candles: series.candles as Record<string, unknown>[],
+                meta: series.meta,
+                name: series.path,
+            });
+            if (config.botKey) {
+                return { source, botKey: config.botKey, amaConfig: resolveAmaConfig(config.botKey), amaKey: resolveAmaKey(config.botKey), meta: series.meta };
+            }
+            return { source, amaConfig: resolveAmaConfig(''), amaKey: 'AMA3', meta: series.meta };
         }
-        const source = createSource('json', { filePath: filePath! });
+        const series = loadLpSeriesFromPath(path.resolve(filePath));
+        if (series && series.assembled) {
+            if (!quiet) console.log(`[Source] Assembled ${path.basename(filePath)} across month shards`);
+            const source = createSource('inline', {
+                candles: series.candles as Record<string, unknown>[],
+                meta: series.meta,
+                name: series.path,
+            });
+            if (config.botKey) {
+                return { source, botKey: config.botKey, amaConfig: resolveAmaConfig(config.botKey), amaKey: resolveAmaKey(config.botKey), meta: series.meta };
+            }
+            return { source, amaConfig: resolveAmaConfig(''), amaKey: 'AMA3', meta: series.meta };
+        }
+        const source = createSource('json', { filePath });
         const meta = loadCandleFile(filePath).meta;
         if (config.botKey) {
             return { source, botKey: config.botKey, amaConfig: resolveAmaConfig(config.botKey), amaKey: resolveAmaKey(config.botKey), meta };

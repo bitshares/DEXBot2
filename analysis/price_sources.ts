@@ -63,6 +63,37 @@ class JsonFileSource {
     }
 }
 
+interface InlineConfig {
+    candles: Record<string, unknown>[];
+    meta?: Record<string, unknown> | null;
+    name?: string;
+}
+
+/**
+ * In-memory candle series (no backing file). Used when discovery assembles a
+ * series across month shards, where there is no single whole-history file to
+ * hand JsonFileSource.
+ */
+class InlineCandleSource {
+    candles: Record<string, unknown>[];
+    meta: Record<string, unknown> | null;
+    name: string;
+
+    constructor(config: InlineConfig) {
+        this.candles = config.candles || [];
+        this.meta = config.meta || null;
+        this.name = `inline:${config.name || 'lp-series'}`;
+    }
+
+    async fetchCandles(): Promise<Record<string, unknown>[]> {
+        return this.candles;
+    }
+
+    extractMarketPrice(candle: unknown): { marketPrice: number; timestamp: number } {
+        return { marketPrice: getCandleClose(candle) as number, timestamp: getCandleTimestamp(candle) as number };
+    }
+}
+
 interface MarketAdapterConfig {
     stateDir?: string;
     botKey: string;
@@ -123,10 +154,12 @@ class MarketAdapterSource {
     }
 }
 
-function createSource(type: string, config: JsonFileConfig | MarketAdapterConfig): JsonFileSource | MarketAdapterSource {
+function createSource(type: string, config: JsonFileConfig | InlineConfig | MarketAdapterConfig): JsonFileSource | InlineCandleSource | MarketAdapterSource {
     switch (type.toLowerCase()) {
         case 'json':
             return new JsonFileSource(config as JsonFileConfig);
+        case 'inline':
+            return new InlineCandleSource(config as InlineConfig);
         case 'market_adapter':
             return new MarketAdapterSource(config as MarketAdapterConfig);
         default:

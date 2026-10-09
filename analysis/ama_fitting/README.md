@@ -21,9 +21,11 @@ parameters into `profiles/market_profiles.json` for the market adapter.
 
 ## Step 1 — Fetch LP Candles
 
-`fetch_lp_candles.ts` fetches bidirectional LP swap data from Kibana and saves
-a full uncut candle file. Uses the same `kibana_source` as the market adapter
-bootstrap (gaps filled via `candle_utils.fillCandleGaps`), but without pruning.
+`fetch_lp_candles.ts` fetches bidirectional LP swap data from Kibana through
+the shared month-shard cache — the same cache `dexbot tv`/`dexbot dw` write —
+then exports a full uncut candle file. Re-runs reuse the cached months and
+query only the missing buckets; the whole-history file is a convenience
+snapshot of the assembled shards.
 
 **Known asset details:**
 

@@ -1,21 +1,13 @@
 #!/usr/bin/env node
 'use strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { normalizePoolId } from '../../market_adapter/utils/chain.js';
-import { toIntervalLabel, slugPart } from '../../market_adapter/interval_utils.js';
-import { MARKET_ADAPTER } from '../../modules/constants.js';
-import * as kibanaSource from '../../market_adapter/inputs/kibana_source.js';
-import { PATHS } from '../../modules/paths.js';
-import { getStorage } from '../../modules/storage/index.js';
-const { ensureDir, writeJSON } = getStorage();
-import { getErrorMessage } from '../../modules/utils/errors.js';
-
 /**
- * Fetch LP pool candles from Kibana for AMA optimizer input.
+ * Fetch LP pool candles from Kibana for the AMA optimizer.
  *
- * Uses the same kibana_source as the market_adapter bootstrap, but saves
- * the full uncut dataset (no pruning) for optimizer use.
+ * Thin CLI over the central sequential/window fetch
+ * (`market_adapter/inputs/fetch_lp_data.ts` → `fetchCandlesSequentially`).
+ * It therefore shares the SAME month-shard cache as `dexbot tv`/`dexbot dw`:
+ * a run re-queries only the missing buckets and reuses everything on disk,
+ * then exports the whole-history base file as a convenience snapshot.
  *
  * Usage:
  *   node dist/analysis/ama_fitting/fetch_lp_candles.js \
@@ -27,11 +19,21 @@ import { getErrorMessage } from '../../modules/utils/errors.js';
  * Defaults: --interval 1h  --hours 26280 (3 years)
  * Output: market_adapter/data/lp/<assetA>_<assetB>/lp_pool_<poolShort>_<interval>.json
  */
-const DATA_DIR = PATHS.MARKET_ADAPTER.LP_DATA_DIR;
-const HOURS_3Y  = 3 * 365 * 24; // 26280
-function slugPairFolder(symbolA: string, symbolB: string): string {
-    return `${slugPart(symbolA)}_${slugPart(symbolB)}`;
-}
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { toIntervalLabel } from '../../market_adapter/interval_utils.js';
+import { MARKET_ADAPTER } from '../../modules/constants.js';
+import { getErrorMessage } from '../../modules/utils/errors.js';
+import { writeJsonAtomic } from '../../market_adapter/utils/atomic_write.js';
+import { loadLpSeriesFromBasePath } from '../../market_adapter/utils/data_discovery.js';
+import { normalizePoolId } from '../../market_adapter/utils/chain.js';
+import {
+    fetchCandlesSequentially,
+    outputPath,
+} from '../../market_adapter/inputs/fetch_lp_data.js';
+
+const HOURS_3Y = 3 * 365 * 24; // 26280
+
 function parseArgs() {
     const args = process.argv.slice(2);
     const out: {
@@ -83,6 +85,8 @@ function parseArgs() {
 function printHelp() {
     console.log('fetch_lp_candles.ts — fetch LP pool candles from Kibana for AMA optimizer');
     console.log('');
+    console.log('Uses the shared month-shard candle cache (same as dexbot tv / dw).');
+    console.log('');
     console.log('Usage:');
     console.log('  node dist/analysis/ama_fitting/fetch_lp_candles.js --pool 1.19.133 \\');
     console.log('    --assetA IOB.XRP --assetAId 1.3.3926 --assetAPrecision 4 \\');
@@ -117,13 +121,13 @@ async function main() {
     const args = parseArgs();
     validateArgs(args);
     const assetA = {
-        id:        args.assetAId,
-        precision: args.assetAPrecision,
+        id:        args.assetAId as string,
+        precision: args.assetAPrecision as number,
         symbol:    args.assetASymbol || args.assetAId || '',
     };
     const assetB = {
-        id:        args.assetBId,
-        precision: args.assetBPrecision,
+        id:        args.assetBId as string,
+        precision: args.assetBPrecision as number,
         symbol:    args.assetBSymbol || args.assetBId || '',
     };
     const { intervalSeconds } = args;
@@ -131,54 +135,68 @@ async function main() {
     const poolId           = normalizePoolId(args.pool);
     const lookback         = Math.round(args.hours);
     const yearsApprox      = (lookback / (365 * 24)).toFixed(1);
+    if (!poolId) throw new Error(`Invalid --pool: ${args.pool}`);
     console.log(`Fetching LP candles from Kibana`);
     console.log(`  Pool:     ${poolId}`);
     console.log(`  Pair:     ${assetA.symbol} / ${assetB.symbol}`);
     console.log(`  Interval: ${intervalLabel}`);
     console.log(`  Lookback: ${lookback}h (~${yearsApprox} years)`);
     console.log('');
-    const candles = await kibanaSource.getLpCandlesForPool(poolId, assetA, assetB, {
+
+    const defaultOut = outputPath(poolId, intervalSeconds, assetA, assetB);
+    const outPath = args.outFile
+        ? (path.isAbsolute(args.outFile) ? args.outFile : path.join(path.dirname(defaultOut), args.outFile))
+        : defaultOut;
+
+    const candles = await fetchCandlesSequentially(poolId, assetA, assetB, {
         intervalSeconds,
-        lookbackHours:         lookback,
-        apiKey:                null,
-        timeout:               60000,
-    });
+        lookbackHours: lookback,
+        apiKey:        null,
+        chunkMonths:   MARKET_ADAPTER.KIBANA_FETCH_CHUNK_MONTHS,
+    }, outPath);
+
     if (!Array.isArray(candles) || candles.length === 0) {
         throw new Error('Kibana returned no candles — check pool ID, asset IDs, and Kibana connectivity');
     }
-    const firstTs = new Date(candles[0][0]).toISOString();
-    const lastTs  = new Date(candles[candles.length - 1][0]).toISOString();
-    console.log(`  Received: ${candles.length} candles  (${firstTs} → ${lastTs})`);
+    // Whole-history export: month shards are the cache, this is the derived
+    // snapshot (same meta shape as fetch_lp_data's export). Deriving it from
+    // the assembled shards means a narrow re-run can never shrink the file.
+    const assembled = loadLpSeriesFromBasePath(outPath);
+    const exportCandles = (assembled && assembled.candles.length > 0 ? assembled.candles : candles) as number[][];
+    const firstTs = new Date(exportCandles[0][0]).toISOString();
+    const lastTs  = new Date(exportCandles[exportCandles.length - 1][0]).toISOString();
+    console.log(`  Received: ${exportCandles.length} candles  (${firstTs} → ${lastTs})`);
+
     const payload = {
         meta: {
             fetchedAt:       new Date().toISOString(),
-            source:          'kibana',
+            source:          `https://kibana.bitshares.dev (bitshares-*, op_type 63, pool ${poolId})`,
             pool:            poolId,
             assetA,
             assetB,
+            pair: {
+                symbols:      `${assetA.symbol}/${assetB.symbol}`,
+                ids:          `${assetA.id}/${assetB.id}`,
+                keyBySymbols: `${assetA.symbol}|${assetB.symbol}`,
+                keyByIds:     `${assetA.id}|${assetB.id}`,
+            },
             intervalSeconds,
             lookbackHours:   lookback,
-            candleCount:     candles.length,
+            candleCount:     exportCandles.length,
+            priceUnit:       `${assetB.symbol} per ${assetA.symbol}`,
             format:          '[timestamp_ms, open, high, low, close, volume_A]',
         },
-        candles,
+        candles: exportCandles,
     };
-    const poolShort = (poolId || '').replace('1.19.', '');
-    const pairFolder = slugPairFolder(assetA.symbol, assetB.symbol);
-    const defaultName = `lp_pool_${poolShort}_${intervalLabel}.json`;
-    const outName = args.outFile || defaultName;
-    const outPath = args.outFile && path.isAbsolute(args.outFile)
-        ? args.outFile
-        : path.join(DATA_DIR, pairFolder, outName);
-    const outDir = path.dirname(outPath);
-    if (!fs.existsSync(outDir)) ensureDir(outDir);
-    writeJSON(outPath, payload);
+    writeJsonAtomic(outPath, payload);
     console.log(`  Saved:    ${path.relative(process.cwd(), outPath)}`);
     console.log('');
     console.log('Run optimizer:');
     console.log(`  npm run build && node dist/analysis/ama_fitting/optimizer_high_resolution.js --data ${path.relative(process.cwd(), outPath)}`);
 }
-main().catch((err: unknown) => {
-    console.error('Error:', getErrorMessage(err));
-    process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    main().catch((err: unknown) => {
+        console.error('Error:', getErrorMessage(err));
+        process.exit(1);
+    });
+}

@@ -27,8 +27,7 @@
  *   - `isMatch(meta, requestKey)` — same-pool/feed/interval/assets check,
  *   - `fetchRange(gteIso, lteIso)` — query one (sub-)range, gap-filled grid,
  *   - `metaForWindow(window)` — identity meta fields (source/feed/pool/...);
- *     the runner overrides timeRange with the shard bounds and drops
- *     chunkIndex, which is meaningless for stable shards.
+ *     the runner overrides timeRange with the shard bounds.
  *
  * Node-only (disk I/O via storage). Browser-safe code must not import this.
  */
@@ -38,6 +37,22 @@ import { getStorage } from '../../modules/storage/index.js';
 import { writeJsonAtomic } from '../utils/atomic_write.js';
 import { sleepMs, getErrorName, getErrorMessage } from '../../modules/utils/errors.js';
 import { mergeCandles } from '../candle_utils.js';
+import {
+    shardKeyForTimestamp,
+    shardBoundsForKey,
+    shardKeysForRange,
+    shardPathFor,
+    shardKeyFromName,
+    timestampMs,
+    verifiedAt,
+    unionQueriedRanges,
+    compactCoverage,
+    rangesCoveredBy,
+    coverageSatisfied,
+    allQueriedRanges,
+    clipRangeTo,
+} from '../utils/month_shards.js';
+import type { QueriedRange } from '../utils/month_shards.js';
 
 const storage = getStorage();
 const { readJSON } = storage;
@@ -154,55 +169,18 @@ const MAX_SUBFETCH_SPAN_RATIO = 0.5;
 const MAX_COVERAGE_SPANS = 64;
 
 // ─── Month-shard naming ───────────────────────────────────────────────────────
-// Shard key is the UTC calendar month; bounds are half-open [start, end) so
-// every bucket timestamp maps to exactly one shard (a bucket exactly at a
-// month boundary belongs to the new month).
-
-function shardKeyForTimestamp(tsMs: unknown): string {
-    const d = new Date(Number(tsMs));
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-function shardBoundsForKey(key: unknown): { start: number; end: number } {
-    const parts = String(key).split('-').map(Number);
-    const start = Date.UTC(parts[0], parts[1] - 1, 1);
-    const end = parts[1] === 12 ? Date.UTC(parts[0] + 1, 0, 1) : Date.UTC(parts[0], parts[1], 1);
-    return { start, end };
-}
-
-function shardKeysForRange(gteMs: unknown, lteMs: unknown): string[] {
-    const keys: string[] = [];
-    let cursor = new Date(Date.UTC(
-        new Date(Number(gteMs)).getUTCFullYear(),
-        new Date(Number(gteMs)).getUTCMonth(), 1));
-    const last = new Date(Number(lteMs));
-    while (cursor <= last) {
-        keys.push(shardKeyForTimestamp(cursor.getTime()));
-        cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
-    }
-    return keys;
-}
-
-function shardRangeOverlaps(shardKey: unknown, gteMs: unknown, lteMs: unknown): boolean {
-    const { start, end } = shardBoundsForKey(shardKey);
-    return start <= Number(lteMs) && end > Number(gteMs);
-}
-
-function shardPathFor(outPath: string, shardKey: string): string {
-    const parsed = path.parse(outPath);
-    return path.join(parsed.dir, `${parsed.name}.shard_${shardKey}${parsed.ext}`);
-}
+// Shard key, bounds, path and coverage helpers live in
+// `market_adapter/utils/month_shards.ts` so the candle and fills caches share
+// one contract and cannot disagree on a month boundary.
 
 function siblingCacheFiles(outPath: string): Array<{ file: string; shardKey: string }> {
     const resolved = path.resolve(outPath);
     const parsed = path.parse(resolved);
     if (!storage.exists(parsed.dir)) return [];
-    const shardPrefix = `${parsed.name}.shard_`;
     const out: { file: string; shardKey: string }[] = [];
     for (const name of storage.readdir(parsed.dir)) {
-        if (!name.endsWith(parsed.ext) || !name.startsWith(shardPrefix)) continue;
-        const key = name.slice(shardPrefix.length, name.length - parsed.ext.length);
-        if (!/^\d{4}-\d{2}$/.test(key)) continue;
+        const key = shardKeyFromName(name, parsed.name, parsed.ext);
+        if (!key) continue;
         out.push({ file: path.join(parsed.dir, name), shardKey: key });
     }
     out.sort((a, b) => (a.file < b.file ? -1 : 1));
@@ -259,10 +237,16 @@ function loadBucketCache(outPath: string, requestKey: unknown, isMatch: (meta: u
     const shards: Array<{ file: string; shardKey: string; candles: Candle[]; queried: QueriedRange[] }> = [];
     let files = 0;
     const scoped = range && Number.isFinite(range.gte) && Number.isFinite(range.lte);
-    for (const entry of siblingCacheFiles(outPath)) {
-        // Shards outside the requested range are never even opened —
-        // a narrow run reads only the months it needs.
-        if (scoped && !shardRangeOverlaps(entry.shardKey, (range as { gte: number }).gte, (range as { lte: number }).lte)) continue;
+    // Scoped load: enumerate only the calendar-month shards that overlap the
+    // run and open exactly those — no directory listing, and out-of-range
+    // months are never even stat'd. Unscoped callers (no finite range) fall
+    // back to the full listing.
+    const entries: Array<{ file: string; shardKey: string }> = scoped
+        ? shardKeysForRange((range as { gte: number }).gte, (range as { lte: number }).lte)
+            .map((shardKey) => ({ file: shardPathFor(outPath, shardKey), shardKey }))
+            .filter((entry) => storage.exists(entry.file))
+        : siblingCacheFiles(outPath);
+    for (const entry of entries) {
         const chunk = readCacheChunk(entry.file, requestKey, isMatch);
         if (!chunk) continue;
         files += 1;
@@ -295,103 +279,6 @@ function cachedCandlesInRange(localCache: BucketCache, gteMs: number, lteMs: num
 // makes the tail refresh incremental: extent says "we asked", `at` says "and
 // the answer is still current".
 
-/** Span of time actually queried, plus when the query ran (null = unknown). */
-type QueriedRange = { gte: number; lte: number; at: number | null };
-
-/** Parse a verification timestamp: epoch ms or ISO. Anything else is unknown. */
-function timestampMs(raw: unknown): number | null {
-    // `null`/`undefined`/`''` mean "not recorded". They must NOT fall through
-    // to Number(): Number(null) === 0 is finite, which would read an unknown
-    // verification time as "verified at the epoch" — i.e. as maximally stale,
-    // silently disabling the tail refresh on every pre-`at` shard.
-    if (raw == null || raw === '') return null;
-    if (typeof raw === 'string') {
-        const parsed = Date.parse(raw);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    const at = Number(raw);
-    return Number.isFinite(at) ? at : null;
-}
-
-function verifiedAt(range: unknown): number | null {
-    return timestampMs((range as { at?: unknown } | null)?.at);
-}
-
-/**
- * Normalize recorded spans: sort, then merge overlapping / bucket-adjacent
- * ones — but ONLY when they assert the same verification time. Merging spans
- * with different `at` would have to pick one verdict for the whole union, and
- * either pick loses (min → the merged span vouches for buckets the older
- * query never saw; max → buckets verified long ago look freshly verified).
- * Keeping them separate preserves exact per-bucket freshness, which is the
- * whole point of `at`. Spans therefore accumulate ~1 per tail run, each a few
- * dozen bytes — negligible next to the candles in the same file, and the
- * same-`at` case (bulk fetches, and every pre-`at` shard) still collapses to
- * one span as before.
- */
-function unionQueriedRanges(ranges: { gte: number; lte: number; at?: number | null }[], bucketMs: number): QueriedRange[] {
-    const clean = (ranges || [])
-        .filter((q) => q && Number.isFinite(Number(q.gte)) && Number.isFinite(Number(q.lte)) && Number(q.lte) >= Number(q.gte))
-        .map((q) => ({ gte: Number(q.gte), lte: Number(q.lte), at: verifiedAt(q) }))
-        .sort((a, b) => a.gte - b.gte || a.lte - b.lte);
-    const merged: QueriedRange[] = [];
-    const gap = Number.isFinite(Number(bucketMs)) && Number(bucketMs) > 0 ? Number(bucketMs) : 0;
-    for (const q of clean) {
-        const top = merged[merged.length - 1];
-        if (top && q.gte <= top.lte + gap && top.at === q.at) {
-            if (q.lte > top.lte) top.lte = q.lte;
-        } else {
-            merged.push({ gte: q.gte, lte: q.lte, at: q.at });
-        }
-    }
-    return merged;
-}
-
-function rangesCoveredBy(have: { gte: number; lte: number }[], want: { gte: number; lte: number }[]) {
-    for (const w of want || []) {
-        let covered = false;
-        for (const h of have || []) {
-            if (h.gte <= w.gte && h.lte >= w.lte) { covered = true; break; }
-        }
-        if (!covered) return false;
-    }
-    return true;
-}
-
-/**
- * Change detection for shard writes: `have` already accounts for every span in
- * `want`, in extent AND in verification time. Without the `at` half, a run
- * whose only news is "these buckets were re-verified 1h later" would skip the
- * write and the next run would fall back to the wide fixed refresh window.
- * An unknown `at` on either side is never treated as fresh.
- */
-function coverageSatisfied(have: QueriedRange[], want: QueriedRange[]) {
-    if (!rangesCoveredBy(have, want)) return false;
-    for (const w of want || []) {
-        const wAt = verifiedAt(w);
-        if (wAt == null) continue;
-        let fresh = false;
-        for (const h of have || []) {
-            if (h.gte > w.gte || h.lte < w.lte) continue;
-            const hAt = verifiedAt(h);
-            if (hAt != null && hAt >= wAt) { fresh = true; break; }
-        }
-        if (!fresh) return false;
-    }
-    return true;
-}
-
-/** Every recorded span across the loaded files, newest verification included. */
-function allQueriedRanges(fileCover: { queried?: QueriedRange[] | null }[]): QueriedRange[] {
-    const out: QueriedRange[] = [];
-    for (const f of fileCover || []) {
-        for (const q of f?.queried || []) {
-            if (q && Number.isFinite(Number(q.gte)) && Number.isFinite(Number(q.lte))) out.push(q);
-        }
-    }
-    return out;
-}
-
 /**
  * How settled a window is, given the recorded coverage.
  *
@@ -422,31 +309,6 @@ function settleCoverage(opts: { gteMs: number; lteMs: number; bucketMs: number; 
     return { hasTimestamps: true, firstUnsettled: null };
 }
 
-/**
- * Bound the persisted span list. Because spans merge only when they assert
- * the same `at`, a shard that is re-verified on every run gains one span per
- * run and would grow without limit (and `settleCoverage` scans the list once
- * per tail window). Dropping the OLDEST spans never invents emptiness, but it
- * is not free: coverage is consulted by BOTH `pruneImmutableGaps` (to skip a
- * query) and `settleCoverage` (to decide a bucket is fresh). A dropped span
- * makes its buckets look unsettled, and the tail refresh would otherwise start
- * at the earliest of them. That is why the refresh is capped at
- * TAIL_REFRESH_HOURS: the worst a dropped span can cost is the legacy 48h
- * overlap, never weeks. The input is already sorted by extent, so the tail of
- * the list is the newest.
- */
-function compactCoverage(spans: QueriedRange[], maxSpans: number): QueriedRange[] {
-    const list = spans || [];
-    const max = Number.isFinite(Number(maxSpans)) && Number(maxSpans) >= 1 ? Math.floor(Number(maxSpans)) : list.length;
-    return list.length <= max ? list : list.slice(list.length - max);
-}
-
-function clipRangeTo(q: QueriedRange, gteMs: number, lteMs: number): QueriedRange | null {
-    const gte = Math.max(q.gte, gteMs);
-    const lte = Math.min(q.lte, lteMs);
-    return lte >= gte ? { gte, lte, at: verifiedAt(q) } : null;
-}
-
 function addUtcMonths(date: Date, months: number): Date {
     const result = new Date(date.getTime());
     const day = result.getUTCDate();
@@ -459,6 +321,20 @@ function addUtcMonths(date: Date, months: number): Date {
     )).getUTCDate();
     result.setUTCDate(Math.min(day, lastDay));
     return result;
+}
+
+/** First instant of the UTC month after `date`. */
+function nextUtcMonthStart(date: Date): Date {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+}
+
+/** True when `date` sits exactly on a UTC month start (midnight, day 1). */
+function isUtcMonthStart(date: Date): boolean {
+    return date.getUTCDate() === 1
+        && date.getUTCHours() === 0
+        && date.getUTCMinutes() === 0
+        && date.getUTCSeconds() === 0
+        && date.getUTCMilliseconds() === 0;
 }
 
 function normalizeDateInput(raw: unknown, label: unknown): Date {
@@ -477,10 +353,21 @@ function buildFetchWindowsFromRange(timeRange: { gte?: unknown; lte?: unknown },
         throw new Error(`Invalid fetch range: ${start.toISOString()} must be earlier than ${end.toISOString()}`);
     }
 
+    const step = Number.isFinite(Number(chunkMonths)) && Number(chunkMonths) >= 1
+        ? Math.floor(Number(chunkMonths))
+        : 1;
+
+    // Interior window boundaries snap to UTC month starts — the same grid the
+    // storage shards use — so a window maps onto whole calendar months instead
+    // of straddling two of them. The requested start/end stay exact: only the
+    // first window can be short (a mid-month start), and the last is clipped
+    // to `end`.
     const windows: Array<{ gte: string; lte: string }> = [];
     let cursor = start;
     while (cursor < end) {
-        const next = addUtcMonths(cursor, chunkMonths);
+        const next = isUtcMonthStart(cursor)
+            ? addUtcMonths(cursor, step)
+            : nextUtcMonthStart(cursor);
         const windowEnd = next < end ? next : end;
         windows.push({
             gte: cursor.toISOString(),
@@ -964,6 +851,9 @@ async function runCachedWindows(opts: RunCachedWindowsOptions): Promise<Candle[]
     // else on disk is already current.
     if (overall) {
         const fetchedAt = new Date().toISOString();
+        // O(1) lookup of each shard's loaded candles for the write-on-change
+        // comparison below (instead of a linear scan per shard state).
+        const loadedShardCandles = new Map(localCache.shards.map((s) => [s.shardKey, s.candles]));
         for (const state of shardStates.values()) {
             const { start, end } = shardBoundsForKey(state.key);
             // Fold every loaded bucket into its home shard. Presence on disk
@@ -975,7 +865,7 @@ async function runCachedWindows(opts: RunCachedWindowsOptions): Promise<Candle[]
                 if (!prev || Number(c[5] || 0) > Number(prev[5] || 0)) state.candles.set(ts, c);
             }
             const before = sortedCandles(new Map(
-                (localCache.shards.find((s) => s.shardKey === state.key)?.candles || [])
+                (loadedShardCandles.get(state.key) || [])
                     .filter((c) => Array.isArray(c) && Number.isFinite(Number(c[0])))
                     .map((c) => [Number(c[0]), c] as [number, Candle]),
             ));
@@ -994,7 +884,6 @@ async function runCachedWindows(opts: RunCachedWindowsOptions): Promise<Candle[]
             const meta: ShardMeta = { ...metaForWindow(synthWindow), fetchedAt, queriedRanges: union };
             meta.timeRange = { gte: synthWindow.gte, lte: synthWindow.lte };
             meta.shard = state.key;
-            delete meta.chunkIndex;
             persistCacheChunk(state.file, meta, after);
             state.queried = union;
             state.pendingQueried = [];
@@ -1036,4 +925,4 @@ export {
     formatWindowLine,
     runCachedWindows,
 };
-export type { QueriedRange };
+export type { QueriedRange } from '../utils/month_shards.js';

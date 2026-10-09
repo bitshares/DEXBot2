@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { calculateAMA } from '../../market_adapter/core/strategies/ama.js';
 import { generateHTML } from '../../market_adapter/lp_chart_core.js';
 import { calculateMetrics } from '../../market_adapter/lp_chart_runner.js';
-import { findLatestLpData } from '../../market_adapter/utils/data_discovery.js';
+import { loadLatestLpSeries, loadLpSeriesFromPath } from '../../market_adapter/utils/data_discovery.js';
 import { toIntervalLabel } from '../../market_adapter/interval_utils.js';
 import { loadCandleFile, normalizeCandle } from '../math_utils.js';
 import { MARKET_ADAPTER } from '../../modules/constants.js';
@@ -57,16 +57,7 @@ const DEFAULT_STRATEGIES = buildDefaultStrategies();
 
 // ── Data loading (canonical implementations, no local copies) ────────────────
 
-function loadCandles(dataFile: string) {
-    const resolved = path.resolve(dataFile);
-    if (!fs.existsSync(resolved)) throw new Error(`File not found: ${resolved}`);
-
-    const { candles, meta } = loadCandleFile(resolved);
-
-    if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error('No candles found in file');
-    }
-
+function normalizeCandleRows(candles: unknown[]) {
     // normalizeCandle is the canonical accessor transform (market_adapter/
     // candle_utils.ts via math_utils re-export); it returns seconds-based time.
     const normalized = candles.map((c: unknown, i: number) => {
@@ -83,8 +74,23 @@ function loadCandles(dataFile: string) {
         volume: c.volume,
     }));
     const candleArrays = normalized.map(c => [c.time * 1000, c.open, c.high, c.low, c.close, c.volume]);
+    return { candleObjects, candleArrays };
+}
 
-    return { dataFile: resolved, meta, candleObjects, candleArrays };
+function loadCandles(dataFile: string) {
+    const resolved = path.resolve(dataFile);
+    if (!fs.existsSync(resolved)) throw new Error(`File not found: ${resolved}`);
+
+    // Shard-aware: `--data <shard>` yields the whole family, not one month.
+    const series = loadLpSeriesFromPath(resolved);
+    if (!series || series.candles.length === 0) {
+        throw new Error('No candles found in file');
+    }
+    // Keep loadCandleFile's meta fallback for non-LP `{data:[...]}` shapes that
+    // carry fields at the top level rather than under `meta`.
+    const meta = series.meta ?? loadCandleFile(resolved).meta;
+
+    return { dataFile: series.path, meta, ...normalizeCandleRows(series.candles) };
 }
 
 // ── Output path ────────────────────────────────────────────────────────────────
@@ -129,7 +135,7 @@ Options:
 Notes:
   - If --data is omitted, the newest lp_pool_*.json under market_adapter/data/lp is used.
   - Accepts several candle JSON shapes: flat [[ts,o,h,l,c,v],...], {candles: [...]}, or {data: [...]}.
-  - Separate from Kibana fetching — use fetch_lp_candles.ts to pull data first.
+  - Separate from Kibana fetching — run 'dexbot tv' (or fetch_lp_candles.ts) to pull data first.
 `);
 }
 
@@ -168,18 +174,28 @@ interface GenerateChartOptions {
 function generateChart(options: GenerateChartOptions = {}) {
     const logger = options.logger ?? console;
 
-    const dataFile = options.dataFile
-        ? path.resolve(options.dataFile)
-        : findLatestLpData();
-    if (!dataFile) {
-        throw new Error(`No LP data file found. Use --data <path> or run fetch_lp_candles.ts first.`);
+    // Explicit --data wins; otherwise auto-discover and, when month shards are
+    // the newest source, assemble the complete series before charting.
+    let dataFile: string;
+    let meta: Record<string, unknown> | null;
+    let candleObjects: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>;
+    let candleArrays: number[][];
+    if (options.dataFile) {
+        ({ dataFile, meta, candleObjects, candleArrays } = loadCandles(options.dataFile));
+    } else {
+        const series = loadLatestLpSeries();
+        if (!series || series.candles.length === 0) {
+            throw new Error(`No LP data found. Use --data <path> or run \`dexbot tv\` first.`);
+        }
+        dataFile = series.path;
+        meta = series.meta;
+        ({ candleObjects, candleArrays } = normalizeCandleRows(series.candles));
     }
 
     const strategies = Array.isArray(options.strategies) && options.strategies.length
         ? options.strategies
         : [...DEFAULT_STRATEGIES];
 
-    const { meta, candleObjects, candleArrays } = loadCandles(dataFile);
     const closes = candleObjects.map(c => c.close);
 
     const enrichedMeta = {

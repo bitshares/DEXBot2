@@ -41,6 +41,8 @@ import {
     runCachedWindows,
 } from './window_cache.js';
 import { PATHS } from '../../modules/paths.js';
+import { loadLpSeriesFromBasePath } from '../utils/data_discovery.js';
+import { shardStemFromName } from '../utils/month_shards.js';
 import * as bitsharesClient from '../../modules/bitshares_client.js';
 import { getErrorMessage, resolveSeamMs } from '../../modules/utils/errors.js';
 import { isSameBotName } from '../../modules/utils/sanitize_key.js';
@@ -236,13 +238,23 @@ function buildRequestKey(config: LpConfig, fullPoolId: string, assetA: AssetRef,
     };
 }
 
-function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number): { poolId: string; assetA: AssetRef; assetB: AssetRef; source: string; path: string } | null {
-    const dir = pairFolderPath(bot.assetA, bot.assetB);
+function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir = pairFolderPath(bot.assetA, bot.assetB)): { poolId: string; assetA: AssetRef; assetB: AssetRef; source: string; path: string } | null {
     if (!storage.exists(dir)) return null;
 
     const label = toIntervalLabel(intervalSeconds);
+    // Accept the whole-history export (`….json`) AND month shards
+    // (`….shard_YYYY-MM.json`). After the shard refactor `dexbot tv`/`dw` only
+    // write shards, so a shard-only pair had no cached context and fell back to
+    // a full blockchain connect. A shard's meta carries the same
+    // pool/asset/precision identity, and reading one shard is cheaper than
+    // parsing a multi-MB whole-history export.
+    const matchesInterval = (name: string): boolean => {
+        if (name.endsWith(`${label}.json`)) return true;
+        const stem = shardStemFromName(name);
+        return stem ? stem.endsWith(`_${label}`) : false;
+    };
     const dataFiles = storage.readdir(dir)
-        .filter((name) => name.endsWith(`${label}.json`))
+        .filter(matchesInterval)
         .sort();
 
     for (const file of dataFiles) {
@@ -353,7 +365,6 @@ async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, as
             assetA: requestKey.assetA,
             assetB: requestKey.assetB,
             intervalSeconds: requestKey.intervalSeconds,
-            chunkIndex: window.index,
             timeRange: { gte: window.gte, lte: window.lte },
             format: '[timestamp_ms, open, high, low, close, volume_A]',
         }),
@@ -618,6 +629,13 @@ async function run() {
         keyByIds: `${assetA.id}|${assetB.id}`,
     };
 
+    // Derive the whole-history export from the assembled shard cache rather
+    // than from this run's fetched range: a later narrow run must not overwrite
+    // a full-history file with a subset. Falls back to the fetched candles when
+    // the shards were withheld (e.g. a partial fetch).
+    const assembled = loadLpSeriesFromBasePath(outPath);
+    const exportCandles = assembled && assembled.candles.length > 0 ? assembled.candles : candles;
+
     const output = {
         meta: {
             fetchedAt:       new Date().toISOString(),
@@ -628,7 +646,7 @@ async function run() {
             pair,
             intervalSeconds: config.intervalSeconds,
             lookbackHours:   config.lookbackHours ?? 0,
-            candleCount:     candles.length,
+            candleCount:     exportCandles.length,
             priceUnit:       `${assetB.symbol} per ${assetA.symbol}`,
             // Candle format: [timestamp_ms, open, high, low, close, volume_in_assetA]
             // Raw Kibana LP exchange documents are ordered and converted to true OHLC.
@@ -637,7 +655,7 @@ async function run() {
             // Actual received used (operation_result_object), not min_to_receive.
             format:          '[timestamp_ms, open, high, low, close, volume_A]',
         },
-        candles,
+        candles: exportCandles,
     };
 
     writeJsonAtomic(outPath, output);
@@ -655,5 +673,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     });
 }
 
-export { applyPrecisionOverrides, parseBotsConfig, selectBot, fetchCandlesSequentially, outputPath }
+export { applyPrecisionOverrides, parseBotsConfig, selectBot, fetchCandlesSequentially, outputPath, loadCachedFetchContext }
 

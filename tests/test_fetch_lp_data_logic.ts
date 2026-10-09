@@ -11,6 +11,7 @@ const {
     parseBotsConfig,
     selectBot,
     fetchCandlesSequentially,
+    loadCachedFetchContext,
 } = require('../market_adapter/inputs/fetch_lp_data');
 
 {
@@ -148,7 +149,43 @@ async function testLpSequentialRetriesFailedRange() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// After the month-shard refactor, dexbot tv/dw only write shard files. The
+// cached-context fast path (skip the blockchain connect) must recognize them
+// too, not just the whole-history export.
+function testLoadCachedFetchContextReadsShardOnlyCache() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-lp-ctx-'));
+    const bot = { name: 'X', assetA: 'TESTA', assetB: 'TESTB' };
+    const meta = {
+        pool: '1.19.9',
+        intervalSeconds: 3600,
+        assetA: { id: '1.3.11', precision: 4, symbol: 'TESTA' },
+        assetB: { id: '1.3.12', precision: 5, symbol: 'TESTB' },
+        timeRange: { gte: '2026-01-01T00:00:00.000Z', lte: '2026-02-01T00:00:00.000Z' },
+        fetchedAt: '2026-02-01T00:00:00.000Z',
+    };
+    fs.writeFileSync(path.join(dir, 'lp_pool_9_1h.shard_2026-01.json'),
+        JSON.stringify({ meta, candles: [] }));
+    fs.writeFileSync(path.join(dir, 'lp_pool_9_4h.shard_2026-01.json'),
+        JSON.stringify({ meta: { ...meta, intervalSeconds: 14400 }, candles: [] }));
+
+    try {
+        const ctx = loadCachedFetchContext(bot, 3600, dir);
+        assert.ok(ctx, 'a shard-only cache must still resolve a cached fetch context');
+        assert.strictEqual(ctx.poolId, '1.19.9', 'pool id comes from shard meta');
+        assert.strictEqual(ctx.assetA.id, '1.3.11', 'asset A id comes from shard meta');
+        assert.strictEqual(ctx.assetB.id, '1.3.12', 'asset B id comes from shard meta');
+
+        assert.strictEqual(loadCachedFetchContext(bot, 14400, dir).poolId, '1.19.9',
+            'the 4h shard resolves for a 4h request');
+        assert.strictEqual(loadCachedFetchContext(bot, 900, dir), null,
+            'no shard/base for another interval resolves to null');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 (async () => {
+    testLoadCachedFetchContextReadsShardOnlyCache();
     await testLpSequentialCachesAndReuses();
     await testLpSequentialRetriesFailedRange();
 })()

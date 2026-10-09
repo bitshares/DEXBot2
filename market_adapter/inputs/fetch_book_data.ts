@@ -158,7 +158,6 @@ async function fetchMarketCandlesSequentially(assetA: AssetRef, assetB: AssetRef
             assetA: requestKey.assetA,
             assetB: requestKey.assetB,
             intervalSeconds,
-            chunkIndex: window.index,
             timeRange: { gte: window.gte, lte: window.lte },
             format: '[timestamp_ms, open, high, low, close, volume_A]',
         }),

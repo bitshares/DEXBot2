@@ -659,7 +659,6 @@ async function fetchFeedCandlesSequentially(feedCtx: FeedContext, assetA: AssetR
             assetA: requestKey.assetA,
             assetB: requestKey.assetB,
             intervalSeconds,
-            chunkIndex: window.index,
             timeRange: { gte: window.gte, lte: window.lte },
             format: '[timestamp_ms, open, high, low, close, feed_publish_count]',
         }),

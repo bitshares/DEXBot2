@@ -29,6 +29,17 @@ import path from 'node:path';
 import { getStorage } from '../modules/storage/index.js';
 import { PATHS } from '../modules/paths.js';
 import { writeJsonAtomic } from '../market_adapter/utils/atomic_write.js';
+import {
+    shardKeyForTimestamp,
+    shardBoundsForKey,
+    shardKeysForRange,
+    shardPathFor,
+    unionQueriedRanges,
+    compactCoverage,
+    mergeSpans,
+    subtractRanges,
+} from '../market_adapter/utils/month_shards.js';
+import type { QueriedRange, Span } from '../market_adapter/utils/month_shards.js';
 import { fetchAllFills, FillRecord } from './fills_source.js';
 
 const storage = getStorage();
@@ -39,10 +50,7 @@ const TAIL_SETTLE_LAG_MS = 6 * 3600 * 1000;
 /** Upper bound on spans persisted per shard (keeps coverage bookkeeping small). */
 const MAX_COVERAGE_SPANS = 64;
 const SHARD_EXT = '.json';
-const SHARD_MARKER = '.shard_';
 
-interface QueriedRange { gte: number; lte: number; at: number | null; }
-interface Span { gte: number; lte: number; }
 interface FillsShard {
     meta: { accountId: string; fetchedAt: string; queriedRanges: QueriedRange[] };
     fills: FillRecord[];
@@ -60,31 +68,6 @@ interface FetchFillsOptions {
     quiet?: boolean;
 }
 
-function shardKeyForTimestamp(tsMs: number): string {
-    const d = new Date(Number(tsMs));
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-function shardBoundsForKey(key: string): { start: number; end: number } {
-    const parts = String(key).split('-').map(Number);
-    const start = Date.UTC(parts[0], parts[1] - 1, 1);
-    const end = parts[1] === 12 ? Date.UTC(parts[0] + 1, 0, 1) : Date.UTC(parts[0], parts[1], 1);
-    return { start, end };
-}
-
-function shardKeysForRange(gteMs: number, lteMs: number): string[] {
-    const keys: string[] = [];
-    const cursor = new Date(Date.UTC(
-        new Date(gteMs).getUTCFullYear(),
-        new Date(gteMs).getUTCMonth(), 1));
-    const last = new Date(lteMs);
-    while (cursor <= last) {
-        keys.push(shardKeyForTimestamp(cursor.getTime()));
-        cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-    return keys;
-}
-
 function accountFileBase(accountId: string): string {
     const s = String(accountId ?? '').trim();
     if (/^1\.2\.\d+$/.test(s)) return s;
@@ -93,11 +76,6 @@ function accountFileBase(accountId: string): string {
 
 function basePathFor(cacheDir: string, accountId: string): string {
     return path.join(cacheDir, 'fills', `${accountFileBase(accountId)}${SHARD_EXT}`);
-}
-
-function shardPathFor(basePath: string, shardKey: string): string {
-    const parsed = path.parse(basePath);
-    return path.join(parsed.dir, `${parsed.name}${SHARD_MARKER}${shardKey}${parsed.ext}`);
 }
 
 function readShard(shardFile: string, accountId: string): FillsShard | null {
@@ -120,45 +98,13 @@ function readShard(shardFile: string, accountId: string): FillsShard | null {
 
 /** Sort, merge overlapping/adjacent same-`at` spans, cap the list length. */
 function normalizeQueried(ranges: QueriedRange[]): QueriedRange[] {
-    const clean = (ranges || [])
-        .filter((q) => q && Number.isFinite(Number(q.gte)) && Number.isFinite(Number(q.lte)) && Number(q.lte) >= Number(q.gte))
-        .map((q) => ({
-            gte: Number(q.gte),
-            lte: Number(q.lte),
-            at: Number.isFinite(Number(q.at)) ? Number(q.at) : null,
-        }))
-        .sort((a, b) => a.gte - b.gte || a.lte - b.lte);
-    const merged: QueriedRange[] = [];
-    for (const q of clean) {
-        const top = merged[merged.length - 1];
-        if (top && q.gte <= top.lte + 1 && top.at === q.at) {
-            if (q.lte > top.lte) top.lte = q.lte;
-        } else {
-            merged.push({ ...q });
-        }
-    }
-    if (merged.length > MAX_COVERAGE_SPANS) merged.splice(0, merged.length - MAX_COVERAGE_SPANS);
-    return merged;
+    return compactCoverage(unionQueriedRanges(ranges || [], 1), MAX_COVERAGE_SPANS);
 }
 
 /** Record a freshly queried span, dropping older spans it fully supersedes. */
 function addCoverage(queried: QueriedRange[], span: Span, atMs: number): QueriedRange[] {
     const kept = queried.filter((q: QueriedRange) => !(q.gte >= span.gte && q.lte <= span.lte));
     return normalizeQueried([...kept, { gte: span.gte, lte: span.lte, at: atMs }]);
-}
-
-function mergeSpans(spans: Span[]): Span[] {
-    const sorted = [...spans].sort((a, b) => a.gte - b.gte || a.lte - b.lte);
-    const merged: Span[] = [];
-    for (const s of sorted) {
-        const top = merged[merged.length - 1];
-        if (top && s.gte <= top.lte + 1) {
-            if (s.lte > top.lte) top.lte = s.lte;
-        } else {
-            merged.push({ ...s });
-        }
-    }
-    return merged;
 }
 
 /**
@@ -173,22 +119,6 @@ function trustedSegments(queried: QueriedRange[], nowMs: number): Span[] {
         if (end >= q.gte) segs.push({ gte: q.gte, lte: end });
     }
     return mergeSpans(segs);
-}
-
-/** `span` minus the union of `covered` (both as inclusive ms ranges). */
-function subtractRanges(span: Span, covered: Span[]): Span[] {
-    let parts: Span[] = [{ ...span }];
-    for (const c of mergeSpans(covered)) {
-        const next: Span[] = [];
-        for (const p of parts) {
-            if (c.lte < p.gte || c.gte > p.lte) { next.push(p); continue; }
-            if (c.gte > p.gte) next.push({ gte: p.gte, lte: Math.min(p.lte, c.gte - 1) });
-            if (c.lte < p.lte) next.push({ gte: Math.max(p.gte, c.lte + 1), lte: p.lte });
-        }
-        parts = next.filter(p => p.lte >= p.gte);
-        if (parts.length === 0) break;
-    }
-    return parts;
 }
 
 function fillKey(f: FillRecord): string {

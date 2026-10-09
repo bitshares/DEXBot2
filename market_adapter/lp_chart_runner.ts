@@ -8,7 +8,7 @@ import { calculateAMA } from './core/strategies/ama.js';
 import { MARKET_ADAPTER } from '../modules/constants.js';
 import { generateHTML } from './lp_chart_core.js';
 import { loadStrategiesForLpChart } from './lp_chart_strategy_loader.js';
-import { findLatestLpData } from './utils/data_discovery.js';
+import { findLatestLpData, loadLatestLpSeries, loadLpSeriesFromPath } from './utils/data_discovery.js';
 import { PATHS } from '../modules/paths.js';
 
 /**
@@ -33,7 +33,7 @@ import { PATHS } from '../modules/paths.js';
  */
 
 const storage = getStorage();
-const { ensureDir, readJSON } = storage;
+const { ensureDir } = storage;
 
 
 const ANALYSIS_CHARTS_DIR = PATHS.ANALYSIS.CHARTS_DIR;
@@ -102,6 +102,7 @@ interface CliArgOptions {
 
 interface MarketChartOptions {
     dataFile?: string;
+    dataBundle?: LpDataBundle;
     logger?: { log: (...args: unknown[]) => void };
     profilesFile?: string;
     outFile?: string;
@@ -110,6 +111,7 @@ interface MarketChartOptions {
 
 interface ComparisonChartOptions {
     dataFile?: string;
+    dataBundle?: LpDataBundle;
     logger?: { log: (...args: unknown[]) => void };
     defaultStrategies?: AmaConfig[];
     profilesFile?: string | null;
@@ -119,6 +121,7 @@ interface ComparisonChartOptions {
 
 interface BundleChartOptions {
     dataFile?: string;
+    dataBundle?: LpDataBundle;
     logger?: { log: (...args: unknown[]) => void };
     profilesFile?: string;
     defaultStrategies?: AmaConfig[];
@@ -203,7 +206,11 @@ function normalizeLpCandle(candle: unknown, index: number): NormalizedLpCandle {
 }
 
 function resolveLpDataFile(dataFile?: string): string {
-    const resolved: string | null = dataFile ? path.resolve(dataFile) : findLatestLpData();
+    // Explicit path wins. Otherwise resolve through the assembling loader so a
+    // shard-only cache yields a representative source path instead of null.
+    const resolved: string | null = dataFile
+        ? path.resolve(dataFile)
+        : (loadLatestLpSeries()?.path ?? findLatestLpData());
     if (!resolved) {
         throw new Error('No LP data file found. Use --data <path> or run the fetch step first.');
     }
@@ -213,17 +220,9 @@ function resolveLpDataFile(dataFile?: string): string {
     return resolved;
 }
 
-function loadLpDataFile(dataFile?: string): LpDataBundle {
-    const resolved = resolveLpDataFile(dataFile);
-    const raw: Record<string, unknown> = readJSON(resolved);
-    const meta = (raw.meta ?? null) as LpMeta | null;
-    const candles: unknown[] = Array.isArray(raw?.candles) ? (raw.candles as unknown[]) : (Array.isArray(raw) ? (raw as unknown[]) : []);
-    if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error('No candles in data file.');
-    }
-
+function bundleFrom(dataFile: string, meta: LpMeta | null, candles: unknown[]): LpDataBundle {
     return {
-        dataFile: resolved,
+        dataFile,
         meta,
         candleArrays: candles.map((c, index) => normalizeLpCandle(c, index)),
         candleObjects: candles.map((c, index) => {
@@ -238,6 +237,26 @@ function loadLpDataFile(dataFile?: string): LpDataBundle {
             };
         }),
     };
+}
+
+function loadLpDataFile(dataFile?: string): LpDataBundle {
+    // Explicit path: read the file as before. Auto-discovery: assemble the
+    // complete series (merging month shards when they are the newest source),
+    // so a shard-only cache charts the whole history, not one month.
+    if (!dataFile) {
+        const series = loadLatestLpSeries();
+        if (!series || series.candles.length === 0) {
+            throw new Error('No LP data found. Use --data <path> or run the fetch step first.');
+        }
+        return bundleFrom(series.path, series.meta as LpMeta | null, series.candles);
+    }
+
+    const resolved = resolveLpDataFile(dataFile);
+    const series = loadLpSeriesFromPath(resolved);
+    if (!series || series.candles.length === 0) {
+        throw new Error('No candles in data file.');
+    }
+    return bundleFrom(series.path, series.meta as LpMeta | null, series.candles);
 }
 
 function openInBrowser(filePath: string): void {
@@ -313,7 +332,7 @@ function writeChartHtml({ meta, candleArrays, amaResults, outFile }: ChartHtmlPa
 
 function generateMarketLpChart(options: MarketChartOptions = {}): { dataFile: string; outFile: string; amaResults: AmaResult[]; meta: LpMeta | null; candleArrays: NormalizedLpCandle[] } {
     const logger = options.logger ?? console;
-    const { dataFile, meta, candleArrays } = loadLpDataFile(options.dataFile);
+    const { dataFile, meta, candleArrays } = options.dataBundle ?? loadLpDataFile(options.dataFile);
 
     logger.log(`Reading: ${path.relative(process.cwd(), dataFile)}`);
     const poolLabel = meta?.pool ? `pool ${meta.pool}` : `${meta?.assetA?.symbol || '?'}\/${meta?.assetB?.symbol || '?'}`;
@@ -358,7 +377,7 @@ function generateMarketLpChart(options: MarketChartOptions = {}): { dataFile: st
 
 function generateComparisonLpChart(options: ComparisonChartOptions = {}): { dataFile: string; outFile: string; amaResults: AmaResult[]; meta: LpMeta | null; candleArrays: NormalizedLpCandle[] } {
     const logger = options.logger ?? console;
-    const { dataFile, meta, candleArrays, candleObjects } = loadLpDataFile(options.dataFile);
+    const { dataFile, meta, candleArrays, candleObjects } = options.dataBundle ?? loadLpDataFile(options.dataFile);
     const defaultStrategies: AmaConfig[] = options.defaultStrategies ?? DEFAULT_COMPARISON_STRATEGIES;
     const strategies: AmaConfig[] = (loadStrategiesForLpChart({
         dataFile,
@@ -405,17 +424,20 @@ function generateComparisonLpChart(options: ComparisonChartOptions = {}): { data
 
 function generateLpChartBundle(options: BundleChartOptions = {}): { dataFile: string; marketChart: ReturnType<typeof generateMarketLpChart>; comparisonChart: ReturnType<typeof generateComparisonLpChart> } {
     const logger = options.logger ?? console;
-    const dataFile = resolveLpDataFile(options.dataFile);
-    logger.log(`Generating LP charts from ${path.relative(process.cwd(), dataFile)}`);
+    // Resolve/assemble ONCE, then hand the same loaded bundle to both charts —
+    // auto-discovery over shards would otherwise re-read and re-merge the whole
+    // family for each sub-chart.
+    const bundle = options.dataBundle ?? loadLpDataFile(options.dataFile);
+    logger.log(`Generating LP charts from ${path.relative(process.cwd(), bundle.dataFile)}`);
 
     const marketChart = generateMarketLpChart({
-        dataFile,
+        dataBundle: bundle,
         noOpen: options.noOpen,
         logger,
         profilesFile: options.profilesFile,
     });
     const comparisonChart = generateComparisonLpChart({
-        dataFile,
+        dataBundle: bundle,
         noOpen: options.openComparison === true ? !!options.noOpen : true,
         logger,
         defaultStrategies: options.defaultStrategies ?? DEFAULT_COMPARISON_STRATEGIES,
@@ -423,7 +445,7 @@ function generateLpChartBundle(options: BundleChartOptions = {}): { dataFile: st
     });
 
     return {
-        dataFile,
+        dataFile: bundle.dataFile,
         marketChart,
         comparisonChart,
     };
