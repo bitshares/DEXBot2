@@ -10,6 +10,18 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Hermetic profile fixture: this test derives a grid from the first active bot
+// in bots.json. Point the profile root at a temp dir so it never depends on the
+// machine's repo/home profiles layout (see modules/paths.ts).
+const TEST_PROFILE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-autoderive-'));
+process.env.DEXBOT_PROFILE_ROOT = TEST_PROFILE_ROOT;
+fs.writeFileSync(path.join(TEST_PROFILE_ROOT, 'bots.json'), JSON.stringify({
+    bots: [{ name: 'TEST-BOT', active: true, startPrice: 'book', assetA: 'TESTA', assetB: 'TESTB' }],
+}));
+
 const { PATHS } = require('../modules/paths');
 const { getErrorMessage } = require('../modules/utils/errors');
 
@@ -69,9 +81,11 @@ async function main() {
 
         await runAutoderiveForBot(active);
         console.log('Autoderive test completed successfully');
+        fs.rmSync(TEST_PROFILE_ROOT, { recursive: true, force: true });
         process.exit(0);
     } catch (err) {
         console.error('Autoderive test failed:', err && (err as any).stack ? (err as any).stack : getErrorMessage(err));
+        fs.rmSync(TEST_PROFILE_ROOT, { recursive: true, force: true });
         process.exit(2);
     }
 }

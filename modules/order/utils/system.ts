@@ -626,7 +626,7 @@ export interface ExtendedAssetMeta extends AssetMeta {
 async function getAssetCurrentSupply(BitShares: BitSharesClient, assetRef: string | ExtendedAssetMeta): Promise<number | null> {
     const asset: ExtendedAssetMeta | null = typeof assetRef === 'object' && assetRef !== null
         ? assetRef
-        : await lookupAsset(BitShares, assetRef).catch((e) => {
+        : await lookupAsset(BitShares, assetRef as string).catch((e) => {
             systemLogger.debug(`getAssetCurrentSupply: lookupAsset failed for ${assetRef}: ${getErrorMessage(e)}`);
             return null;
         });

@@ -2,17 +2,15 @@ const assert = require('assert');
 const fs = require('fs');
 const { EventEmitter } = require('events');
 const childProcess = require('child_process');
-const { restoreCachedModule, setCachedModule } = require('./helpers/module_cache_stub');
+const { esmMockEntry, defineEsmMockAbs } = require('./helpers/esm_mocks');
+
+// Compiled ESM deps are not reachable via require.cache: re-exec under the ESM
+// mock loader so chain_keys/bootstrap can be replaced. Otherwise the real
+// chain_keys.authenticate() prompts and the process exits 0 with no assertions.
+esmMockEntry();
 
 console.log('Running credential daemon controller output tests');
 
-const controllerPath = require.resolve('../modules/launcher/credential_daemon');
-const chainKeysPath = require.resolve('../modules/chain_keys');
-const bootstrapPath = require.resolve('../modules/launcher/credential_bootstrap');
-
-const originalControllerModule = require.cache[controllerPath];
-const originalChainKeys = require.cache[chainKeysPath];
-const originalBootstrap = require.cache[bootstrapPath];
 const originalSpawn = childProcess.spawn;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -25,16 +23,16 @@ let spawnCount = 0;
 const spawnCalls: any[] = [];
 
 function installStubs() {
-    delete require.cache[controllerPath];
-
-    setCachedModule(chainKeysPath, {
+    defineEsmMockAbs(require.resolve('../modules/chain_keys'),
+        ['authenticate', 'isDaemonReady', 'isDaemonResponsive', 'waitForDaemon', 'unlockWithPassword'], {
         authenticate: async () => 'test-password',
         isDaemonReady: () => false,
         isDaemonResponsive: async () => false,
         waitForDaemon: async () => {},
+        unlockWithPassword: () => 'test-password',
     });
 
-    setCachedModule(bootstrapPath, {
+    defineEsmMockAbs(require.resolve('../modules/launcher/credential_bootstrap'), ['createPasswordBootstrapServer'], {
         createPasswordBootstrapServer: async () => ({
             socketPath: '/tmp/bootstrap.sock',
             close() {},
@@ -78,12 +76,6 @@ function restoreStubs() {
     console.log = originalConsoleLog;
     console.warn = originalConsoleWarn;
     console.error = originalConsoleError;
-
-    restoreCachedModule(chainKeysPath, originalChainKeys);
-    restoreCachedModule(bootstrapPath, originalBootstrap);
-
-    if (originalControllerModule) require.cache[controllerPath] = originalControllerModule;
-    else delete require.cache[controllerPath];
 }
 
 installStubs();

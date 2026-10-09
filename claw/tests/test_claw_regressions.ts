@@ -605,11 +605,12 @@ function testBuildQueryScopesAnyPoolByReceivedAsset() {
 function testClawDefaultDataPathsStayInsideClawFolder() {
   console.log('  claw default data paths...');
 
-  // modules/paths.ts resolveClawDirs keeps claw state inside the repo's
-  // claw/ folder regardless of where the code runs from (dist or source),
-  // so anchor expectations to that folder rather than to this test file.
-  const clawDataDir = path.join(__dirname, '..', '..', '..', 'claw', 'data');
-  const clawStateDir = path.join(clawDataDir, 'state');
+  // Claw defaults follow the resolved profiles dir (repo profiles → claw/data,
+  // home config → <profiles>/claw/data), so anchor expectations to PATHS.CLAW
+  // instead of hardcoding the repo layout.
+  const { PATHS } = require('../../modules/paths');
+  const clawDataDir = PATHS.CLAW.DATA_DIR;
+  const clawStateDir = PATHS.CLAW.STATE_DIR;
   const clawInfra = require('../modules/claw_infra');
   const { DEFAULT_STATE_PATH } = require('../modules/position_manager');
   const { DEFAULT_HEALTH_PATH } = require('../modules/position_manager_watch');

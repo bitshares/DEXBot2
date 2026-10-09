@@ -4,6 +4,13 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+
+// The analyzer reads bots.json at module load. Point the profile root at a temp
+// fixture so the test does not depend on the machine's repo/home profiles.
+const TEST_PROFILE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-analyze-dw-'));
+process.env.DEXBOT_PROFILE_ROOT = TEST_PROFILE_ROOT;
+fs.writeFileSync(path.join(TEST_PROFILE_ROOT, 'bots.json'), JSON.stringify({ bots: [] }));
+
 const { Config } = require('../modules/config');
 
 const { ensureDir, writeJSON } = require('../modules/storage').getStorage();
@@ -899,9 +906,11 @@ async function main() {
   testAnalyzeOrderBoundaryLessClassifiesByType();
   testAnalyzeOrderNumericBoundaryKeepsRailGeometry();
   console.log('analyze-orders dynamic weight tests passed');
+  fs.rmSync(TEST_PROFILE_ROOT, { recursive: true, force: true });
 }
 
 main().catch((err) => {
+  fs.rmSync(TEST_PROFILE_ROOT, { recursive: true, force: true });
   console.error(err);
   process.exit(1);
 });

@@ -22,6 +22,8 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const path = require('path');
+const { PATHS } = require('../modules/paths');
 const { AccountOrders, createBotKey } = require('../modules/account_orders');
 const StrategyEngine = require('../modules/order/strategy').default;
 const {
@@ -40,6 +42,10 @@ const { buildGenesisFromPriceLevels, calculateGapSlots } = require('../modules/o
 const GAP = 4;
 const N_SLOTS = 216;
 const CFG = { startPrice: 'pool', activeOrders: { buy: 20, sell: 20 } };
+
+// AccountOrders persists next to the resolved profiles dir, which may be the
+// repo or the home config. Never hardcode `profiles/orders` — resolve it.
+const ordersPath = (botKey) => path.join(PATHS.ORDERS_DIR, `${botKey}.json`);
 
 function buildSlots(count) {
     const slots = [];
@@ -287,7 +293,7 @@ async function testPersist_RoundTripAndClear() {
         assert.deepStrictEqual(accountOrders.loadPendingFillCrawls(), [{ slotId: 'slot-97', side: 'buy', ts: 5 }],
             'undefined param is a no-op (backward compatible callers)');
     } finally {
-        try { fs.unlinkSync(`profiles/orders/${botKey}.json`); } catch { /* absent */ }
+        try { fs.unlinkSync(ordersPath(botKey)); } catch { /* absent */ }
     }
     console.log('✓ PEND-009 passed');
 }
@@ -457,11 +463,11 @@ async function testClearGrid_WipesPersistedCrawls() {
         await accountOrders.clearGrid();
         assert.deepStrictEqual(accountOrders.loadPendingFillCrawls(), [],
             'clearGrid must drop persisted crawls so the next generation cannot inherit them');
-        const onDisk = fs.readFileSync(`profiles/orders/${botKey}.json`, 'utf8');
+        const onDisk = fs.readFileSync(ordersPath(botKey), 'utf8');
         assert.ok(!onDisk.includes('pendingFillCrawls'),
             'the persisted pendingFillCrawls key must be gone from disk, not merely shadowed in memory');
     } finally {
-        try { fs.unlinkSync(`profiles/orders/${botKey}.json`); } catch { /* absent */ }
+        try { fs.unlinkSync(ordersPath(botKey)); } catch { /* absent */ }
     }
     console.log('✓ PEND-016 passed');
 }
@@ -547,7 +553,7 @@ async function testPersistSkip_RestartReplaysCommitOnce() {
     console.log('\n[PEND-018] skipped persist after a commit replays exactly once on restart...');
     const botKey = createBotKey({ name: 'pending-crawl-generation-test' }, 0);
     const accountOrders = new AccountOrders({ botKey });
-    const persistedPath = `profiles/orders/${botKey}.json`;
+    const persistedPath = ordersPath(botKey);
     const B0 = 96;
     const B1 = 94;
     try {

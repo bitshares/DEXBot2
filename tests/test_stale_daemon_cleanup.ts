@@ -1,13 +1,54 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const chainKeys = require('../modules/chain_keys');
 const childProcess = require('child_process');
+const net = require('net');
 const { EventEmitter } = require('events');
-const { restoreCachedModule, setCachedModule } = require('./helpers/module_cache_stub');
-const { ensureDir, unlink: safeUnlink } = require('../modules/storage').getStorage();
+const { esmMockEntry, defineEsmMockAbs } = require('./helpers/esm_mocks');
+
+// Compiled ESM deps are not reachable via require.cache. Re-exec under the ESM
+// mock loader and replace chain_keys/credential_bootstrap so the controller
+// never calls the real interactive authenticate() (which prompts and leaves the
+// process exiting 0 with no assertion run). chain_keys' readiness helpers are
+// reimplemented faithfully because both the controller and this test consume
+// them through the same module.
+esmMockEntry();
 
 console.log('Running stale daemon cleanup tests');
+
+defineEsmMockAbs(require.resolve('../modules/chain_keys'),
+    ['authenticate', 'isDaemonReady', 'isDaemonResponsive', 'waitForDaemon', 'unlockWithPassword'], {
+    authenticate: async () => 'test',
+    unlockWithPassword: () => 'test',
+    isDaemonReady: (options: any = {}) => fs.existsSync(options.socketPath) && fs.existsSync(options.readyFilePath),
+    isDaemonResponsive: (options: any = {}, timeout = 2000) => new Promise((resolve) => {
+        if (!(fs.existsSync(options.socketPath) && fs.existsSync(options.readyFilePath))) return resolve(false);
+        const socket = net.createConnection(options.socketPath);
+        let settled = false;
+        const timer = setTimeout(() => { if (!settled) { settled = true; socket.destroy(); resolve(false); } }, timeout);
+        socket.on('connect', () => socket.write('{}\n'));
+        socket.on('data', (data) => { if (!settled && String(data).trim().length > 0) { settled = true; clearTimeout(timer); socket.end(); resolve(true); } });
+        socket.on('error', () => { if (!settled) { settled = true; clearTimeout(timer); resolve(false); } });
+        socket.on('end', () => { if (!settled) { settled = true; clearTimeout(timer); resolve(false); } });
+    }),
+    waitForDaemon: async (maxWaitMs = 60000, options: any = {}) => {
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+            if (fs.existsSync(options.socketPath) && fs.existsSync(options.readyFilePath)) return;
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(`Daemon did not start within ${maxWaitMs}ms`);
+    },
+});
+defineEsmMockAbs(require.resolve('../modules/launcher/credential_bootstrap'), ['createPasswordBootstrapServer'], {
+    createPasswordBootstrapServer: async () => ({
+        socketPath: '/tmp/test-bootstrap.sock',
+        close() {},
+        waitForTransfer: async () => {},
+    }),
+});
+
+const { ensureDir, unlink: safeUnlink } = require('../modules/storage').getStorage();
 
 const TEST_ROOT = path.join(__dirname, '..', 'tmp', 'test-stale-daemon');
 const SOCKET_PATH = path.join(TEST_ROOT, 'test.sock');
@@ -85,6 +126,12 @@ function makeMockChild() {
     try {
         await setupFiles();
 
+        // Resolve chain_keys through the async ESM loader so the mocked module is
+        // used. A synchronous require() here would load the real chain_keys into
+        // the ESM cache first, and the controller's import would then see it too
+        // (defeating the mock and reaching the interactive authenticate prompt).
+        const chainKeys = await import('../modules/chain_keys.js');
+
         // 1. Verify isDaemonReady returns true for existing files
         assert.ok(
             chainKeys.isDaemonReady({ socketPath: SOCKET_PATH, readyFilePath: READY_FILE }),
@@ -102,35 +149,11 @@ function makeMockChild() {
             'isDaemonResponsive should be false for stale files'
         );
 
-        // 3. Stub the chain_keys module in the require cache BEFORE the
-        // controller is loaded. The controller imports chain_keys via
-        // `import * as`, which resolves a separate namespace object from the
-        // `require()` binding above — mutating chainKeys.authenticate here
-        // would NOT be seen by the controller and would trigger the real
-        // master-password prompt. Cache stubbing is the only reliable hook.
-        const chainKeysPath = require.resolve('../modules/chain_keys');
-        const originalChainKeys = require.cache[chainKeysPath];
-        setCachedModule(chainKeysPath, {
-            isDaemonReady: chainKeys.isDaemonReady,
-            isDaemonResponsive: chainKeys.isDaemonResponsive,
-            waitForDaemon: chainKeys.waitForDaemon,
-            authenticate: async () => 'test',
-        });
-
-        // 4. Mock credential_bootstrap BEFORE requiring the controller
-        const bootstrapPath = require.resolve('../modules/launcher/credential_bootstrap');
-        const originalBootstrapModule = setCachedModule(bootstrapPath, {
-            createPasswordBootstrapServer: async () => ({
-                socketPath: '/tmp/test-bootstrap.sock',
-                close() {},
-                waitForTransfer: async () => {},
-            }),
-        });
-
-        // 5. Install spawn mock BEFORE requiring the controller module
+        // 3. chain_keys and credential_bootstrap are mocked via the ESM loader
+        // at the top of this file, so the controller cannot prompt.
+        // 4. Install spawn mock BEFORE requiring the controller module
         // so the controller caches the mock reference
         const mockChildren = [];
-        const net = require('net');
         childProcess.spawn = () => {
             const child = makeMockChild();
             mockChildren.push(child);
@@ -156,9 +179,6 @@ function makeMockChild() {
             return child;
         };
 
-        // Clear module cache so require picks up the mocked spawn and bootstrap
-        const controllerModulePath = require.resolve('../modules/launcher/credential_daemon');
-        delete require.cache[controllerModulePath];
         const { createCredentialDaemonController } = require('../modules/launcher/credential_daemon');
 
         const controller = createCredentialDaemonController({
@@ -198,9 +218,7 @@ function makeMockChild() {
                 'ready file should contain new content from mock daemon'
             );
         } finally {
-            restoreCachedModule(chainKeysPath, originalChainKeys);
             childProcess.spawn = originalSpawn;
-            restoreCachedModule(bootstrapPath, originalBootstrapModule);
         }
 
         console.log('stale daemon cleanup tests passed');

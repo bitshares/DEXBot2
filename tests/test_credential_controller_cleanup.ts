@@ -1,20 +1,19 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const childProcess = require('child_process');
-const { restoreCachedModule, setCachedModule } = require('./helpers/module_cache_stub');
+const { esmMockEntry, defineEsmMockAbs } = require('./helpers/esm_mocks');
+
+// The controller and its deps are compiled ESM: require.cache stubbing does not
+// reach them. Re-exec once under the ESM mock loader so defineEsmMock below can
+// replace chain_keys / credential_runtime / bootstrap / policy. Without this
+// the real chain_keys.authenticate() runs, prompts for a master password, and
+// the test process exits 0 with no assertion ever executed.
+esmMockEntry();
 
 console.log('Running credential controller cleanup tests');
 
-const chainKeysPath = require.resolve('../modules/chain_keys');
-const credentialRuntimePath = require.resolve('../modules/credential_runtime');
-const bootstrapPath = require.resolve('../modules/launcher/credential_bootstrap');
-const credentialPolicyPath = require.resolve('../modules/credential_policy');
 const { PATHS } = require('../modules/paths');
 
-const originalChainKeys = require.cache[chainKeysPath];
-const originalCredentialRuntime = require.cache[credentialRuntimePath];
-const originalBootstrap = require.cache[bootstrapPath];
-const originalCredentialPolicy = require.cache[credentialPolicyPath];
 const originalSpawn = childProcess.spawn;
 const originalTestSecret = process.env.TEST_DAEMON_SECRET;
 
@@ -26,21 +25,25 @@ const state = {
 };
 
 function installStubs() {
-    setCachedModule(chainKeysPath, {
+    defineEsmMockAbs(require.resolve('../modules/chain_keys'),
+        ['authenticate', 'isDaemonReady', 'isDaemonResponsive', 'waitForDaemon', 'unlockWithPassword'], {
         authenticate: async () => 'test-secret',
         isDaemonReady: () => false,
         isDaemonResponsive: async () => false,
         waitForDaemon: async () => {},
+        unlockWithPassword: () => 'test-secret',
     });
 
-    setCachedModule(credentialRuntimePath, {
+    defineEsmMockAbs(require.resolve('../modules/credential_runtime'),
+        ['ensureCredentialRuntimeDirSync', 'getCredentialReadyFilePath', 'getCredentialRuntimeDir', 'getCredentialSocketPath', 'assertPrivatePathSecurity'], {
         ensureCredentialRuntimeDirSync: () => {},
         getCredentialReadyFilePath: () => '/tmp/dexbot-test.ready',
         getCredentialRuntimeDir: () => '/tmp',
         getCredentialSocketPath: () => '/tmp/dexbot-test.sock',
+        assertPrivatePathSecurity: () => {},
     });
 
-    setCachedModule(bootstrapPath, {
+    defineEsmMockAbs(require.resolve('../modules/launcher/credential_bootstrap'), ['createPasswordBootstrapServer'], {
         createPasswordBootstrapServer: async () => ({
             socketPath: '/tmp/bootstrap.sock',
             close: () => {},
@@ -48,7 +51,7 @@ function installStubs() {
         }),
     });
 
-    setCachedModule(credentialPolicyPath, {
+    defineEsmMockAbs(require.resolve('../modules/credential_policy'), ['ensurePolicyConfig'], {
         ensurePolicyConfig: (filePath) => {
             state.ensurePolicyPaths.push(filePath);
             return { accounts: {} };
@@ -71,10 +74,6 @@ function installStubs() {
 
 function restoreStubs() {
     childProcess.spawn = originalSpawn;
-    restoreCachedModule(chainKeysPath, originalChainKeys);
-    restoreCachedModule(credentialRuntimePath, originalCredentialRuntime);
-    restoreCachedModule(bootstrapPath, originalBootstrap);
-    restoreCachedModule(credentialPolicyPath, originalCredentialPolicy);
     if (originalTestSecret === undefined) delete process.env.TEST_DAEMON_SECRET;
     else process.env.TEST_DAEMON_SECRET = originalTestSecret;
 }

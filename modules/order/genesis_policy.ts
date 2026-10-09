@@ -248,12 +248,15 @@ export function resolvePersistedGenesis({
 
     const built = buildGenesisFromLiveRail(config);
     if (!built.ok) {
+        // strictNullChecks:false (tests build) does not discriminate this union,
+        // so name the failure shape explicitly.
+        const failure = built as { reason: string; detail: string };
         emit(
-            `[GENESIS] Cannot migrate the persisted grid: ${built.detail} — ` +
+            `[GENESIS] Cannot migrate the persisted grid: ${failure.detail} — ` +
             `no ladder available, refusing to load the snapshot without one`,
             'error'
         );
-        return { ok: false, reason: built.reason, detail: built.detail, mismatchRatio: null };
+        return { ok: false, reason: failure.reason, detail: failure.detail, mismatchRatio: null };
     }
 
     // Cross-check the derived rail against the persisted slots. A user who
