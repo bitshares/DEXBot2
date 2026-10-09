@@ -164,6 +164,20 @@ const COW_ACTIONS = Object.freeze({
     UPDATE: 'update'
 });
 
+// Canonical plan/action ORIGIN labels. A plan stamps `origin` so the execution
+// guard can scope a bypass to one producer (never to the whole batch by
+// accident). Kept here so the planner that writes the tag and the guard that
+// reads it can never drift on the spelling.
+//   - SPREAD_CORRECTION: gap-repair creates (may close the spread on the
+//     market side); LAST-FILL-GUARD bypasses these CREATEs per-action.
+//   - GAP_EVACUATION: in-band rotation UPDATEs proven violation-reducing at
+//     plan-build (B-stamp) or re-proven live; LAST-FILL-GUARD bypasses only
+//     stamped/validated ones.
+const COW_ORIGINS = Object.freeze({
+    SPREAD_CORRECTION: 'spread-correction',
+    GAP_EVACUATION: 'gap-evacuation'
+});
+
 // Defaults applied when instantiating an OrderManager with minimal configuration.
 // These values are used when a parameter is not explicitly provided in the bot config.
 let DEFAULT_CONFIG = {
@@ -2219,6 +2233,7 @@ Object.freeze(ORDER_TYPES);
 Object.freeze(ORDER_STATES);
 Object.freeze(REBALANCE_STATES);
 Object.freeze(COW_ACTIONS);
+Object.freeze(COW_ORIGINS);
 Object.freeze(TIMING);
 Object.freeze(GRID_LIMITS);
 Object.freeze(GRID_LIMITS.GRID_COMPARISON);
@@ -2254,5 +2269,5 @@ Object.freeze(MARKET_ADAPTER.AMAS);
 Object.freeze(MARKET_ADAPTER);
 Object.freeze(CREDENTIAL_PROMPTS);
 
-export { ORDER_TYPES, ORDER_STATES, REBALANCE_STATES, COW_ACTIONS, DEFAULT_CONFIG, TIMING, RANGE_QUALITY, GRID_LIMITS, LOG_LEVEL, LOGGING_CONFIG, INCREMENT_BOUNDS, FEE_PARAMETERS, CR_ZONES, DEFAULT_TARGET_CR, API_LIMITS, FILL_PROCESSING, MAINTENANCE, NODE_MANAGEMENT, PIPELINE_TIMING, UPDATER, LAUNCHER, COW_PERFORMANCE, NATIVE_CLIENT, MARKET_ADAPTER, BUILD_DIR, BTS_PRECISION, DAEMON_ERRORS, DAEMON_CODES, CREDENTIAL_PROMPTS, buildDefaultGeneralSettings }
+export { ORDER_TYPES, ORDER_STATES, REBALANCE_STATES, COW_ACTIONS, COW_ORIGINS, DEFAULT_CONFIG, TIMING, RANGE_QUALITY, GRID_LIMITS, LOG_LEVEL, LOGGING_CONFIG, INCREMENT_BOUNDS, FEE_PARAMETERS, CR_ZONES, DEFAULT_TARGET_CR, API_LIMITS, FILL_PROCESSING, MAINTENANCE, NODE_MANAGEMENT, PIPELINE_TIMING, UPDATER, LAUNCHER, COW_PERFORMANCE, NATIVE_CLIENT, MARKET_ADAPTER, BUILD_DIR, BTS_PRECISION, DAEMON_ERRORS, DAEMON_CODES, CREDENTIAL_PROMPTS, buildDefaultGeneralSettings }
 

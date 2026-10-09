@@ -91,7 +91,7 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
-import { ORDER_TYPES, ORDER_STATES, COW_ACTIONS, DEFAULT_CONFIG, GRID_LIMITS, TIMING, PIPELINE_TIMING, MARKET_ADAPTER, INCREMENT_BOUNDS } from '../constants.js';
+import { ORDER_TYPES, ORDER_STATES, COW_ACTIONS, COW_ORIGINS, DEFAULT_CONFIG, GRID_LIMITS, TIMING, PIPELINE_TIMING, MARKET_ADAPTER, INCREMENT_BOUNDS } from '../constants.js';
 import * as Format from './format.js';
 import {
     resolveMaxAsymmetryFactor,
@@ -3358,7 +3358,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                     : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
                 'warn'
             );
-            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: 'spread-correction' };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: COW_ORIGINS.SPREAD_CORRECTION };
         }
 
         const orphanedIds = new Set(orphanedVirtualCandidates.map((o) => o.id));
@@ -3377,7 +3377,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             // arming the refresh for it. A missing context or an empty rail is
             // genuinely structural.
             const stallHint = (ctx && Number(ctx.budget) <= 0) ? 'unfunded' : 'no-candidates';
-            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint, origin: 'spread-correction' };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint, origin: COW_ORIGINS.SPREAD_CORRECTION };
         }
         const precisionEpsilon = getPrecisionSlack(ctx.precision, 1);
 
@@ -3433,7 +3433,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         }
 
         if (prioritizedTargets.length === 0) {
-            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: 'spread-correction' };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: COW_ORIGINS.SPREAD_CORRECTION };
         }
 
         let remainingBudget = availableFund;
@@ -3569,5 +3569,5 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             );
         }
 
-        return { ordersToPlace, ordersToUpdate: [], plannedCount: prioritizedTargets.length, ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: 'spread-correction' };
+        return { ordersToPlace, ordersToUpdate: [], plannedCount: prioritizedTargets.length, ...(boundaryIdx === undefined ? {} : { boundaryIdx }), origin: COW_ORIGINS.SPREAD_CORRECTION };
     }

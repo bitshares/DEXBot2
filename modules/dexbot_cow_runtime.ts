@@ -71,6 +71,7 @@ function hasSlotPriceCollision(items: SlotLike[], targetPrice: number, precision
 import * as constantsModule from './constants.js';
 const {
     COW_ACTIONS,
+    COW_ORIGINS,
     COW_PERFORMANCE,
     ORDER_STATES,
     ORDER_TYPES,
@@ -2272,9 +2273,9 @@ function buildActionsFromPlan(_bot: BotLike, plan: JsonObj | JsonObj[]): CowActi
         // per-action origin there is safe. Other plan origins keep riding
         // non-UPDATE actions unchanged.
         if (action?.type !== COW_ACTIONS.UPDATE) {
-            return planOrigin === 'gap-evacuation' ? { ...action } : { ...action, origin: planOrigin };
+            return planOrigin === COW_ORIGINS.GAP_EVACUATION ? { ...action } : { ...action, origin: planOrigin };
         }
-        if (planOrigin !== 'gap-evacuation') return { ...action, origin: planOrigin };
+        if (planOrigin !== COW_ORIGINS.GAP_EVACUATION) return { ...action, origin: planOrigin };
         if (!hasFrozenGeometry) return { ...action, origin: planOrigin };
         // Route through the real stampler: geometry (source in-band, dest
         // rail), bit-exact non-growing size (side precision) and outward
@@ -3732,8 +3733,8 @@ async function updateOrdersOnChainBatchCOWBody(
                     try {
                         const actionOrigin = action?.origin;
                         const batchOrigin = cowResult?.origin;
-                        const isCorrectionCreate = actionOrigin === 'spread-correction'
-                            || (actionOrigin == null && batchOrigin === 'spread-correction');
+                        const isCorrectionCreate = actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
+                            || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION);
                         if (!isCorrectionCreate) {
                             const { check, refreshed } = runLastFillGuardCheck(bot, createPrice, order.size, order.type, lastFillGuardStats, true);
                             if (refreshed) lastFillGuardPivotRefreshed = true;
@@ -3932,7 +3933,7 @@ async function updateOrdersOnChainBatchCOWBody(
                         try {
                             let bypassedEvacuation = false;
                             const rotationOrigin = action?.origin;
-                            if (rotationOrigin === 'gap-evacuation') {
+                            if (rotationOrigin === COW_ORIGINS.GAP_EVACUATION) {
                                 const frozenB = Number(action?.evacBoundary);
                                 const frozenG = Number(action?.evacGapSlots);
                                 let stampUsable = Number.isFinite(frozenB) && Number.isFinite(frozenG);
@@ -5491,8 +5492,8 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
                 // Spread-correction CREATE bypass (mirrors the build loop:
                 // per-action origin, batch origin as back-compat fallback).
                 const actionOrigin = action?.origin;
-                if (actionOrigin === 'spread-correction'
-                    || (actionOrigin == null && batchOrigin === 'spread-correction')) {
+                if (actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
+                    || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION)) {
                     if (stats) stats.bypassed = (Number(stats.bypassed) || 0) + 1;
                     continue;
                 }
@@ -5541,7 +5542,7 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
                 // The gate must not invent a block it cannot prove —
                 // especially not on an op the build loop already allowed.
                 const rotOrigin = action?.origin;
-                if (rotOrigin === 'gap-evacuation'
+                if (rotOrigin === COW_ORIGINS.GAP_EVACUATION
                     && Number.isFinite(Number(action?.evacBoundary))
                     && Number.isFinite(Number(action?.evacGapSlots))) {
                     if (stats) stats.bypassed = (Number(stats.bypassed) || 0) + 1;

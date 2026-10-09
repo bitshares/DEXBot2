@@ -41,6 +41,7 @@ import {
     ORDER_STATES,
     ORDER_TYPES,
     COW_ACTIONS,
+    COW_ORIGINS,
     GRID_LIMITS
 } from '../../constants.js';
 import {
@@ -479,7 +480,7 @@ function stampGapEvacuationRotation(action: CowAction, sourceMaster: ManagedOrde
     try { stampPrecision = assets ? getPrecisionByOrderType(assets, type) : null; } catch { stampPrecision = null; }
     const check = isEvacuationRotationAllowed(sourceMaster?.price, sourceMaster?.size, destPrice, destSize, type, stampPrecision);
     if (!check.allowed) return action;
-    return { ...action, origin: 'gap-evacuation', evacBoundary: b, evacGapSlots: Math.floor(g) };
+    return { ...action, origin: COW_ORIGINS.GAP_EVACUATION, evacBoundary: b, evacGapSlots: Math.floor(g) };
 }
 
 
