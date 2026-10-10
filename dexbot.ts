@@ -50,7 +50,7 @@ const __dirname = _esmDirname(__filename);
  * Trading:   dexbot test <bot> | drystart <bot> | reset {all|<bot>}
  * Config:    dexbot bot | key | enable {all|<bot>} | disable {all|<bot>} | default | update
  * Analysis:  dexbot order [<bot>] [--export] | export <bot> | credit [<bot>]
- *            dexbot tv <target> | dw <target>
+ *            dexbot tv <target> | dw <target> | git
  * Files:     dexbot clear | clear-orders | clear-market-adapter | clear-all
  *
  * NPM SCRIPTS (alternative invocation):
@@ -169,7 +169,7 @@ if (typeof credentialPolicy.checkPolicyFileSecurity === 'function') credentialPo
 const PROFILES_BOTS_FILE = PATHS.PROFILES.BOTS_JSON;
 const PROFILES_DIR = PATHS.PROFILES_DIR;
 
-const CLI_COMMANDS = ['start', 'test', 'reset', 'default', 'disable', 'enable', 'drystart', 'key', 'bot', 'pm2', 'update', 'export', 'order', 'credit', 'tv', 'dw', 'pnl', 'clear', 'clear-orders', 'clear-market-adapter', 'clear-all', 'status', 'unlock', 'delete', 'stop', 'restart', 'reload', 'help'];
+const CLI_COMMANDS = ['start', 'test', 'reset', 'default', 'disable', 'enable', 'drystart', 'key', 'bot', 'pm2', 'update', 'export', 'order', 'credit', 'tv', 'dw', 'pnl', 'git', 'clear', 'clear-orders', 'clear-market-adapter', 'clear-all', 'status', 'unlock', 'delete', 'stop', 'restart', 'reload', 'help'];
 const COMMAND_ALIASES: Record<string, string> = { orders: 'order', keys: 'key', bots: 'bot', stat: 'status', stats: 'status', start: 'unlock', defaults: 'default', stp: 'stop', stopall: 'stop', restartall: 'restart', reloadall: 'reload' };
 const CLI_HELP_FLAGS = ['-h', '--help'];
 const CLI_EXAMPLES_FLAG = '--cli-examples';
@@ -186,6 +186,7 @@ const CLI_EXAMPLES = [
     { title: 'Update DEXBot2', command: 'dexbot update', notes: 'Fetches latest code, updates dependencies, and restarts PM2.' },
     { title: 'Export bot trades for local analysis', command: 'dexbot export <bot>', notes: 'Exports trading history and settings to CSV/JSON (see analysis/).' },
     { title: 'Analyze persisted order grids', command: 'dexbot order', notes: 'Runs the order analyzer across the orders directory (<profiles>/orders) and prints spread/increment/funds/distribution metrics. Add a bot key to render only that bot, and --export for an HTML report.' },
+    { title: 'Analyze git history', command: 'dexbot git', notes: 'Runs scripts/analyze-git.ts over the repository git history and writes an added/deleted-lines HTML chart (repo-stats.html) into the analysis charts directory. Source checkouts only.' },
     { title: 'Show live credit/MPA positions', command: 'dexbot credit', notes: 'Queries get_margin_positions + get_credit_deals_by_borrower per preferredAccount and prints debt/collateral sums plus one Curr. CR line per whitelisted pair (active CR, else borrow-now CR vs funds avail. on the offer) and one Avar. CR line per bot. CR covers only pairs whitelisted in bots.json and listed on the current credit offer. Add a bot key to render only that bot.' },
     { title: 'TradingView chart for a bot, pool, or pair', command: 'dexbot tv <bot|pool-id|AssetA/AssetB> --month 3', notes: 'Fetches 1h candles for N months (default 3, pool-first with orderbook fallback; --feed charts MPA price-feed history) and writes an auto-named HTML chart.' },
     { title: 'PnL report for a bot or blockchain account', command: 'dexbot pnl <bot|account|1.2.x> --month 3 [--pair BASE/QUOTE]', notes: 'Resolves a local bot profile first, then the chain account, analyzes its fills for the requested window and writes a self-contained HTML PnL report.' },
@@ -254,6 +255,7 @@ function printCLIUsage() {
             ['tv <target>', 'TradingView chart: 1h candles for <bot|pool-id|AssetA/AssetB> over --month N (default 3).'],
             ['dw <target>', 'Dynamic-weight research chart: same targets/flags as tv (see analysis/).'],
             ['pnl <account>', 'PnL HTML report for a bot/account over --month N, optional --pair BASE/QUOTE filter.'],
+            ['git', 'Analyze repository git history and write an added/deleted-lines HTML chart (source checkouts only).'],
         ]],
         ['Files', [
             ['clear', 'Delete <profiles>/logs/*.log, *.log.N and *.jsonl* (audit trail included). Stop the runtime first.'],
@@ -1070,6 +1072,26 @@ async function handleCLICommands() {
             });
             if (result.error) {
                 console.error(`credit: ${result.error.message}`);
+                process.exit(1);
+            }
+            process.exit(result.status ?? 0);
+            return true;
+        }
+        case 'git': {
+            // Repository statistics analyzer (scripts/analyze-git.ts): parses
+            // git history and writes analysis/charts/repo-stats.html. Git-only;
+            // it requires a source checkout (.git present).
+            const { spawnSync } = require('child_process') as typeof import('node:child_process');
+            const scriptArgs = buildRuntimeScriptArgs({
+                codeRoot: __dirname,
+                scriptSegments: ['scripts', 'analyze-git'],
+            });
+            const result = spawnSync(Config.EXEC_PATH, scriptArgs, {
+                cwd: PATHS.PROJECT_ROOT,
+                stdio: 'inherit',
+            });
+            if (result.error) {
+                console.error(`git: ${result.error.message}`);
                 process.exit(1);
             }
             process.exit(result.status ?? 0);

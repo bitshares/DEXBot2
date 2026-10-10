@@ -257,9 +257,8 @@ class RepoAnalyzer {
      *
      * Displays:
      * 1. Summary stats: Total commits, lines added/deleted, net change
-     * 2. File listing: All tracked files with their change counts
-     * 3. Add/Delete ratio: Metric for code quality (more adds vs deletes)
-     * 4. Daily activity: Last 10 days of changes (trend analysis)
+     * 2. Add/Delete ratio: Metric for code quality (more adds vs deletes)
+     * 3. Daily activity: Last 10 days of changes (trend analysis)
      *
      * Output format uses Unicode box drawing and padding for readability
      * Suitable for terminal display with fixed-width fonts
@@ -278,23 +277,6 @@ class RepoAnalyzer {
         console.log(`  Total Lines Deleted:     ${this.stats.totalDeleted.toLocaleString()}`);
         console.log(`  Total Lines Changed:     ${this.stats.totalEdits.toLocaleString()}`);
         console.log(`  Net Change:              ${(this.stats.totalAdded - this.stats.totalDeleted).toLocaleString()}`);
-        console.log();
-
-        // All tracked files
-        console.log('📋 All Tracked Files:');
-        console.log('─'.repeat(80));
-        console.log(`${'File'.padEnd(45)} ${'Added'.padStart(10)} ${'Deleted'.padStart(10)} ${'Total'.padStart(10)}`);
-        console.log('─'.repeat(80));
-
-        const allFiles = Object.entries(this.stats.files)
-            .sort((a, b) => b[1].edits - a[1].edits);
-
-        for (const [file, stats] of allFiles) {
-            const fileName = file.length > 43 ? '...' + file.slice(-40) : file;
-            console.log(
-                `${fileName.padEnd(45)} ${stats.added.toString().padStart(10)} ${stats.deleted.toString().padStart(10)} ${stats.edits.toString().padStart(10)}`
-            );
-        }
         console.log();
 
          // Add/Delete ratio

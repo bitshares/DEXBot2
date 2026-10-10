@@ -255,6 +255,7 @@ the canonical name is preferred in scripts and docs.
 | `dexbot tv <target>` | — | TradingView 1h chart for `<bot|pool-id|AssetA/AssetB>` over `--month N` (default 3) |
 | `dexbot dw <target>` | — | Dynamic-weight research chart: same targets/flags as `tv` |
 | `dexbot pnl <account>` | — | HTML PnL report for a bot/account over `--month N`, optional `--pair BASE/QUOTE` filter |
+| `dexbot git` | — | Analyze repository git history and write an added/deleted-lines HTML chart (`repo-stats.html`; source checkouts only) |
 | `dexbot status` | `stat`, `stats` | Unified runtime health — daemon, adapter, bots |
 | `dexbot start` | `unlock` | Run credential daemon + bot (equivalent to running the `unlock` runtime, `dist/unlock.js`) |
 | `dexbot stop` | `stp`, `stopall` | Stop the monolithic runtime (unlock mode) |

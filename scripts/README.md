@@ -209,11 +209,17 @@ through `dist/scripts/run-tests.js` (with a per-test watchdog and diagnostics
 summary). See [tests/README.md](../tests/README.md) for details.
 
 ### Repository Statistics Analyzer
-**File:** `analyze-git.ts`
+**File:** `analyze-git.ts` (CLI: `dexbot git`)
 **Purpose:** Analyze git history and generate a chart of lines added vs deleted by file.
+**Git-only:** Requires a source checkout (`.git` directory); it does not work with global npm installs.
 ```bash
+# Preferred CLI entry point
+dexbot git
+
+# Direct invocation
 node dist/scripts/analyze-git.js
 ```
+The report is written to `analysis/charts/repo-stats.html`.
 
 ### Explicit-`any` Budget Ratchet
 **File:** `check_any.ts`
