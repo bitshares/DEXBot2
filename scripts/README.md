@@ -7,7 +7,7 @@ This guide provides a terminal-focused reference for the maintenance and diagnos
 ## 🛠️ CORE MAINTENANCE
 
 ### Update DEXBot2
-**File:** `update.ts` (shim: `update.js`)
+**File:** `update.ts` (shim: `update.js`), install-layout detection in `update_layout.ts`
 **Purpose:** Perform a safe, production-ready update.
 ```bash
 # Pull latest code, install deps, and restart PM2
@@ -240,6 +240,20 @@ summary). See [tests/README.md](../tests/README.md) for details.
 node dist/scripts/analyze-git.js
 ```
 
+### Explicit-`any` Budget Ratchet
+**File:** `check_any.ts`
+**Purpose:** Count explicit `any` tokens on code lines (comments/JSDoc excluded) and fail when the count rises above the committed budget in `any-budget.json`, keeping `any` removal monotonic.
+```bash
+# Compare against any-budget.json
+npm run check:any
+
+# Print per-file counts
+npm run check:any:list
+
+# Write the current count as the new budget
+npm run check:any:update
+```
+
 ### Credit Renewal Test
 **File:** `test-credit-renewal.ts`
 **Purpose:** Test credit offer renewal for a specific bot against the live chain.
@@ -340,6 +354,13 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm test` | Build + compile tests + run full suite (excludes live-chain tests) |
 | `npm run test:live` | Build + compile tests + run full suite including live-chain tests |
 
+### Code Quality
+| Command | Purpose |
+|:---|:---|
+| `npm run check:any` | Fail if the explicit-`any` count rises above `any-budget.json` |
+| `npm run check:any:list` | Print per-file explicit-`any` counts |
+| `npm run check:any:update` | Write the current explicit-`any` count as the new budget |
+
 ### Runtime
 | Command | Purpose |
 |:---|:---|
@@ -369,6 +390,8 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run market-adapter:fetch-cex-synthetic` | Fetch CEX synthetic data for market adapter |
 | `npm run analysis:tradingview` | TradingView-style chart export |
 | `npm run analysis:trade-pnl` | Trade PnL analysis from fill data |
+| `npm run analysis:grid-check` | Last-fill-guard check (`grid_correction_check.ts`) |
+| `npm run analysis:resolve-accounts` | Batch-resolve on-chain bot accounts (`resolve_bot_accounts.ts`) |
 | `npm run ama:chart:lp-local` | Generate local LP comparison chart |
 | `npm run lp:chart` | Generate uPlot LP chart |
 | `npm run test:credit-renewal` | Test credit offer renewal for a specific bot |

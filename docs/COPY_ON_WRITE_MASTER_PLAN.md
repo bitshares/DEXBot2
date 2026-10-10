@@ -233,7 +233,7 @@ syncFromMaster(masterGrid, orderId, masterVersion?) {
 | `WorkingGrid.buildDelta(masterGrid)` | Delta between master and working copy (`modules/order/working_grid.ts:205`, delegating to `utils/order.ts`) |
 | `_commitWorkingGrid(workingGrid, indexes, boundary, options = {})` | Atomic swap to master |
 | `_setRebalanceState(state)` | Track rebalance state |
-| `_currentWorkingGrid` | Reference to working grid during rebalance for fill sync |
+| `_currentWorkingGridStack` | Stack of active working-grid references during rebalance for fill sync; peek the innermost via `_peekWorkingGrid()`, managed with `_pushWorkingGridRef`/`_popWorkingGridRef`/`_releaseWorkingGridRef`/`_clearWorkingGridRef` |
 | `_applyOrderUpdate(order, context, options = {})` | Lock-free order update (immutable swap); routes fill sync to `_syncWorkingGridFromMasterMutation` |
 | `_syncWorkingGridFromMasterMutation(orderId, context)` | Adapter: planning-state gate → `markStale()` + `syncFromMaster()` → sync error handling |
 

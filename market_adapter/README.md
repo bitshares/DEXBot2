@@ -621,7 +621,8 @@ market_adapter/
 |   |-- native_history.ts          native BitShares market history fetch
 |   |-- file_lock.ts               single-instance file lock
 |   |-- file_json_cache.ts         write-through JSON read cache
-|   |-- data_discovery.ts          data directory auto-discovery
+|   |-- month_shards.ts            calendar-month shard naming + coverage-span primitives (shared by candle and fills caches)
+|   |-- data_discovery.ts          data directory auto-discovery + shard-family assembly
 |   |-- atomic_write.ts            atomic file write utility
 |   |-- dynamic_grid_snapshot.ts   dynamic grid snapshot helpers
 |-- data/                          runtime candle caches and exports

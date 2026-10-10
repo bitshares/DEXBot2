@@ -91,7 +91,7 @@ Most runners expect candle data. Two paths to get it:
 # Via the market adapter LP exporter (recommended for blockchain-backed candles)
 node dist/market_adapter/inputs/fetch_lp_data.js --pool 133 --precA 4 --precB 5 --interval 1h --lookback 26280h
 
-# Via the analysis fetcher (uses Kibana source directly)
+# Via the analysis fetcher (shares the month-shard candle cache with dexbot tv/dw)
 node dist/analysis/ama_fitting/fetch_lp_candles.js --pool 1.19.133 \
   --assetA <ASSET_A> --assetAId <asset_a_id> --assetAPrecision <n> \
   --assetB <ASSET_B> --assetBId <asset_b_id> --assetBPrecision <n>
@@ -530,7 +530,7 @@ Details: [bot_fitting/README.md](bot_fitting/README.md)
 | `account_resolver.ts` | Account resolution for all tools: `preferredAccount` / `--account` → `1.2.x`, stamping the result into `profiles/bots.json` |
 | `chain_pool.ts` | Ephemeral read-only chain client over the built-in node pool (account + asset lookups) |
 | `fills_source.ts` | Shared `fill_order` Kibana fetch/query and the static asset-precision table + on-chain cache |
-| `fills_cache.ts` | Per-account month-shard cache for `fill_order` fetches (settled months reused, unsettled tail refreshed) |
+| `fills_cache.ts` | Per-account month-shard cache for `fill_order` fetches (settled months reused, unsettled tail refreshed); month-shard naming comes from `market_adapter/utils/month_shards.ts` |
 | `pnl_report.ts` | Self-contained HTML PnL renderer: hero, card blocks, metrics grid, realized-lots table |
 
 On-chain account and asset lookups in the fill-based tools go through `account_resolver.ts` / `fills_source.ts` (both built on `chain_pool.ts`): tool scripts must not open their own read-only clients or carry their own node list. The batch backfill `resolve_bot_accounts.ts` is the exception — it reuses the production chain client over one connection.
