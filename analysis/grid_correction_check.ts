@@ -791,7 +791,7 @@ async function main() {
     process.exit(violations.length > 0 ? 2 : 0);
 }
 
-export { isLastFillGuardBlocked, classifyFills, aggregateByOrder, detectViolations, TradeFill, Violation, AggregatedOrder };
+export { isLastFillGuardBlocked, classifyFills, TradeFill, Violation };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     main().catch(e => {

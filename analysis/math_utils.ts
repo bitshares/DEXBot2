@@ -31,6 +31,49 @@ function calcStdDev(arr: number[]) {
 }
 
 /**
+ * Median of a numeric array (average of the two middle values for even
+ * lengths). Returns `null` for an empty array. Shared by the analysis
+ * backtests instead of each keeping a local copy.
+ */
+function median(values: number[]): number | null {
+    if (values.length === 0) return null;
+    const s = values.slice().sort((a, b) => a - b);
+    const mid = s.length >> 1;
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function quantize(value: number, quantum: number | null | undefined): number {
+    if (quantum == null || !Number.isFinite(quantum) || quantum <= 0) return value;
+    return Math.round(value / quantum) * quantum;
+}
+
+/**
+ * Evenly spaced geometric progression from `min` to `max` (endpoints forced).
+ * Values are optionally snapped to `quantum` and clamped back into the range,
+ * rounded to `decimals`, deduped and sorted ascending. Single home for the
+ * helper previously copied into analyze_lambda_vs_slow and
+ * optimizer_high_resolution (which used different rounding precision).
+ */
+function geometricRange(
+    min: number,
+    max: number,
+    count: number,
+    { decimals = 10, quantum = null as number | null } = {},
+) {
+    const out: number[] = [];
+    const ratio = Math.pow(max / min, 1 / (count - 1));
+    for (let i = 0; i < count; i++) {
+        let v = min * Math.pow(ratio, i);
+        if (i === 0) v = min;
+        if (i === count - 1) v = max;
+        v = quantize(v, quantum);
+        v = Math.max(min, Math.min(max, v));
+        out.push(parseFloat(v.toFixed(decimals)));
+    }
+    return [...new Set(out)].sort((a, b) => a - b);
+}
+
+/**
  * Parse a candle JSON file with format detection:
  * flat array → {candles: [...]} → {data: [...]}
  */
@@ -52,6 +95,8 @@ function loadCandleFile(filePath: string): CandleFile {
 export {
     range,
     calcStdDev,
+    geometricRange,
+    median,
     getCandleClose,
     getCandleTimestamp,
     normalizeCandle,

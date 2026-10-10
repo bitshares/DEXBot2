@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 
 const { BitShares, waitForConnected } = require('../modules/bitshares_client');
 const { getErrorMessage } = require('../modules/utils/errors');
+const { parseChainTimeToMs } = require('../market_adapter/interval_utils');
 
 const POOL_ID = process.argv.includes('--pool')
     ? process.argv[process.argv.indexOf('--pool') + 1]
@@ -41,12 +42,6 @@ interface HistoryRow {
 
 function fmt(obj: unknown): string {
     try { return JSON.stringify(obj); } catch (_) { return String(obj); }
-}
-
-function parseChainTimeToMs(timeStr: unknown): number {
-    if (!timeStr) return Number.NaN;
-    const s = String(timeStr);
-    return Date.parse(s.endsWith('Z') ? s : `${s}Z`);
 }
 
 function extractReceived(row: unknown) {

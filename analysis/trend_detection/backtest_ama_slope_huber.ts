@@ -44,7 +44,7 @@ import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strate
 import { computeAmaSlopeClipThreshold } from '../../market_adapter/core/strategies/dynamic_weight_series.js';
 import { createHuberEstimator, type HuberScaleMode, type HuberEstimator } from './huber_scale_variants.js';
 import { simulateGridResetSeries, GRID_RESET_BOOTSTRAP } from '../tradingview/grid_reset_sim.js';
-import { normalizeCandle, range } from '../math_utils.js';
+import { normalizeCandle, range, median } from '../math_utils.js';
 import { parseListOrRange } from '../bot_fitting/shared_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
@@ -202,13 +202,6 @@ function loadCandles(input: string) {
 }
 
 // ─── Small stats helpers ─────────────────────────────────────────────────────
-
-function median(values: number[]): number | null {
-    if (values.length === 0) return null;
-    const s = values.slice().sort((a, b) => a - b);
-    const mid = s.length >> 1;
-    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
 
 function percentile(values: number[], pct: number): number | null {
     if (values.length === 0) return null;
@@ -670,4 +663,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { run(); } catch (err) { console.error(err); process.exit(1); }
 }
 
-export { loadCandles, crossCorrelationLag, reversalLag, analyzeLookback }
+export { loadCandles }

@@ -235,8 +235,6 @@ function subtractRanges(span: Span, covered: Span[]): Span[] {
 }
 
 export {
-    SHARD_MARKER,
-    SHARD_KEY_RE,
     shardKeyForTimestamp,
     shardBoundsForKey,
     shardKeysForRange,

@@ -7,14 +7,14 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strategies/ama.js';
 import { computeHuberWindowSlopePct } from '../../market_adapter/core/strategies/ama_slope_model.js';
 import { range } from '../math_utils.js';
-import { parseListOrRange, loadLpData, fmt } from './shared_utils.js';
+import { parseListOrRange, loadLpData, fmt, loadAmaStrategies } from './shared_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
 import { GRID_LIMITS, MARKET_ADAPTER } from '../../modules/constants.js';
 // Production grid geometry + slope-ratio offset — shared with bot_fitting so
 // both tools build byte-identical grids for identical params (#12).
 import { buildProductionGrid, computeGridPriceOffsetPct } from './backtest_bot_fitting.js';
-const { readJSON, writeJSON } = getStorage();
+const { writeJSON } = getStorage();
 
 /**
  * AMA SWEEP BACKTEST — persistent grid simulation
@@ -188,22 +188,6 @@ interface GridOrder {
     cooldownUntil: number;
     size: number;
     [key: string]: unknown;
-}
-
-function loadAmaStrategies(resultsPath: string): AmaStrategy[] {
-    const json = readJSON(resultsPath) as { meta?: { amas?: Record<string, { er?: unknown; fast?: unknown; slow?: unknown; label?: unknown }> } };
-    const amas = json.meta?.amas;
-    if (!amas) throw new Error('No meta.amas found in results file.');
-
-    const out: AmaStrategy[] = [];
-    for (const [key, val] of Object.entries(amas)) {
-        const v = val as { er?: unknown; fast?: unknown; slow?: unknown; label?: unknown };
-        if (!v || !Number.isFinite(Number(v.er))) continue;
-        out.push({ id: key, name: String(v.label || key), er: Number(v.er), fast: Number(v.fast), slow: Number(v.slow) });
-    }
-    out.sort((a, b) => a.id.localeCompare(b.id));
-    if (out.length === 0) throw new Error('No valid AMA strategies found');
-    return out;
 }
 
 // ── Order sizing with weight profiles ────────────────────────────────────────
@@ -817,7 +801,7 @@ async function run() {
     const loaded = loadLpData(cfg.dataPath!);
     const candles = loaded.candles;
     const closes = candles.map((c) => (c as { close: number }).close);
-    const strategies = loadAmaStrategies(cfg.resultsPath!);
+    const strategies = loadAmaStrategies(cfg.resultsPath!, { sort: true });
 
     const weightEntries = Object.entries(WEIGHT_PROFILES);
     const totalCombos = cfg.spreadValues.length * cfg.incrementValues.length *
@@ -1033,5 +1017,5 @@ if (isMainThread && process.argv[1] && import.meta.url === pathToFileURL(process
     run().catch((err) => { console.error(err); process.exit(1); });
 }
 
-export { WEIGHT_PROFILES, allocateFundsByWeights, buildGrid, markInventoryAtPrice, simulatePersistentGrid, sweepOneAma }
+export { WEIGHT_PROFILES, allocateFundsByWeights, buildGrid, simulatePersistentGrid, sweepOneAma }
 

@@ -200,4 +200,4 @@ class HurstAnalyzer {
     }
 }
 
-export { HurstAnalyzer, classifyHurst, computeRS }
+export { HurstAnalyzer, classifyHurst }

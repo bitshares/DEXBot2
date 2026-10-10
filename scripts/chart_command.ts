@@ -65,7 +65,7 @@ import { fetchMarketCandlesSequentially } from '../market_adapter/inputs/fetch_b
 import { fetchFeedCandlesSequentially } from '../market_adapter/inputs/kibana_feed_source.js';
 import { muteChainLogs } from '../modules/utils/chain_logs.js';
 import { isSameBotName, sanitizeKey } from '../modules/utils/sanitize_key.js';
-import { slugPart } from '../market_adapter/interval_utils.js';
+import { slugPart, parseChainTimeToMs } from '../market_adapter/interval_utils.js';
 import { monthsToHours } from '../modules/utils/time_range.js';
 
 const INTERVAL_SECONDS = 3600;
@@ -188,7 +188,7 @@ async function pickFeedContext(symA: string, symB: string, source: string, bitsh
 
 function feedAgeMs(ctx: { feedPublicationTime: string | null }, nowMs: number = Date.now()): number | null {
     if (!ctx?.feedPublicationTime) return null;
-    const ts = Date.parse(ctx.feedPublicationTime.endsWith('Z') ? ctx.feedPublicationTime : `${ctx.feedPublicationTime}Z`);
+    const ts = parseChainTimeToMs(ctx.feedPublicationTime);
     if (!Number.isFinite(ts)) return null;
     return nowMs - ts;
 }

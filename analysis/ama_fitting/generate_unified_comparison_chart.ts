@@ -264,5 +264,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     run();
 }
 
-export { DEFAULT_STRATEGIES, generateChart, parseArgs, run, showHelp }
+export { DEFAULT_STRATEGIES, parseArgs, run, showHelp }
 

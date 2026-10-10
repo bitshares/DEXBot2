@@ -325,4 +325,4 @@ async function main() {
 
 main().catch((err: unknown) => { console.error(err); process.exit(1); });
 
-export { main, parseArgs, loadJsonMeta, inferTitle }
+export { main, parseArgs }

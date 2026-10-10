@@ -316,6 +316,17 @@ function pruneStaleTail(candles: unknown, threshold: number) {
     return keepCount > 0 ? sorted.slice(0, keepCount) : [];
 }
 
+/**
+ * Collision resolver for `mergeCandles`: on a duplicate timestamp keep the
+ * candle with the higher volume (index 5). Shared by the window cache and
+ * the data-discovery loader so both pick the same winner.
+ */
+function higherVolumeWins(existing: unknown, incoming: unknown): unknown {
+    const a = existing as ArrayLike<unknown> | null | undefined;
+    const b = incoming as ArrayLike<unknown> | null | undefined;
+    return Number(b?.[5] || 0) > Number(a?.[5] || 0) ? incoming : existing;
+}
+
 function mergeCandles(a: unknown, b: unknown, { onCollision }: { onCollision?: (existing: unknown, incoming: unknown) => unknown } = {}) {
     const map = new Map<unknown, number[]>();
     for (const c of [...((a as unknown[]) || []), ...((b as unknown[]) || [])]) {
@@ -332,5 +343,5 @@ function mergeCandles(a: unknown, b: unknown, { onCollision }: { onCollision?: (
     return [...map.values()].sort((x, y) => (x[0] as number) - (y[0] as number));
 }
 
-export { getCandleClose, getCandleTimestamp, normalizeCandle, tradesToCandles, detectMissingCandleTimestamps, fillCandleGaps, detectStaleTail, pruneStaleTail, mergeCandles }
+export { getCandleClose, getCandleTimestamp, normalizeCandle, tradesToCandles, detectMissingCandleTimestamps, fillCandleGaps, detectStaleTail, pruneStaleTail, mergeCandles, higherVolumeWins }
 

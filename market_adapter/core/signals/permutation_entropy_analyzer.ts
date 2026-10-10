@@ -269,4 +269,4 @@ class PermutationEntropyAnalyzer {
     }
 }
 
-export { PermutationEntropyAnalyzer, ordinalPatternKey }
+export { PermutationEntropyAnalyzer }

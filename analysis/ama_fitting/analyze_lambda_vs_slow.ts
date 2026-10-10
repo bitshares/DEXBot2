@@ -11,6 +11,7 @@ import { PATHS } from '../../modules/paths.js';
 import { MARKET_ADAPTER } from '../../modules/constants.js';
 import { getErrorMessage } from '../../modules/utils/errors.js';
 import { uplotInlineTags } from '../chart_utils.js';
+import { geometricRange } from '../math_utils.js';
 
 /**
  * LAMBDA vs SLOW ANALYSIS
@@ -126,20 +127,6 @@ function calcTotalRelativeDistance(amaValues: number[], candles: Array<{ close: 
         total += Math.abs(candles[i].close - ama) / ama;
     }
     return total;
-}
-
-// ── Geometric range ─────────────────────────────────────────────────────────────
-
-function geometricRange(min: number, max: number, count: number): number[] {
-    const ratio = Math.pow(max / min, 1 / (count - 1));
-    const out: number[] = [];
-    for (let i = 0; i < count; i++) {
-        let v = min * Math.pow(ratio, i);
-        if (i === 0) v = min;
-        if (i === count - 1) v = max;
-        out.push(parseFloat(v.toFixed(10)));
-    }
-    return [...new Set(out)].sort((a, b) => a - b);
 }
 
 // ── Precompute (movement, distance) per slow ───────────────────────────────────

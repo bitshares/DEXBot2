@@ -10,7 +10,7 @@ import { toIntervalLabel } from '../../market_adapter/interval_utils.js';
 import { generateHTML } from '../../market_adapter/lp_chart_core.js';
 import { PATHS } from '../../modules/paths.js';
 import { ensureDir } from '../../modules/order/utils/system.js';
-import { range } from '../math_utils.js';
+import { range, geometricRange } from '../math_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { normalizeAssetSymbol } from '../../modules/utils/asset_symbols.js';
 const { readJSON, writeJSON } = getStorage();
@@ -65,25 +65,6 @@ function cloneObjectives() {
 }
 
 // ── Parameter ranges ──────────────────────────────────────────────────────────
-function quantize(value: number, quantum: number | null): number {
-    if (quantum == null || !Number.isFinite(quantum) || quantum <= 0) return value;
-    return Math.round(value / quantum) * quantum;
-}
-
-function geometricRange(min: number, max: number, count: number, quantum: number | null = null): number[] {
-    const out: number[] = [];
-    const ratio = Math.pow(max / min, 1 / (count - 1));
-    for (let i = 0; i < count; i++) {
-        let v = min * Math.pow(ratio, i);
-        if (i === 0) v = min;
-        if (i === count - 1) v = max;
-        v = quantize(v, quantum);
-        v = Math.max(min, Math.min(max, v));
-        out.push(parseFloat(v.toFixed(6)));
-    }
-    return [...new Set(out)].sort((a, b) => a - b);
-}
-
 interface DataMeta {
     intervalSeconds?: unknown;
     pool?: unknown;
@@ -177,7 +158,10 @@ function buildDimension(cfg: Record<string, unknown>) {
     }
 
     const ratio = Math.pow(max / min, 1 / (count - 1));
-    const values = geometricRange(min, max, count, quantum);
+    const values = geometricRange(min, max, count, {
+        decimals: 6,
+        quantum: Number.isFinite(quantum) && quantum > 0 ? quantum : null,
+    });
     return {
         values,
         meta: {

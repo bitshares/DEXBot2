@@ -13,7 +13,7 @@ import { normalizeBotEntry } from '../modules/bot_settings.js';
 import * as kibanaSource from './inputs/kibana_source.js';
 import * as kibanaMarketSource from './core/kibana_market_candles.js';
 import { tradesToCandles, detectMissingCandleTimestamps, fillCandleGaps, detectStaleTail, pruneStaleTail, mergeCandles } from './candle_utils.js';
-import { toIntervalLabel, bucketStartMs, latestClosedBucketStartMs } from './interval_utils.js';
+import { toIntervalLabel, bucketStartMs, latestClosedBucketStartMs, parseChainTimeToMs } from './interval_utils.js';
 import { loadMarketProfiles } from '../analysis/tradingview/tradingview_uplot_chart_generator.js';
 import { candleFileForBot as candleFilePathForLabel } from '../analysis/bot_key_utils.js';
 import { writeJsonAtomic } from './utils/atomic_write.js';
@@ -913,12 +913,6 @@ function loadJson<T extends Record<string, unknown>>(filePath: string, defaultVa
 
 function saveJson(filePath: string, data: Record<string, unknown>) {
     writeJsonAtomic(filePath, data);
-}
-
-function parseChainTimeToMs(timeStr: unknown) {
-    if (!timeStr) return Number.NaN;
-    const s = String(timeStr);
-    return Date.parse(s.endsWith('Z') ? s : `${s}Z`);
 }
 
 function candleFileForBot(botKey: string, intervalSeconds: number = RUNTIME_DEFAULTS.intervalSeconds) {

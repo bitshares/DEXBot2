@@ -4,7 +4,7 @@ import { path } from '../../modules/path_api.js';
 import { getStorage } from '../../modules/storage/index.js';
 import type { FileStat } from '../../modules/storage/types.js';
 import { PATHS } from '../../modules/paths.js';
-import { mergeCandles } from '../candle_utils.js';
+import { mergeCandles, higherVolumeWins } from '../candle_utils.js';
 import { shardKeyFromName, shardStemFromName } from './month_shards.js';
 
 const storage = getStorage();
@@ -170,12 +170,6 @@ function metaOf(raw: unknown): Record<string, unknown> | null {
     return meta && typeof meta === 'object' ? (meta as Record<string, unknown>) : null;
 }
 
-function higherVolumeWins(existing: unknown, incoming: unknown): unknown {
-    const a = existing as number[];
-    const b = incoming as number[];
-    return Number(b?.[5] || 0) > Number(a?.[5] || 0) ? incoming : existing;
-}
-
 /**
  * Whole-history-export discovery only: returns the newest `lp_pool_*.json` that
  * is a complete series, or null. Month shards and legacy `.chunk_*` files are
@@ -254,5 +248,5 @@ function loadLpSeriesFromPath(filePath: string): LpSeriesResult | null {
     return { path: resolved, meta: metaOf(raw), candles, assembled: false };
 }
 
-export { findLatestLpData, loadLatestLpSeries, loadLpSeriesFromPath, loadLpSeriesFromBasePath, readShardFamily }
+export { findLatestLpData, loadLatestLpSeries, loadLpSeriesFromPath, loadLpSeriesFromBasePath }
 export type { LpSeriesResult, FindLatestLpDataOptions }

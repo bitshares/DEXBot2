@@ -36,7 +36,7 @@ import { path } from '../../modules/path_api.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { writeJsonAtomic } from '../utils/atomic_write.js';
 import { sleepMs, getErrorName, getErrorMessage } from '../../modules/utils/errors.js';
-import { mergeCandles } from '../candle_utils.js';
+import { mergeCandles, higherVolumeWins } from '../candle_utils.js';
 import {
     shardKeyForTimestamp,
     shardBoundsForKey,
@@ -643,10 +643,6 @@ async function fetchRangeLogged(fetchRange: (gteIso: string, lteIso: string, win
     return { candles, complete };
 }
 
-function higherVolumeWins(existing: unknown, incoming: unknown): unknown {
-    return (incoming as Candle)[5] > (existing as Candle)[5] ? incoming : existing;
-}
-
 function sortedCandles(byTs: Map<number, Candle>): Candle[] {
     return [...byTs.values()].sort((a, b) => Number(a[0]) - Number(b[0]));
 }
@@ -897,9 +893,6 @@ export {
     TAIL_REFRESH_HOURS,
     TAIL_SETTLE_LAG_MS,
     GAP_SETTLE_HORIZON_MS,
-    GAP_MERGE_TOLERANCE_BUCKETS,
-    MAX_SUBFETCH_RANGES,
-    MAX_SUBFETCH_SPAN_RATIO,
     MAX_COVERAGE_SPANS,
     shardKeyForTimestamp,
     shardBoundsForKey,
@@ -907,7 +900,6 @@ export {
     shardPathFor,
     readCacheChunk,
     loadBucketCache,
-    cachedCandlesInRange,
     unionQueriedRanges,
     compactCoverage,
     rangesCoveredBy,

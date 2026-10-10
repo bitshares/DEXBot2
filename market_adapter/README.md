@@ -581,7 +581,7 @@ market_adapter/
 |-- market_adapter.ts              main adapter daemon
 |-- ama_signal_runner.ts           one-cycle JSON signal CLI
 |-- candle_utils.ts                candle transforms, gap detection, pruning
-|-- interval_utils.ts              shared interval label helpers
+|-- interval_utils.ts              shared interval label + chain-time helpers
 |-- lp_chart_core.ts               chart HTML renderer
 |-- lp_chart_strategy_loader.ts    AMA strategy/profile resolver for charts
 |-- lp_chart_runner.ts             LP chart orchestration
@@ -592,7 +592,7 @@ market_adapter/
 |   |-- market_adapter_service.ts  full signal pipeline service
 |   |-- config_normalizers.ts      shared config normalization
 |   |-- kibana_client.ts           low-level Kibana/ES query client
-|   |-- kibana_candles.ts          LP pool candle fetch engine
+|   |-- kibana_candles.ts          generic Kibana candle fetch engine (LP/book/feed)
 |   |-- kibana_market_candles.ts   book candle fetch and transform
 |   |-- signals/
 |   |   |-- hurst_analyzer.ts               Hurst Exponent analysis
@@ -614,7 +614,8 @@ market_adapter/
 |   |-- fetch_book_data.ts         order-book candle exporter
 |   |-- kibana_feed_source.ts      MPA feed candle source
 |   |-- window_cache.ts            shared month-shard candle cache
-|   `-- fetch_cex_synthetic_data.ts  public CEX synthetic-candle seed importer
+|   |-- fetch_cex_synthetic_data.ts  public CEX synthetic-candle seed importer
+|   `-- cex_candle_parsing.ts      CEX OHLC row layouts and parsing
 |-- utils/
 |   |-- chain.ts                   blockchain query helpers
 |   |-- adapter_client.ts          inter-process credential daemon client

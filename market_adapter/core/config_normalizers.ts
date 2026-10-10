@@ -15,17 +15,24 @@ function normalizeAtrPeriod(period: unknown, defaultValue = MARKET_ADAPTER.DYNAM
     return Math.max(MARKET_ADAPTER.DYNAMIC_WEIGHT_ATR_PERIOD_MIN, Math.min(MARKET_ADAPTER.DYNAMIC_WEIGHT_ATR_PERIOD_MAX, rounded));
 }
 
-function normalizeMaxVolatilityOffset(value: unknown, defaultValue = MARKET_ADAPTER.DYNAMIC_WEIGHT_SYMMETRIC_SHIFT_CLAMP) {
+/**
+ * Coerce to a finite, non-negative number, else `defaultValue`. `null`,
+ * `undefined` and `''` are treated as "not provided" before `Number()`
+ * coercion so explicit JSON null does not become 0. Zero is allowed (it
+ * explicitly disables the volatility shift).
+ */
+function normalizeNonNegative(value: unknown, defaultValue: number) {
     if (value == null || value === '') return defaultValue;
     const numeric = Number(value);
-    // Allow 0 to explicitly disable volatility shift
     return Number.isFinite(numeric) && numeric >= 0 ? numeric : defaultValue;
 }
 
+function normalizeMaxVolatilityOffset(value: unknown, defaultValue = MARKET_ADAPTER.DYNAMIC_WEIGHT_SYMMETRIC_SHIFT_CLAMP) {
+    return normalizeNonNegative(value, defaultValue);
+}
+
 function normalizeVolatilityThreshold(value: unknown, defaultValue = MARKET_ADAPTER.DYNAMIC_WEIGHT_SYMMETRIC_SHIFT_THRESHOLD) {
-    if (value == null || value === '') return defaultValue;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) && numeric >= 0 ? numeric : defaultValue;
+    return normalizeNonNegative(value, defaultValue);
 }
 
 export { normalizeAtrPeriod, normalizeMaxVolatilityOffset, normalizeVolatilityThreshold }

@@ -219,8 +219,6 @@ export {
     shardKeysForRange,
     basePathFor,
     shardPathFor,
-    normalizeQueried,
-    addCoverage,
     trustedSegments,
     subtractRanges,
     mergeFills,

@@ -31,7 +31,8 @@
  */
 
 import { fillCandleGaps } from '../candle_utils.js';
-import { resolveRequestedFillRange } from '../core/kibana_candles.js';
+import { resolveRequestedFillRange, hitSortKey, hitSequence } from '../core/kibana_candles.js';
+import { parseChainTimeToMs } from '../interval_utils.js';
 import { kibanaSearch, DEFAULT_CONFIG as BASE_CONFIG } from '../core/kibana_client.js';
 import { path } from '../../modules/path_api.js';
 import { PATHS } from '../../modules/paths.js';
@@ -180,30 +181,8 @@ function backingPerMpa(settlement: unknown, mpaAsset: AssetRef | null | undefine
 function parseFeedTimestamp(source: unknown): number | null {
     const raw = (source as { block_data?: { block_time?: unknown } } | null | undefined)?.block_data?.block_time;
     if (raw == null) return null;
-    const text = String(raw);
-    const tsMs = Date.parse(text.endsWith('Z') ? text : `${text}Z`);
+    const tsMs = parseChainTimeToMs(String(raw));
     return Number.isFinite(tsMs) ? tsMs : null;
-}
-
-function hitSortKey(hit: unknown): string {
-    const h = hit as { sort?: unknown; _id?: unknown } | null | undefined;
-    const sort = Array.isArray(h?.sort) ? h.sort : [];
-    return sort.map((v) => String(v)).join('|') || String(h?._id || '');
-}
-
-function hitSequence(source: unknown): number {
-    const src = source as { operation_id_num?: unknown; account_history?: { operation_id?: unknown; sequence?: unknown } } | null | undefined;
-    const candidates = [
-        src?.operation_id_num,
-        src?.account_history?.operation_id,
-        src?.account_history?.sequence,
-    ];
-    for (const value of candidates) {
-        if (typeof value === 'number' && Number.isFinite(value)) return value;
-        const m = String(value || '').match(/(\d+)$/);
-        if (m) return Number(m[1]);
-    }
-    return Number.NaN;
 }
 
 /**
@@ -220,7 +199,7 @@ function hitToFeedPrice(hit: unknown, { mpaAsset, backingAsset }: { mpaAsset: As
     return {
         tsMs,
         price: price as number,
-        sequence: hitSequence(source),
+        sequence: hitSequence(source, 'account_history.operation_id'),
         kibanaSortKey: hitSortKey(hit),
     };
 }

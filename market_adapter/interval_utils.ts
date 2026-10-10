@@ -50,5 +50,20 @@ function latestClosedBucketStartMs(nowMs: number, intervalSeconds: number) {
     return currentBucketStart - Number(intervalSeconds) * 1000;
 }
 
-export { toIntervalLabel, slugPart, bucketStartMs, latestClosedBucketStartMs }
+/**
+ * Parse a BitShares chain timestamp (e.g. `block_time`) to epoch ms.
+ *
+ * Chain timestamps are ISO-8601 without a trailing `Z`; `Date.parse` treats
+ * them as local time, so append `Z` unless present. Single home for the helper
+ * previously copied into market_adapter.ts, kibana_candles.ts,
+ * kibana_feed_source.ts, scripts/diagnose-pool-history.ts and
+ * scripts/chart_command.ts. Returns `NaN` for empty/unparseable input.
+ */
+function parseChainTimeToMs(timeStr: unknown) {
+    if (!timeStr) return Number.NaN;
+    const s = String(timeStr);
+    return Date.parse(s.endsWith('Z') ? s : `${s}Z`);
+}
+
+export { toIntervalLabel, slugPart, bucketStartMs, latestClosedBucketStartMs, parseChainTimeToMs }
 

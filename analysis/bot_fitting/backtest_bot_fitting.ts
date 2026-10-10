@@ -6,11 +6,11 @@ import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strate
 import { computeHuberWindowSlopePct } from '../../market_adapter/core/strategies/ama_slope_model.js';
 import { applyAsymmetricBounds } from '../../market_adapter/core/asymmetric_bounds.js';
 import { range } from '../math_utils.js';
-import { parseListOrRange, loadLpData, fmt } from './shared_utils.js';
+import { parseListOrRange, loadLpData, fmt, loadAmaStrategies } from './shared_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
 import { GRID_LIMITS, MARKET_ADAPTER } from '../../modules/constants.js';
-const { ensureDir, readJSON, writeJSON } = getStorage();
+const { ensureDir, writeJSON } = getStorage();
 
 
 // Default mirrors production sizing: createOrderGrid sizes EVERY rail slot in
@@ -250,30 +250,6 @@ interface AmaStrategy {
     er: number;
     fast: number;
     slow: number;
-}
-
-function loadAmaStrategies(resultsPath: string): AmaStrategy[] {
-    const json = readJSON(resultsPath) as { meta?: { amas?: Record<string, { er?: unknown; fast?: unknown; slow?: unknown }> } };
-    const amas = json.meta?.amas ?? {};
-    const labels = { AMA1: 'AMA1', AMA2: 'AMA2', AMA3: 'AMA3', AMA4: 'AMA4' as string };
-
-    const out: AmaStrategy[] = [];
-    for (const [key, val] of Object.entries(amas)) {
-        const a = val as { er?: unknown; fast?: unknown; slow?: unknown };
-        if (!a || !Number.isFinite(Number(a.er)) || !Number.isFinite(Number(a.fast)) || !Number.isFinite(Number(a.slow))) continue;
-        out.push({
-            id: key,
-            name: labels[key as keyof typeof labels] ?? key,
-            er: Number(a.er),
-            fast: Number(a.fast),
-            slow: Number(a.slow),
-        });
-    }
-
-    if (out.length !== 4) {
-        throw new Error(`Expected 4 AMA strategies in results meta.amas, found ${out.length}`);
-    }
-    return out;
 }
 
 /**
@@ -813,7 +789,11 @@ function run() {
     const loaded = loadLpData(cfg.dataPath!);
     const candles = loaded.candles;
     const closes = candles.map((c) => c.close);
-    const strategies = loadAmaStrategies(cfg.resultsPath!);
+    const strategies = loadAmaStrategies(cfg.resultsPath!, {
+        requireAllFields: true,
+        exactCount: 4,
+        labels: { AMA1: 'AMA1', AMA2: 'AMA2', AMA3: 'AMA3', AMA4: 'AMA4' },
+    });
 
     if (!Number.isFinite(cfg.repositionPct) || cfg.repositionPct <= 0) {
         throw new Error(`Invalid reposition threshold: ${cfg.repositionPct}`);

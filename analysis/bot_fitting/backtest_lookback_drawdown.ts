@@ -37,6 +37,7 @@ import { pathToFileURL } from 'node:url';
 import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strategies/ama.js';
 import { loadCandles } from '../trend_detection/backtest_ama_slope_huber.js';
 import { parseListOrRange } from './shared_utils.js';
+import { median } from '../math_utils.js';
 import { simulatePersistentGrid, WEIGHT_PROFILES } from './backtest_ama_sweep.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
@@ -132,12 +133,6 @@ function resolveAma(name: string) {
     return { name, er: preset.erPeriod, fast: preset.fastPeriod, slow: preset.slowPeriod };
 }
 
-function median(values: number[]): number {
-    const s = values.slice().sort((a, b) => a - b);
-    const mid = s.length >> 1;
-    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
 function percentile(values: number[], pct: number): number {
     const s = values.slice().sort((a, b) => a - b);
     return s[Math.min(s.length - 1, Math.max(0, Math.floor((pct / 100) * (s.length - 1))))];
@@ -225,7 +220,7 @@ function run() {
     for (const [label, field, mul, d] of fields) {
         let row = `  ${label.padEnd(20).slice(0, 20)} |`;
         for (const lb of cfg.lookbacks) {
-            row += fmt(median(keys.map((k) => (byLookback[lb][k] as unknown as Record<string, number>)[field] * mul)), d).padStart(12);
+            row += fmt(median(keys.map((k) => (byLookback[lb][k] as unknown as Record<string, number>)[field] * mul)) ?? Number.NaN, d).padStart(12);
         }
         console.log(row);
     }
@@ -239,7 +234,7 @@ function run() {
         const lower = deltas.filter((d) => d < 0).length;
         console.log(
             `  ${String(lb).padStart(2)} | ` +
-            `${fmt(median(deltas)).padStart(12)} | ` +
+            `${fmt(median(deltas) ?? Number.NaN).padStart(12)} | ` +
             `${fmt(percentile(deltas, 25))} .. ${fmt(percentile(deltas, 75))} | ` +
             `${lower}/${deltas.length} (${fmt((100 * lower) / deltas.length, 0)}%)`
         );

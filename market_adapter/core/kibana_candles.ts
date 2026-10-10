@@ -1,6 +1,7 @@
 'use strict';
 
 import { fillCandleGaps, tradesToCandles } from '../candle_utils.js';
+import { parseChainTimeToMs } from '../interval_utils.js';
 import { kibanaSearch, DEFAULT_CONFIG as BASE_CONFIG } from './kibana_client.js';
 import { isTransientNetworkError, sleepMs, getErrorMessage } from '../../modules/utils/errors.js';
 
@@ -254,7 +255,7 @@ function hitSequence(source: unknown, operationIdField: unknown): number {
 function hitToTrade(hit: unknown, { soldAsset, receivedAsset, soldAmountField, receivedAmountField, operationIdField = 'account_history.operation_id' }: TradeFields): Trade | null {
     const source = (hit as { _source?: unknown })?._source || {};
     const rawTime = String(getByPath(source, 'block_data.block_time') || '');
-    const tsMs = Date.parse(rawTime.endsWith('Z') ? rawTime : `${rawTime}Z`);
+    const tsMs = parseChainTimeToMs(rawTime);
     if (!Number.isFinite(tsMs)) return null;
 
     const soldAmount = amountForAsset(source, soldAmountField, soldAsset.id);
@@ -516,5 +517,5 @@ async function fetchKibanaClosePrices(params: KibanaCandlesParams): Promise<numb
     return candles.map((candle) => candle[4]);
 }
 
-export { buildDirectionalDocumentQuery, resolveRequestedFillRange, fetchKibanaCandles, fetchKibanaClosePrices, sourceFieldsForFieldMap }
+export { buildDirectionalDocumentQuery, resolveRequestedFillRange, fetchKibanaCandles, fetchKibanaClosePrices, sourceFieldsForFieldMap, hitSortKey, hitSequence }
 
