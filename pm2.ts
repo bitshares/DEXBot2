@@ -83,6 +83,7 @@ const require = createRequire(import.meta.url);
 import { setUmask } from './modules/config.js';
 import { path } from './modules/path_api.js';
 import { spawn, execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { parseJsonWithComments } from './modules/order/utils/system.js';
 import { readBotsFileWithLock } from './modules/bots_file_lock.js';
 import { loadSettingsFile, selectActiveBotEntries, type BotEntry } from './modules/bot_settings.js';
@@ -235,8 +236,7 @@ function buildEcosystemApps(bots: BotEntry[] | null | undefined, { includeUpdate
             error_file: path.join(LOGS_DIR, `${botName}-error.log`),
             out_file: path.join(LOGS_DIR, `${botName}.log`),
             log_date_format: 'YY-MM-DD HH:mm:ss.SSS',
-            merge_logs: false,
-            combine_logs: true,
+            merge_logs: true,
             max_size: '100M',
             max_restarts: 13,
             min_uptime: 86400000,
@@ -255,8 +255,7 @@ function buildEcosystemApps(bots: BotEntry[] | null | undefined, { includeUpdate
             error_file: path.join(LOGS_DIR, 'dexbot-adapter-error.log'),
             out_file: path.join(LOGS_DIR, 'dexbot-adapter.log'),
             log_date_format: 'YY-MM-DD HH:mm:ss.SSS',
-            merge_logs: false,
-            combine_logs: true,
+            merge_logs: true,
             max_size: '100M',
             max_restarts: 13,
             min_uptime: 60000,
@@ -290,8 +289,7 @@ function buildCredentialDaemonApp({ credentialEnv = {} }: { credentialEnv?: Reco
         error_file: path.join(LOGS_DIR, 'dexbot-cred-error.log'),
         out_file: path.join(LOGS_DIR, 'dexbot-cred.log'),
         log_date_format: 'YY-MM-DD HH:mm:ss.SSS',
-        merge_logs: false,
-        combine_logs: true,
+        merge_logs: true,
         max_size: '100M',
         env: {
             DEXBOT_CRED_DAEMON_SOCKET: CREDENTIAL_SOCKET_PATH,
@@ -396,7 +394,6 @@ function cleanupStaleCredentialDaemonFiles() {
 
 async function ensureCredentialDaemonPM2({ forceRefresh = false, headless = false, passwordFile = null }: {
     forceRefresh?: boolean;
-    logReuse?: boolean;
     headless?: boolean;
     passwordFile?: string | null;
 } = {}) {
@@ -735,21 +732,34 @@ async function ensurePm2Logrotate() {
 }
 
 /**
- * Check if PM2 is installed locally or globally.
- * @returns {boolean} True if PM2 is found.
+ * Resolve the npm CLI that belongs to the running Node.
+ *
+ * The npm beside `process.execPath` shares this Node's global root; a version
+ * manager (nvm/fnm/volta) can put a different Node's npm first on PATH, which
+ * would install pm2 into a prefix this Node cannot see. Falls back to the bare
+ * name (PATH lookup) for unusual launcher layouts such as npx or shims.
+ *
+ * On Windows the shim is spawned through the shell, where an absolute path
+ * such as `C:\Program Files\nodejs\npm.cmd` would need quoting; the PATH
+ * lookup already resolves the right shim, so keep the bare name there.
+ * @returns {string} Absolute npm path, or 'npm' when none is found.
+ */
+function resolveNpmBinary() {
+    if (process.platform === 'win32') return 'npm';
+    const candidate = path.join(path.dirname(process.execPath), 'npm');
+    return existsSync(candidate) ? candidate : 'npm';
+}
+
+/**
+ * Check whether the pm2 CLI is reachable.
+ * @returns {boolean} True if `pm2 --version` succeeds.
  */
 function checkPM2Installed() {
     try {
-        require.resolve('pm2');
+        execSync('pm2 --version', { stdio: 'ignore' });
         return true;
-    } catch (e) {
-        // Check if pm2 is available in PATH
-        try {
-            execSync('pm2 --version', { stdio: 'ignore' });
-            return true;
-        } catch (err) {
-            return false;
-        }
+    } catch (err) {
+        return false;
     }
 }
 
@@ -768,12 +778,15 @@ async function installPM2() {
         rl.question('PM2 is not installed. Install now? (Y/n): ', (answer: string) => {
             rl.close();
 
-            if (answer.toLowerCase() === 'n') {
+            const normalized = answer.trim().toLowerCase();
+            if (normalized === 'n' || normalized === 'no') {
                 console.log('PM2 installation cancelled. Run: npm install -g pm2');
                 process.exit(1);
             }
 
             console.log('Installing PM2...');
+
+            const npmBin = resolveNpmBinary();
 
             // Helper to run installation command
             const runInstall = (command: string, args: string[]) => {
@@ -790,23 +803,30 @@ async function installPM2() {
                 });
             };
 
-            // Try standard install first
-            runInstall('npm', ['install', '-g', 'pm2'])
-                .then(() => {
-                    console.log(pm2Success('PM2 installed successfully!'));
+            // npm can report success while writing into a global bin dir that is
+            // not on this PATH, so confirm `pm2` is actually reachable before
+            // declaring victory.
+            const confirmInstalled = (message: string) => {
+                if (checkPM2Installed()) {
+                    console.log(pm2Success(message));
                     resolve();
-                })
+                } else {
+                    console.error(pm2Error('PM2 was installed, but `pm2` is not on PATH. Add the npm global bin directory to PATH and rerun.'));
+                    reject(new Error('PM2 installed but not found on PATH'));
+                }
+            };
+
+            // Try standard install first
+            runInstall(npmBin, ['install', '-g', 'pm2'])
+                .then(() => confirmInstalled('PM2 installed successfully!'))
                 .catch((_err) => {
                     // If failed and not on Windows, try sudo
                     if (process.platform !== 'win32') {
                         console.log('\nStandard installation failed (likely permissions). Trying with sudo...');
                         console.log('This covers Linux and macOS. Please enter your password if prompted:');
 
-                        runInstall('sudo', ['npm', 'install', '-g', 'pm2'])
-                            .then(() => {
-                                console.log(pm2Success('PM2 installed successfully with sudo!'));
-                                resolve();
-                            })
+                        runInstall('sudo', [npmBin, 'install', '-g', 'pm2'])
+                            .then(() => confirmInstalled('PM2 installed successfully with sudo!'))
                             .catch((_finalErr) => {
                                 reject(new Error('PM2 installation failed even with sudo'));
                             });
@@ -867,6 +887,8 @@ async function execPM2Command(action: string, target: string | null | undefined,
         }
 
         const pm2 = spawn('pm2', args, {
+            cwd: PATHS.PROJECT_ROOT,
+            env: buildScopedChildEnv(),
             stdio: 'pipe',
             shell: process.platform === 'win32'
         });
@@ -927,9 +949,9 @@ async function stopPM2Processes(target: string): Promise<void> {
 
     if (target === 'all') {
         console.log('');
-        // Stop credential daemon first — it holds the only handle to keys.
-        // If managed apps were stopped first they'd lose key access; this order
-        // ensures the daemon is the last process released.
+        // Stop the credential daemon first: it holds the only handle to keys,
+        // so releasing it up front is the safety stop. Managed apps are stopped
+        // afterwards; they can no longer sign, but they are already shutting down.
         await execPM2CommandIgnoreMissing('stop', CREDENTIAL_DAEMON_APP_NAME);
         if (storage.exists(ECOSYSTEM_FILE)) {
             await runManagedAppsPm2Action('stop');
@@ -1026,20 +1048,20 @@ async function restartPM2Processes(target: string, { headless = false, passwordF
 
     if (target === 'all') {
         generateEcosystemConfig({ clawOnly: false, exitOnError: false });
-        await ensureCredentialDaemonPM2({ logReuse: false, headless, passwordFile });
+        await ensureCredentialDaemonPM2({ headless, passwordFile });
         await runManagedAppsPm2Action('restart');
         console.log('Managed dexbot PM2 apps restarted. dexbot-cred was left on the safe wrapper path.');
         return;
     }
 
     if (target === CREDENTIAL_DAEMON_APP_NAME) {
-        await ensureCredentialDaemonPM2({ forceRefresh: true, logReuse: false, headless, passwordFile });
+        await ensureCredentialDaemonPM2({ forceRefresh: true, headless, passwordFile });
         console.log(`Credential daemon '${target}' restarted with a fresh unlock.`);
         return;
     }
 
     target = await assertActiveBotTarget(target);
-    await ensureCredentialDaemonPM2({ logReuse: false, headless, passwordFile });
+    await ensureCredentialDaemonPM2({ headless, passwordFile });
     await execPM2Command('restart', target);
     console.log(`PM2 process '${target}' restarted.`);
 }

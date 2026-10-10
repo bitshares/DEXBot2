@@ -54,8 +54,8 @@ const __dirname = _esmDirname(__filename);
  * Files:     dexbot clear | clear-orders | clear-market-adapter | clear-all
  *
  * NPM SCRIPTS (alternative invocation):
- *   npm run pm2:start                - Start bots (requires ecosystem.config.cjs pre-generated)
- *   npm run pm2:stop                 - Stop all PM2 bots
+ *   npm run pm2:start                - Unlock + start bots via PM2 (alias of pm2:unlock)
+ *   npm run pm2:stop                 - Stop all dexbot PM2 processes via the launcher
  *   npm run pm2:unlock               - Run dist/pm2.js (authenticate + generate config + start all)
  *   npm run pm2:claw-only            - Run dist/pm2.js claw-only
  *

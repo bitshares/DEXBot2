@@ -368,8 +368,8 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run claw:unlock` | Build + single-prompt unlock (claw-only mode) |
 | `npm run pm2:unlock` | Build + launch full bot via PM2 ecosystem |
 | `npm run pm2:claw-only` | Build + launch claw-only PM2 process |
-| `npm run pm2:start` | Start PM2 processes from ecosystem config |
-| `npm run pm2:stop` | Stop PM2 processes from ecosystem config |
+| `npm run pm2:start` | Unlock + start bots via PM2 (alias of `pm2:unlock`) |
+| `npm run pm2:stop` | Stop all dexbot PM2 processes via the launcher |
 
 ### Branch Sync *(git checkout only)*
 | Command | Purpose |
