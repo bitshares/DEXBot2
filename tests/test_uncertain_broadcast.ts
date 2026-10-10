@@ -582,6 +582,87 @@ async function testReconcileAdoptsRuntimePendingBroadcast() {
     console.log('✓ UNC-008b passed');
 }
 
+async function testReconcileNoResyncForTrackedRestingOrders() {
+    console.log('\n[UNC-020] _reconcileAfterUncertainBroadcast does not resync for master-tracked resting orders...');
+    const bot = makeBot();
+    const slotId = 'sell-tracked';
+    const plannedSell = 120000000;
+    const plannedReceive = 6000000;
+    const origReadOpenOrdersWithMeta = chainOrders.readOpenOrdersWithMeta;
+    let resyncReason: string | null = null;
+    bot.manager.requestStructuralGridResync = async (reason) => { resyncReason = reason; return { scheduled: true }; };
+    bot.manager.synchronizeWithChain = async () => {};
+    // A pre-existing resting order master already tracks (NOT part of this batch).
+    bot.manager.orders.set('slot-resting', { id: 'slot-resting', type: 'buy', price: 0.04, size: 1, orderId: '1.7.572399900' });
+    bot.manager.orders.set(slotId, { id: slotId, type: 'sell', price: 0.05, size: 1.2 });
+    bot._recordPendingBroadcast({
+        opIndex: 0,
+        ctxIndex: 0,
+        order: { id: slotId, type: 'sell', price: 0.05, size: 1.2 },
+        finalInts: { sell: plannedSell, receive: plannedReceive }
+    });
+    chainOrders.readOpenOrdersWithMeta = async () => ({
+        orders: [
+            makeChainOrder('1.7.572312014', 'sell', plannedSell, plannedReceive),
+            makeChainOrder('1.7.572399900', 'buy', 40000000, 1000000)
+        ],
+        truncated: false
+    });
+
+    try {
+        const result = await bot._reconcileAfterUncertainBroadcast(
+            new BroadcastUncertainError('timeout', { batchId: 'batch-tracked', timeoutMs: 30000 }),
+            [{ kind: 'create', id: slotId }]
+        );
+        assert.strictEqual(result.uncertain, true);
+        assert.strictEqual(result.adoptedCount, 1, 'the batch CREATE should be adopted');
+        assert.strictEqual(resyncReason, null, 'master-tracked resting orders must NOT force a structural resync');
+    } finally {
+        chainOrders.readOpenOrdersWithMeta = origReadOpenOrdersWithMeta;
+    }
+    console.log('✓ UNC-020 passed');
+}
+
+async function testReconcileResyncsForUnknownChainOrders() {
+    console.log('\n[UNC-021] _reconcileAfterUncertainBroadcast resyncs only for chain orders unknown to master...');
+    const bot = makeBot();
+    const slotId = 'sell-known';
+    const plannedSell = 120000000;
+    const plannedReceive = 6000000;
+    const origReadOpenOrdersWithMeta = chainOrders.readOpenOrdersWithMeta;
+    let resyncReason: string | null = null;
+    bot.manager.requestStructuralGridResync = async (reason) => { resyncReason = reason; return { scheduled: true }; };
+    bot.manager.synchronizeWithChain = async () => {};
+    bot.manager.orders.set(slotId, { id: slotId, type: 'sell', price: 0.05, size: 1.2 });
+    bot._recordPendingBroadcast({
+        opIndex: 0,
+        ctxIndex: 0,
+        order: { id: slotId, type: 'sell', price: 0.05, size: 1.2 },
+        finalInts: { sell: plannedSell, receive: plannedReceive }
+    });
+    chainOrders.readOpenOrdersWithMeta = async () => ({
+        orders: [
+            makeChainOrder('1.7.572312015', 'sell', plannedSell, plannedReceive),
+            // Genuinely unknown: not adopted this cycle and not tracked by master.
+            makeChainOrder('1.7.572399901', 'buy', 40000000, 1000000)
+        ],
+        truncated: false
+    });
+
+    try {
+        const result = await bot._reconcileAfterUncertainBroadcast(
+            new BroadcastUncertainError('timeout', { batchId: 'batch-unknown', timeoutMs: 30000 }),
+            [{ kind: 'create', id: slotId }]
+        );
+        assert.strictEqual(result.uncertain, true);
+        assert.strictEqual(result.adoptedCount, 1, 'the batch CREATE should be adopted');
+        assert.strictEqual(resyncReason, 'unreconciled orders after uncertain broadcast', 'unknown chain orders must still trigger a structural resync');
+    } finally {
+        chainOrders.readOpenOrdersWithMeta = origReadOpenOrdersWithMeta;
+    }
+    console.log('✓ UNC-021 passed');
+}
+
 async function testReconcileReadFailureRequestsStructuralResync() {
     console.log('\n[UNC-008c] _reconcileAfterUncertainBroadcast requests structural resync on read failure...');
     const bot = makeBot();
@@ -669,6 +750,84 @@ async function testReconcileAcquiresFillLock() {
         chainOrders.readOpenOrdersWithMeta = origReadOpenOrdersWithMeta;
     }
     console.log('✓ UNC-008c2 passed');
+}
+
+async function testWatchdogToleratesTransientProbeFailureThenResumes() {
+    console.log('\n[UNC-009] Credential watchdog tolerates one transient probe failure, then suspends and resumes...');
+    const bot = makeBot();
+    const suspendReasons: string[] = [];
+    let resumeCalls = 0;
+    let recoverySyncCalls = 0;
+    bot.manager.suspendGridPersistence = (reason) => { suspendReasons.push(String(reason)); };
+    bot.manager.resumeGridPersistence = () => { resumeCalls++; };
+    bot._triggerStateRecoverySync = async () => { recoverySyncCalls++; };
+    bot._runGridMaintenance = async () => {};
+    bot.privateKey = {
+        kind: 'dexbot-daemon-signing-token',
+        accountName: 'test-acct',
+        socketPath: '/tmp/test-cred.sock',
+        sessionId: 'sess',
+        botHmacSecret: 'secret'
+    };
+    const origPing = chainKeys.pingDaemon;
+    chainKeys.pingDaemon = async () => { throw new Error('Daemon ping timeout'); };
+
+    try {
+        // First failure is transient (daemon may be busy signing): tolerated.
+        await bot._runCredentialDaemonWatchdogProbe();
+        assert.strictEqual(bot._credentialDaemonConsecutiveFailures, 1, 'first failure must be counted');
+        assert.strictEqual(bot._credentialDaemonDown, false, 'one failure must not mark the daemon down');
+        assert.strictEqual(bot._credentialRecoveryNeeded, false, 'one failure must not request recovery');
+        assert.strictEqual(suspendReasons.length, 0, 'one failure must not suspend persistence');
+
+        // Second consecutive failure confirms the outage.
+        await bot._runCredentialDaemonWatchdogProbe();
+        assert.strictEqual(bot._credentialDaemonConsecutiveFailures, 2, 'second failure must be counted');
+        assert.strictEqual(bot._credentialDaemonDown, true, 'two consecutive failures mark the daemon down');
+        assert.strictEqual(bot._credentialRecoveryNeeded, true, 'confirmed outage must request recovery so it can resume');
+        assert.strictEqual(suspendReasons.length, 1, 'confirmed outage suspends persistence once');
+        assert(suspendReasons[0].includes('Daemon ping timeout'), 'suspend reason should carry the probe error');
+
+        // Recovery: a successful probe runs the recovery path and RESUMES persistence
+        // (the historical bug left it suspended until a process restart).
+        chainKeys.pingDaemon = async () => true;
+        await bot._runCredentialDaemonWatchdogProbe();
+        assert.strictEqual(bot._credentialDaemonConsecutiveFailures, 0, 'successful probe resets the failure counter');
+        assert.strictEqual(bot._credentialDaemonDown, false, 'successful probe clears the down flag');
+        assert.strictEqual(bot._credentialRecoveryNeeded, false, 'recovery clears the recovery flag');
+        assert.strictEqual(resumeCalls, 1, 'recovery must resume grid persistence exactly once');
+        assert.strictEqual(recoverySyncCalls, 1, 'recovery must reconcile chain state once');
+    } finally {
+        chainKeys.pingDaemon = origPing;
+    }
+    console.log('✓ UNC-009 passed');
+}
+
+async function testWatchdogTreatsConnectivityFailureAsImmediateOutage() {
+    console.log('\n[UNC-009b] Credential watchdog treats a socket ENOENT as an immediate hard outage...');
+    const bot = makeBot();
+    const suspendReasons: string[] = [];
+    bot.manager.suspendGridPersistence = (reason) => { suspendReasons.push(String(reason)); };
+    bot.privateKey = {
+        kind: 'dexbot-daemon-signing-token',
+        accountName: 'test-acct',
+        socketPath: '/tmp/test-cred.sock',
+        sessionId: 'sess',
+        botHmacSecret: 'secret'
+    };
+    const origPing = chainKeys.pingDaemon;
+    chainKeys.pingDaemon = async () => { throw new Error('Daemon connection failed: connect ENOENT /tmp/test-cred.sock'); };
+
+    try {
+        await bot._runCredentialDaemonWatchdogProbe();
+        assert.strictEqual(bot._credentialDaemonConsecutiveFailures, 1, 'hard failure still counted');
+        assert.strictEqual(bot._credentialDaemonDown, true, 'a missing socket is a hard outage on the first probe');
+        assert.strictEqual(bot._credentialRecoveryNeeded, true, 'hard outage requests recovery');
+        assert.strictEqual(suspendReasons.length, 1, 'hard outage suspends persistence immediately');
+    } finally {
+        chainKeys.pingDaemon = origPing;
+    }
+    console.log('✓ UNC-009b passed');
 }
 
 async function testCowBatchAdvancesCycleMarker() {
@@ -1629,8 +1788,12 @@ async function main() {
     await testNearMatchUsesPendingSideWhenGridSlotMissing();
     await testBroadcastUncertainErrorIsNotRetried();
     await testReconcileAdoptsRuntimePendingBroadcast();
+    await testReconcileNoResyncForTrackedRestingOrders();
+    await testReconcileResyncsForUnknownChainOrders();
     await testReconcileReadFailureRequestsStructuralResync();
     await testReconcileAcquiresFillLock();
+    await testWatchdogToleratesTransientProbeFailureThenResumes();
+    await testWatchdogTreatsConnectivityFailureAsImmediateOutage();
     await testCowBatchAdvancesCycleMarker();
     await testCredentialClientDeadlineReplyBecomesUncertain();
     await testCredentialClientBroadcastTimeoutBecomesUncertain();

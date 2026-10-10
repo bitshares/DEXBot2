@@ -139,6 +139,7 @@ class DEXBot implements BotLike {
     _credentialRecoveryNeeded: boolean;
     _credentialRecoveryInFlight: boolean;
     _credentialDaemonWatchdogInFlight: boolean;
+    _credentialDaemonConsecutiveFailures: number;
     _staleCleanedOrderIds: Map<string, number>;
     _staleCleanupRetentionMs: number;
     _metrics: BotMetrics;
@@ -281,6 +282,7 @@ class DEXBot implements BotLike {
         this._credentialRecoveryNeeded = false;
         this._credentialRecoveryInFlight = false;
         this._credentialDaemonWatchdogInFlight = false;
+        this._credentialDaemonConsecutiveFailures = 0;
 
         // TTL cache of order IDs freed by stale-order batch cleanup.
         // If an orphan fill arrives for a stale-cleaned order within the retention
@@ -1469,31 +1471,91 @@ class DEXBot implements BotLike {
         }
 
         const intervalMs = Math.max(TIMING.DAEMON_PING_TIMEOUT_MS, TIMING.CREDENTIAL_DAEMON_WATCHDOG_MS);
-        const probe = async () => {
-            if (this._shuttingDown || !this._isCredentialDaemonWriteRequired()) return;
-            // Guard against overlapping ticks: if the previous probe is still
-            // running (slow chain / stall), skip rather than queue a second
-            // pingDaemon and a second recovery attempt.
-            if (this._credentialDaemonWatchdogInFlight) return;
-            this._credentialDaemonWatchdogInFlight = true;
+
+        this._credentialDaemonWatchdogInterval = setInterval(() => {
+            this._runCredentialDaemonWatchdogProbe().catch((err) => {
+                this.manager?.logger?.log?.(`[CREDENTIAL] Credential daemon watchdog error: ${getErrorMessage(err)}`, 'warn');
+            });
+        }, intervalMs);
+        if (typeof this._credentialDaemonWatchdogInterval.unref === 'function') {
+            this._credentialDaemonWatchdogInterval.unref();
+        }
+        void this._runCredentialDaemonWatchdogProbe();
+        this._log(
+            `Credential daemon watchdog started (` +
+            `${Math.round(intervalMs / TIMING.MILLISECONDS_PER_SECOND)}s interval, ` +
+            `down after ${this._credentialDaemonWatchdogFailureThreshold()} consecutive probe failures)`
+        );
+    }
+
+    /**
+     * Consecutive failed watchdog probes required before the credential daemon
+     * is declared down. One-liner so the startup log and the probe decision
+     * can never disagree about the threshold.
+     * @returns {number} Positive integer threshold
+     */
+    _credentialDaemonWatchdogFailureThreshold(): number {
+        return Math.max(1, Number(TIMING.CREDENTIAL_DAEMON_WATCHDOG_FAILURE_THRESHOLD) || 2);
+    }
+
+    /**
+     * Run a single credential-daemon watchdog health probe.
+     *
+     * A probe failure is only treated as a daemon outage after
+     * CREDENTIAL_DAEMON_WATCHDOG_FAILURE_THRESHOLD consecutive failures, so one
+     * transient timeout (daemon busy signing) never pauses writes or suspends
+     * grid persistence. A confirmed outage sets `_credentialRecoveryNeeded` so
+     * the successful-probe path CAN resume persistence — otherwise the
+     * suspension lasted until a process restart (production incident).
+     * @returns {Promise<void>}
+     */
+    async _runCredentialDaemonWatchdogProbe(): Promise<void> {
+        if (this._shuttingDown || !this._isCredentialDaemonWriteRequired()) return;
+        // Guard against overlapping ticks: if the previous probe is still
+        // running (slow chain / stall), skip rather than queue a second
+        // pingDaemon and a second recovery attempt.
+        if (this._credentialDaemonWatchdogInFlight) return;
+        this._credentialDaemonWatchdogInFlight = true;
+        const failureThreshold = this._credentialDaemonWatchdogFailureThreshold();
+        try {
+            const token = this.privateKey as unknown as SigningToken;
             try {
-                const token = this.privateKey as unknown as SigningToken;
-                try {
-                    if (getKeyStore().isDaemonSigningKey(token)) {
-                        await chainKeys.pingDaemon(
-                            token.accountName,
-                            2000,
-                            { socketPath: token.socketPath }
-                        );
-                    }
-                    if (this._credentialDaemonDown) {
-                        this.manager?.logger?.log?.('[CREDENTIAL] Credential daemon responsive again.', 'info');
-                    }
-                    this._credentialDaemonDown = false;
-                    await this._runCredentialRecoveryAfterDaemonRestored();
-                } catch (err) {
+                if (getKeyStore().isDaemonSigningKey(token)) {
+                    // Use the configured healthcheck timeout (not a hardcoded
+                    // tighter value): a daemon busy signing a large batch can
+                    // legitimately exceed a 2s probe, and a false "down" here
+                    // suspends grid persistence.
+                    await chainKeys.pingDaemon(
+                        token.accountName,
+                        TIMING.DAEMON_PING_TIMEOUT_MS,
+                        { socketPath: token.socketPath }
+                    );
+                }
+                if (this._credentialDaemonDown) {
+                    this.manager?.logger?.log?.('[CREDENTIAL] Credential daemon responsive again.', 'info');
+                }
+                this._credentialDaemonDown = false;
+                this._credentialDaemonConsecutiveFailures = 0;
+                await this._runCredentialRecoveryAfterDaemonRestored();
+            } catch (err) {
+                this._credentialDaemonConsecutiveFailures += 1;
+                const errMsg = String(getErrorMessage(err) || '');
+                // Connectivity failures are unambiguous (socket missing/refused):
+                // a hard outage on the first probe. Timeouts may be transient
+                // (daemon busy signing), so they only trip after the
+                // consecutive-failure threshold.
+                const isHardFailure = errMsg.includes('ENOENT') || errMsg.includes('ECONNREFUSED');
+                if (!isHardFailure && this._credentialDaemonConsecutiveFailures < failureThreshold) {
+                    // Transient probe failure: tolerate it and re-probe on the
+                    // next tick without pausing writes or suspending persistence.
+                    this.manager?.logger?.log?.(
+                        `[CREDENTIAL] Credential daemon watchdog probe failed ` +
+                        `(${this._credentialDaemonConsecutiveFailures}/${failureThreshold}): ${getErrorMessage(err)}. ` +
+                        `Retrying before pausing writes.`,
+                        'warn'
+                    );
+                } else {
                     if (!this._credentialDaemonDown) {
-                        const errMsg = String(getErrorMessage(err) || '');
                         let hint = '';
                         if (errMsg.includes('ENOENT')) {
                             hint = `Socket file missing at ${token.socketPath}. The credential daemon process may have been killed (e.g. by stray Ctrl-C). Restart it with: dexbot pm2 restart dexbot-cred. If the problem persists, check the daemon log: ${path.join(PATHS.LOGS_DIR, 'dexbot-cred.log')}`;
@@ -1511,23 +1573,17 @@ class DEXBot implements BotLike {
                         );
                     }
                     this._credentialDaemonDown = true;
+                    // Mark recovery needed so the successful-probe path
+                    // actually runs `_runCredentialRecoveryAfterDaemonRestored`
+                    // and RESUME grid persistence. Without this the suspension
+                    // below was permanent until restart.
+                    this._credentialRecoveryNeeded = true;
                     this._suspendGridPersistenceForCredentialOutage(`credential daemon watchdog failed: ${getErrorMessage(err)}`);
                 }
-            } finally {
-                this._credentialDaemonWatchdogInFlight = false;
             }
-        };
-
-        this._credentialDaemonWatchdogInterval = setInterval(() => {
-            probe().catch((err) => {
-                this.manager?.logger?.log?.(`[CREDENTIAL] Credential daemon watchdog error: ${getErrorMessage(err)}`, 'warn');
-            });
-        }, intervalMs);
-        if (typeof this._credentialDaemonWatchdogInterval.unref === 'function') {
-            this._credentialDaemonWatchdogInterval.unref();
+        } finally {
+            this._credentialDaemonWatchdogInFlight = false;
         }
-        void probe();
-        this._log(`Credential daemon watchdog started (${Math.round(intervalMs / TIMING.MILLISECONDS_PER_SECOND)}s interval)`);
     }
 
     /**

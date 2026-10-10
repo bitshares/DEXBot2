@@ -363,12 +363,74 @@ async function testPersistenceCommitGuardRequestsResyncOnRepeatedFailure() {
     console.log('\u2713 COW-PERSIST-002 passed');
 }
 
+async function testPersistenceCommitGuardDefersOnSustainedSuspension() {
+    console.log(' - Persistence commit guard defers (no structural resync) while persistence is suspended...');
+    const { bot, manager, logEntries } = makeBot();
+    let persistCalls = 0;
+    manager.persistGrid = async () => {
+        persistCalls += 1;
+        return {
+            isValid: true,
+            skipped: true,
+            suspended: true,
+            reason: 'credential daemon watchdog failed: Daemon ping timeout'
+        };
+    };
+
+    const resyncCalls = [];
+    (manager as any).requestStructuralGridResync = async (reason, opts) => {
+        resyncCalls.push({ reason, opts });
+        return { scheduled: true };
+    };
+    let dirtyMarkCalls = 0;
+    (manager as any)._markGridDirty = () => { dirtyMarkCalls += 1; };
+
+    const originalBuildCreate = chainOrders.buildCreateOrderOp;
+    chainOrders.buildCreateOrderOp = async (account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => ({
+        op: { op_name: 'limit_order_create', op_data: {} },
+        finalInts: { sell: amountToSell, receive: minToReceive, sellAssetId, receiveAssetId }
+    });
+    const originalExecuteBatch = chainOrders.executeBatch;
+    chainOrders.executeBatch = async () => ({
+        success: true, operation_results: [[1, '1.7.572399999']]
+    });
+
+    const plannedOrder = {
+        id: 'sell-4', type: ORDER_TYPES.SELL, price: 100, size: 10,
+        state: ORDER_STATES.VIRTUAL, orderId: ''
+    };
+    manager.orders.set('sell-4', { ...plannedOrder });
+
+    try {
+        const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
+        workingGrid.set('sell-4', { ...plannedOrder });
+        const result = await bot._updateOrdersOnChainBatchCOW({
+            workingGrid,
+            workingIndexes: workingGrid.getIndexes(),
+            workingBoundary: 0,
+            actions: [{ type: COW_ACTIONS.CREATE, id: 'sell-4', order: plannedOrder }]
+        });
+        assert.strictEqual(result.executed, true, 'Batch should still execute; suspension is non-fatal');
+        assert.strictEqual(persistCalls, 2, 'persistGrid should be attempted twice (first + one retry)');
+        const deferLog = logEntries.find(l => l.msg.includes('Grid persistence is suspended'));
+        assert.ok(deferLog, 'Deferral log should fire when the retry is still suspended');
+        assert.strictEqual(resyncCalls.length, 0, 'A deliberate persistence suspension must NOT trigger a structural resync');
+        assert.strictEqual(dirtyMarkCalls, 1, 'The un-persisted committed grid must be marked dirty so the flush safety net retries it');
+        assert.strictEqual(manager._persistenceWarning, undefined, 'Warning should be cleared on the deferral path');
+    } finally {
+        chainOrders.buildCreateOrderOp = originalBuildCreate;
+        chainOrders.executeBatch = originalExecuteBatch;
+    }
+    console.log('\u2713 COW-PERSIST-003 passed');
+}
+
 async function run() {
     console.log('Running COW orchestration fix tests...');
     await testPreBroadcastPriceFreshnessRebuildsOp();
     await testPreBroadcastNoDriftNoRebuild();
     await testPersistenceCommitGuardRetriesOnSkipped();
     await testPersistenceCommitGuardRequestsResyncOnRepeatedFailure();
+    await testPersistenceCommitGuardDefersOnSustainedSuspension();
     console.log('\n\u2713 All COW orchestration fix tests passed');
 }
 

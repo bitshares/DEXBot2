@@ -1099,12 +1099,21 @@ async function resyncIfUnreconciled(bot: BotLike, err: unknown, pending: Pending
     // chain snapshot.
     const alreadyScheduled = bot._structuralGridResyncRunning || bot._structuralGridResyncTimer;
     if (!alreadyScheduled && chainSnapshot.length > 0) {
+        // "Unreconciled" must mean chain orders absent from MASTER, not merely
+        // absent from this batch's adopted set. Every resting order master
+        // already tracks is reconciled by definition; counting those as
+        // unreconciled forced a structural resync (grid rebuild + LAST-FILL
+        // pivot clear) after every uncertain broadcast on a populated grid.
         const reconciledOrderIds = new Set(adopted.map((a) => a.match?.id).filter(Boolean));
+        try {
+            const known = collectKnownOnChainOrderIds(bot.manager, null, null).masterIds;
+            for (const id of known) reconciledOrderIds.add(id);
+        } catch { /* best-effort: fall back to the adopted-only set */ }
         const unreconciledCount = chainSnapshot.filter((o) => !reconciledOrderIds.has(o.id)).length;
         if (unreconciledCount > 0) {
             bot.manager.logger.log(
-                `[COW][UNCERTAIN] ${unreconciledCount} chain order(s) remain unreconciled after uncertain broadcast recovery. ` +
-                `These may be legitimate pre-existing orders or leftovers from a prior cycle. Requesting structural resync.`,
+                `[COW][UNCERTAIN] ${unreconciledCount} chain order(s) unknown to master remain after uncertain ` +
+                `broadcast recovery (neither adopted nor tracked). Requesting structural resync.`,
                 'warn'
             );
             await requestStructuralResync(
@@ -4741,6 +4750,15 @@ async function updateOrdersOnChainBatchCOWBody(
                 
                 const batchResult = await processBatchResults(bot, result, executedContexts);
 
+                // A `suspended` persist result is a deliberate, temporary gate
+                // (credential-daemon outage), NOT a corrupt/ahead state: the
+                // in-memory master stays authoritative and the dirty-flush
+                // pipeline persists it once suspension lifts. Treat it as a
+                // deferral — never as a structural-resync trigger.
+                const isSuspendedPersist = (r: unknown): boolean => {
+                    const v = r as { skipped?: unknown; suspended?: unknown } | null | undefined;
+                    return Boolean(v && v.skipped && v.suspended === true);
+                };
                 const persistResult = await bot.manager.persistGrid();
                 if (persistResult && (persistResult.skipped || persistResult.isValid === false)) {
                     bot.manager.logger.log(
@@ -4752,7 +4770,20 @@ async function updateOrdersOnChainBatchCOWBody(
                     );
                     bot.manager._persistenceWarning = persistResult;
                     const retryResult = await bot.manager.persistGrid();
-                    if (retryResult && (retryResult.skipped || retryResult.isValid === false)) {
+                    if (isSuspendedPersist(retryResult)) {
+                        bot.manager.logger.log(
+                            `[COW][PERSIST-GUARD] Grid persistence is suspended ` +
+                            `(${(retryResult as { reason?: string }).reason || 'no reason'}); deferring disk flush until it resumes.`,
+                            'warn'
+                        );
+                        // The committed grid is not on disk yet. Mark it dirty so
+                        // the end-of-tick flushGridDirty safety net retries it at
+                        // the next end-of-tick flush after the suspension lifts,
+                        // instead of relying on the next COW/recovery persist to
+                        // converge disk.
+                        try { bot.manager._markGridDirty?.(); } catch { /* best-effort */ }
+                        delete bot.manager._persistenceWarning;
+                    } else if (retryResult && (retryResult.skipped || retryResult.isValid === false)) {
                         bot.manager.logger.log(
                             `[COW][PERSIST-GUARD] Retry also skipped/invalid ` +
                             `(${retryResult.reason || 'no reason'}). Master grid in memory ` +

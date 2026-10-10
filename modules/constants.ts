@@ -291,6 +291,11 @@ let TIMING = {
     RETRY_BACKOFF_CAP_MS: 30000,  // 30 seconds - Max exponential backoff delay for connection retries
     DAEMON_PING_TIMEOUT_MS: 5000,      // 5 seconds - Private key daemon ping/healthcheck timeout
     CREDENTIAL_DAEMON_WATCHDOG_MS: 60000,  // 60 seconds - Credential daemon watchdog polling interval
+    // Consecutive failed watchdog probes before the daemon is declared down and
+    // grid persistence is suspended. 2 tolerates a single transient timeout
+    // (daemon busy signing a large batch) without pausing writes; a genuinely
+    // dead daemon still trips on the very next probe (~60s later).
+    CREDENTIAL_DAEMON_WATCHDOG_FAILURE_THRESHOLD: 2,
 
     // Main loop and polling defaults
     RUN_LOOP_DEFAULT_MS: 300000,  // 5 minutes - default open-orders sync cycle delay (env override: OPEN_ORDERS_SYNC_LOOP_MS)
