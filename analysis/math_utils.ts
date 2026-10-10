@@ -1,6 +1,7 @@
 'use strict';
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { getStorage } from '../modules/storage/index.js';
 const { readJSON } = getStorage();
 import {
@@ -40,6 +41,73 @@ function median(values: number[]): number | null {
     const s = values.slice().sort((a, b) => a - b);
     const mid = s.length >> 1;
     return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+interface PercentileOptions {
+    /** 'linear' interpolates between the two bracketing ranks (R-7, default);
+     *  'nearest' picks a single rank. */
+    interpolation?: 'linear' | 'nearest';
+    /** For 'nearest': round the rank (default) or floor it. */
+    rounding?: 'round' | 'floor';
+    /** Skip the internal sort when the input is already ascending. */
+    sorted?: boolean;
+    /** Value returned for an empty input (default null). */
+    empty?: number | null;
+}
+
+/**
+ * Percentile of a numeric array.
+ *
+ * Single home for the four copies previously kept by optimizer_high_resolution
+ * (fractional q, linear), backtest_ama_slope_huber (nearest/round),
+ * trade_profitability (pre-sorted, linear) and backtest_lookback_drawdown
+ * (nearest/floor). The options preserve each caller's exact ranking rule so
+ * centralizing does not silently change any reported number.
+ *
+ * @param values numeric array (copied + sorted unless `sorted` is true)
+ * @param p      percentile position in [0, 100]
+ */
+function percentile(values: number[], p: number, opts: PercentileOptions & { empty: number }): number;
+function percentile(values: number[], p: number, opts?: PercentileOptions): number | null;
+function percentile(
+    values: number[],
+    p: number,
+    { interpolation = 'linear', rounding = 'round', sorted = false, empty = null }: PercentileOptions = {},
+): number | null {
+    if (values.length === 0) return empty;
+    const s = sorted ? values : values.slice().sort((a, b) => a - b);
+    const pct = Math.max(0, Math.min(100, p));
+    const idx = (pct / 100) * (s.length - 1);
+    if (interpolation === 'linear') {
+        const lo = Math.floor(idx);
+        const hi = Math.ceil(idx);
+        if (lo === hi) return s[lo];
+        const t = idx - lo;
+        return s[lo] * (1 - t) + s[hi] * t;
+    }
+    const i = rounding === 'floor' ? Math.floor(idx) : Math.round(idx);
+    return s[Math.min(s.length - 1, Math.max(0, i))];
+}
+
+interface FmtNumOptions {
+    /** Text returned for a value that is not finite. */
+    fallback?: string;
+    /** When true, only a real finite `number` counts (null/undefined fall back);
+     *  when false (default), values are coerced with `Number()` first, so
+     *  `null` formats as `0`. */
+    strict?: boolean;
+}
+
+/**
+ * Fixed-decimal number formatting with a non-finite fallback.
+ *
+ * Single home for the identical `fmt(x, d)` copies in backtest_ama_slope_huber
+ * and backtest_lookback_drawdown, plus the strict/padded variant in
+ * bot_fitting/shared_utils (`fmt(x, d, { fallback: '  n/a', strict: true })`).
+ */
+function fmtNum(x: number | null | undefined, d = 2, { fallback = 'n/a', strict = false }: FmtNumOptions = {}): string {
+    const finite = strict ? Number.isFinite(x) : Number.isFinite(Number(x));
+    return finite ? Number(x).toFixed(d) : fallback;
 }
 
 function quantize(value: number, quantum: number | null | undefined): number {
@@ -92,13 +160,59 @@ function loadCandleFile(filePath: string): CandleFile {
     return { candles: [], meta: null };
 }
 
+/** Normalized OHLCV candle (millisecond-free epoch seconds, like the adapter). */
+type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
+
+/**
+ * Load candle records from a single JSON file or a directory of monthly JSON
+ * shards.
+ *
+ * Directory entries are filtered to `*.json` (manifests skipped) and sorted;
+ * shards are merged and deduped by candle time (a later file overwrites an
+ * earlier duplicate). Returns the merged candles, the first non-null `meta` and
+ * the file count. Single home for the loader previously copied into
+ * backtest_ama_slope_huber.
+ */
+function loadCandleSeries(input: string): { candles: Candle[]; meta: Record<string, unknown> | null; files: number } {
+    const resolved = path.resolve(input);
+    if (!fs.existsSync(resolved)) throw new Error(`Data path not found: ${resolved}`);
+    const stat = fs.statSync(resolved);
+    const files = stat.isDirectory()
+        ? fs.readdirSync(resolved)
+            .filter((name) => /\.json$/i.test(name) && !/manifest/i.test(name))
+            .map((name) => path.join(resolved, name))
+            .sort()
+        : [resolved];
+
+    const byTime = new Map<number, Candle>();
+    let meta: Record<string, unknown> | null = null;
+    for (const file of files) {
+        let raw: { candles?: unknown; meta?: Record<string, unknown> } | null = null;
+        try { raw = readJSON(file) as { candles?: unknown; meta?: Record<string, unknown> }; } catch { continue; }
+        const arr = Array.isArray(raw?.candles) ? raw.candles : (Array.isArray(raw) ? raw : null);
+        if (!arr || arr.length === 0) continue;
+        if (!meta && raw?.meta) meta = raw.meta;
+        for (const c of arr) {
+            const n = normalizeCandle(c);
+            if (n) byTime.set(n.time, { time: n.time, open: n.open, high: n.high, low: n.low, close: n.close, volume: n.volume });
+        }
+    }
+
+    const candles = [...byTime.values()].sort((a, b) => a.time - b.time);
+    if (candles.length === 0) throw new Error(`No candles found under ${resolved}`);
+    return { candles, meta, files: files.length };
+}
+
 export {
     range,
     calcStdDev,
     geometricRange,
     median,
+    percentile,
+    fmtNum,
     getCandleClose,
     getCandleTimestamp,
     normalizeCandle,
     loadCandleFile,
+    loadCandleSeries,
 }

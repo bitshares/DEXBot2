@@ -5,7 +5,7 @@ import { computeATRSeries } from '../../market_adapter/core/strategies/atr/calcu
 import { computeVolatilityShift } from '../../market_adapter/core/strategies/volatility_shift.js';
 import { embedFunctionSources, escapeHtml, serializeJsonForScript, toEpochSeconds, UPLOT_SHARED_SCRIPT, uplotInlineTags } from '../chart_utils.js';
 import { sharedChartCSS } from '../chart_css.js';
-import { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, wireChartEvents, zoomResetScript, sizeChartsFn } from '../chart_ui.js';
+import { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, wireChartEvents, zoomResetScript, sizeChartsFn, refreshChartsPreservingZoomFn } from '../chart_ui.js';
 
 const EMBEDDED_SHARED_FUNCS = embedFunctionSources([computeATRSeries, computeVolatilityShift]);
 
@@ -613,15 +613,14 @@ function generateHTML(data: VolatilityChartInput, title = 'ATR Volatility Resear
             charts = [priceChart, varianceChart, shiftChart];
             ${wireChartEvents('charts', 'updateLegend', 'shiftChart.cursor.idx ?? data.realBarCount - 1')}
 
-            function refreshChartsPreservingZoom() {
-                const xs = shiftChart.scales.x;
-                const savedX = xs ? { min: Number.isFinite(xs.min) ? xs.min : xMin, max: Number.isFinite(xs.max) ? xs.max : xMax } : null;
-                varianceChart.setData([data.dates, toPlotLog(varianceSeries)], false);
-                shiftChart.setData([data.dates, rawDeltaArr, deltaArr], false);
-                if (savedX) {
-                    [varianceChart, shiftChart].forEach((chart) => chart.batch(() => chart.setScale('x', savedX)));
-                }
-            }
+            ${refreshChartsPreservingZoomFn({
+                anchor: 'shiftChart.scales.x',
+                reload: [
+                    'varianceChart.setData([data.dates, toPlotLog(varianceSeries)], false);',
+                    'shiftChart.setData([data.dates, rawDeltaArr, deltaArr], false);',
+                ],
+                charts: '[varianceChart, shiftChart]',
+            })}
 
             function applyShiftFromSliders() {
                 recalcShift();

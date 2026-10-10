@@ -105,4 +105,58 @@ function sizeChartsFn(pairs: Array<[string, string]>): string {
         }`;
 }
 
-export { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, fmtDateFn, wireChartEvents, zoomResetScript, sizeChartsFn }
+interface TimeLabelOptions {
+    /** Separator between the date and the HH:MM part in the sub-14d branch. */
+    dateTimeSep?: string;
+    /** Zero-pad the day-of-month (tradingview) vs leave it bare (dynamic weight). */
+    padDay?: boolean;
+}
+
+/**
+ * Return a self-contained `formatTimeLabel(tsSec, spanSec)` browser helper that
+ * chooses a label granularity from the visible span (year / month / day /
+ * minute). Single home for the near-identical copies in
+ * dynamic_weight_chart_generator and tradingview_uplot_chart_generator; the
+ * options preserve each chart's exact text (bare vs padded day, comma).
+ */
+function formatTimeLabelFn({ dateTimeSep = ' ', padDay = false }: TimeLabelOptions = {}): string {
+    const dayExpr = padDay ? 'pad2(d.getUTCDate())' : 'd.getUTCDate()';
+    return `function formatTimeLabel(tsSec, spanSec) {
+            const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const pad2 = (n) => String(n).padStart(2, '0');
+            const d = new Date(tsSec * 1000);
+            if (!Number.isFinite(spanSec)) spanSec = 0;
+            if (spanSec >= 365 * 24 * 3600 * 2) return String(d.getUTCFullYear());
+            if (spanSec >= 90 * 24 * 3600) return MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+            if (spanSec >= 14 * 24 * 3600) return MONTHS[d.getUTCMonth()] + ' ' + ${dayExpr};
+            return MONTHS[d.getUTCMonth()] + ' ' + ${dayExpr} + '${dateTimeSep}' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+        }`;
+}
+
+interface RefreshZoomOptions {
+    /** JS expression for the chart whose current x-scale is preserved. */
+    anchor: string;
+    /** Statements that re-populate the chart data (one per chart). */
+    reload: string[];
+    /** JS expression for the array of charts receiving the restored x-scale. */
+    charts: string;
+}
+
+/**
+ * Return a `refreshChartsPreservingZoom()` browser helper: snapshot the anchor
+ * chart's current x-range, re-run `reload`, then re-apply the saved range in one
+ * batched `setScale` per chart. Single home for the copies in
+ * dynamic_weight_chart_generator and volatility_chart_generator.
+ */
+function refreshChartsPreservingZoomFn({ anchor, reload, charts }: RefreshZoomOptions): string {
+    return `function refreshChartsPreservingZoom() {
+            const xs = ${anchor};
+            const savedX = xs ? { min: Number.isFinite(xs.min) ? xs.min : xMin, max: Number.isFinite(xs.max) ? xs.max : xMax } : null;
+            ${reload.join('\n            ')}
+            if (savedX) {
+                ${charts}.forEach((c) => c.batch(() => c.setScale('x', savedX)));
+            }
+        }`;
+}
+
+export { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, fmtDateFn, wireChartEvents, zoomResetScript, sizeChartsFn, formatTimeLabelFn, refreshChartsPreservingZoomFn }

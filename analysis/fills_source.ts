@@ -109,6 +109,83 @@ function toReal(amount: number, assetId: string): number {
 }
 
 /**
+ * A fill needs strictly positive, finite amounts on both legs. A zero base
+ * amount would produce an infinite price (quoteAmount / 0) that poisons
+ * downstream inventory lots and PnL aggregates.
+ */
+function isValidFillAmounts(baseAmount: number, quoteAmount: number): boolean {
+    return Number.isFinite(baseAmount) && Number.isFinite(quoteAmount)
+        && baseAmount > 0 && quoteAmount > 0;
+}
+
+/** Match a user-supplied pair leg against a chain asset id or its symbol. */
+function matchesAssetRef(ref: string, assetId: string): boolean {
+    const want = String(ref).trim().toUpperCase();
+    if (!want) return false;
+    return assetId.toUpperCase() === want || assetSymbol(assetId).toUpperCase() === want;
+}
+
+interface ClassifiedFill {
+    direction: 'buy' | 'sell';
+    baseAsset: string;
+    quoteAsset: string;
+    baseAmount: number;
+    quoteAmount: number;
+    price: number;
+}
+
+/**
+ * Resolve a raw fill's buy/sell direction, base/quote assets and real amounts.
+ *
+ * Direction/base/quote rules (single home for trade_profitability and
+ * grid_correction_check, which previously carried verbatim copies):
+ *  - BTS on the pays side  → buy the received asset, quote = BTS.
+ *  - BTS on the receives side → sell the paid asset, quote = BTS.
+ *  - any other cross-pair   → lower asset id is the base; sell when pays < receives.
+ *
+ * Returns `null` when an asset precision is unknown or either real amount is
+ * not strictly positive/finite. Callers own the skip counting and any extra
+ * validation (e.g. the market-fee asset check in trade_profitability).
+ */
+function classifyFill(f: FillRecord): ClassifiedFill | null {
+    const pAsset = f.pays.asset_id;
+    const rAsset = f.receives.asset_id;
+    let direction: 'buy' | 'sell';
+    let baseAsset: string;
+    let quoteAsset: string;
+    let baseAmount: number;
+    let quoteAmount: number;
+
+    if (pAsset === BTS_ID && rAsset !== BTS_ID) {
+        direction = 'buy';
+        baseAsset = rAsset;
+        quoteAsset = BTS_ID;
+        baseAmount = toReal(f.receives.amount, rAsset);
+        quoteAmount = toReal(f.pays.amount, BTS_ID);
+    } else if (rAsset === BTS_ID && pAsset !== BTS_ID) {
+        direction = 'sell';
+        baseAsset = pAsset;
+        quoteAsset = BTS_ID;
+        baseAmount = toReal(f.pays.amount, pAsset);
+        quoteAmount = toReal(f.receives.amount, BTS_ID);
+    } else {
+        // Non-BTS cross-pair: consistent ordering (lower asset id = base).
+        const baseForCheck = pAsset < rAsset ? pAsset : rAsset;
+        const quoteForCheck = pAsset < rAsset ? rAsset : pAsset;
+        if (assetPrec(baseForCheck) === undefined || assetPrec(quoteForCheck) === undefined) return null;
+        const isSell = pAsset < rAsset;
+        direction = isSell ? 'sell' : 'buy';
+        baseAsset = isSell ? pAsset : rAsset;
+        quoteAsset = isSell ? rAsset : pAsset;
+        baseAmount = toReal(isSell ? f.pays.amount : f.receives.amount, baseAsset);
+        quoteAmount = toReal(isSell ? f.receives.amount : f.pays.amount, quoteAsset);
+    }
+
+    if (!isValidFillAmounts(baseAmount, quoteAmount)) return null;
+    return { direction, baseAsset, quoteAsset, baseAmount, quoteAmount, price: quoteAmount / baseAmount };
+}
+
+/**
  * Collect all unique non-BTS asset IDs from fills, resolve unknown precisions
  * from the blockchain, and populate the runtime cache.
  */
@@ -242,7 +319,11 @@ export {
     assetSymbol,
     assetPrec,
     toReal,
+    isValidFillAmounts,
+    matchesAssetRef,
+    classifyFill,
     resolveAssetPrecisions,
     fetchAllFills,
     FillRecord,
+    ClassifiedFill,
 };

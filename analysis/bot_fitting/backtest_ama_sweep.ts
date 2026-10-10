@@ -2,15 +2,16 @@
 
 import path from 'node:path';
 import os from 'node:os';
-import { pathToFileURL, fileURLToPath } from 'node:url';
-import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { pathToFileURL } from 'node:url';
+import { isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strategies/ama.js';
 import { computeHuberWindowSlopePct } from '../../market_adapter/core/strategies/ama_slope_model.js';
 import { range } from '../math_utils.js';
-import { parseListOrRange, loadLpData, fmt, loadAmaStrategies } from './shared_utils.js';
+import { runModuleWorker } from '../worker_pool.js';
+import { loadLpData, fmt, loadAmaStrategies, consumeBacktestArg, slopeResetThresholdPct, DEFAULT_FEE_ROUNDTRIP_PCT, DEFAULT_MIN_SPREAD_FACTOR, DEFAULT_BTS_CREATE_FEE, DEFAULT_BTS_CANCEL_FEE, DEFAULT_BTS_MAKER_CREATE_FACTOR, DEFAULT_TX_FEE_PRICE, DEFAULT_REPOSITION_PCT, SLOPE_LOOKBACK_BARS } from './shared_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
-import { GRID_LIMITS, MARKET_ADAPTER } from '../../modules/constants.js';
+import { MARKET_ADAPTER } from '../../modules/constants.js';
 // Production grid geometry + slope-ratio offset — shared with bot_fitting so
 // both tools build byte-identical grids for identical params (#12).
 import { buildProductionGrid, computeGridPriceOffsetPct } from './backtest_bot_fitting.js';
@@ -36,14 +37,7 @@ const { writeJSON } = getStorage();
  */
 
 const DEFAULT_MAX_ORDERS = 20; // weight-profile sizing cap per side (search abstraction)
-const DEFAULT_FEE_ROUNDTRIP_PCT = 0.20;
-// Canonical spread floor from production grid limits (modules/constants.ts).
-const DEFAULT_MIN_SPREAD_FACTOR = GRID_LIMITS.MIN_SPREAD_FACTOR;
 const DEFAULT_CAPITAL = 10000; // notional units per side
-const DEFAULT_BTS_CREATE_FEE = 0.48260;
-const DEFAULT_BTS_CANCEL_FEE = 0.00482;
-const DEFAULT_BTS_MAKER_CREATE_FACTOR = 0.10;
-const DEFAULT_TX_FEE_PRICE = 1.0;
 
 // Weight profiles (symmetric for both sides)
 //   valley:   heavier at edges (outer levels), lighter near center
@@ -62,16 +56,6 @@ const WEIGHT_PROFILES = {
 const DEFAULT_SPREAD_VALUES = [...range(0.5, 4, 0.25), ...range(5, 12, 1)];
 const DEFAULT_INCREMENT_VALUES = [...range(0.2, 2, 0.1), ...range(2.5, 8, 0.5)];
 const DEFAULT_RATIO_VALUES = [1.05, 1.1, 1.15, 1.2, 1.3, 1.5, 2, 3, 5, 10];
-// Reposition threshold: production default (MARKET_ADAPTER
-// AMA_DELTA_THRESHOLD_PERCENT = 1%); --reposition overrides.
-const DEFAULT_REPOSITION_PCT = MARKET_ADAPTER.AMA_DELTA_THRESHOLD_PERCENT;
-
-// Trigger B / grid-price offset (asymmetricBounds whitelist) — same constants
-// as bot_fitting, shared semantics with the live adapter.
-const SLOPE_TRIGGER_FACTOR = MARKET_ADAPTER.AMA_SLOPE_DELTA_THRESHOLD_PERCENT;
-const SLOPE_MAX_PCT = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_MAX_SLOPE_PCT;
-const SLOPE_LOOKBACK_BARS = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS;
-
 
 function parseArgs() {
     const args = process.argv.slice(2);
@@ -119,21 +103,14 @@ function parseArgs() {
         const val = args[i + 1];
         if (arg === '--help' || arg === '-h') { printHelp(); process.exit(0); }
         if (!val) continue;
+        if (consumeBacktestArg(arg, val, out, {
+            spreadValues: DEFAULT_SPREAD_VALUES,
+            incrementValues: DEFAULT_INCREMENT_VALUES,
+            ratioValues: DEFAULT_RATIO_VALUES,
+        })) { i++; continue; }
         switch (arg) {
-            case '--data': out.dataPath = path.resolve(val); i++; break;
-            case '--results': out.resultsPath = path.resolve(val); i++; break;
-            case '--spread': out.spreadValues = parseListOrRange(val, DEFAULT_SPREAD_VALUES); i++; break;
-            case '--increment': out.incrementValues = parseListOrRange(val, DEFAULT_INCREMENT_VALUES); i++; break;
-            case '--ratio': out.ratioValues = parseListOrRange(val, DEFAULT_RATIO_VALUES); i++; break;
             case '--max-orders': out.maxOrders = Number(val); i++; break;
-            case '--fee': out.feeRoundtripPct = Number(val); i++; break;
-            case '--min-spread-factor': out.minSpreadFactor = Number(val); i++; break;
             case '--capital': out.capital = Number(val); i++; break;
-            case '--reposition': out.repositionPct = Number(val); i++; break;
-            case '--bts-create-fee': out.btsCreateFee = Number(val); i++; break;
-            case '--bts-cancel-fee': out.btsCancelFee = Number(val); i++; break;
-            case '--maker-create-factor': out.makerCreateFactor = Number(val); i++; break;
-            case '--tx-fee-price': out.txFeePrice = Number(val); i++; break;
             case '--top': out.topN = Number(val); i++; break;
             case '--lookback': out.lookbackBars = Math.max(1, Math.round(Number(val))); i++; break;
         }
@@ -352,7 +329,7 @@ function simulatePersistentGrid(candles: SimCandle[], amaValues: number[], param
     const skip = Math.min(warmupParam, Math.max(0, candles.length - 2));
     const capitalPerSide = capital;
     const makerCreateFeeBts = btsCreateFee * makerCreateFactor;
-    const slopeDeltaThresholdPct = (SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT;
+    const slopeDeltaThresholdPct = slopeResetThresholdPct();
 
     // First tradable bar: need a finite positive AMA to anchor the grid.
     let startIdx = Math.min(skip, candles.length - 1);
@@ -778,17 +755,8 @@ function runParallel(strategies: AmaStrategy[], candles: SimCandle[], closes: nu
     console.log(`  Workers:      ${numCpus} threads (${os.cpus().length} CPUs available)\n`);
 
     return Promise.all(strategies.map((strategy) => {
-        return new Promise<SweepResult>((resolve, reject) => {
-            // ESM: resolve this module's path from import.meta.url
-            // (__filename is undefined in ES modules).
-            const worker = new Worker(fileURLToPath(import.meta.url), {
-                workerData: { strategy, candles, closes, weightEntries, cfg },
-            });
-            worker.on('message', (msg) => resolve(msg as SweepResult));
-            worker.on('error', reject);
-            worker.on('exit', (code) => {
-                if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
-            });
+        return runModuleWorker<SweepResult>(import.meta.url, { strategy, candles, closes, weightEntries, cfg }, {
+            resolveOn: (msg) => ({ done: true, value: msg as SweepResult }),
         });
     }));
 }
@@ -820,7 +788,7 @@ async function run() {
     console.log(`  Spread floor: > fee (${cfg.feeRoundtripPct}%)`);
     console.log(`  Reset (A):    ${cfg.repositionPct}% AMA drift from grid center (ratchet)`);
     console.log(`  Asym. bounds: ${cfg.asymmetricBounds ? 'ON — slope reset (B) + grid price offset enabled (whitelist semantics)' : 'OFF — typical non-whitelisted bot (production default)'}`);
-    console.log(`  Reset (B):    |slope - slope@lastReset| >= ${fmt((SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT, 4)}% (lookback ${cfg.lookbackBars ?? SLOPE_LOOKBACK_BARS})${cfg.asymmetricBounds ? '' : ' [gated off]'}`);
+    console.log(`  Reset (B):    |slope - slope@lastReset| >= ${fmt(slopeResetThresholdPct(), 4)}% (lookback ${cfg.lookbackBars ?? SLOPE_LOOKBACK_BARS})${cfg.asymmetricBounds ? '' : ' [gated off]'}`);
     console.log(`  Tx model:     create=${fmt(cfg.btsCreateFee, 5)} BTS, cancel=${fmt(cfg.btsCancelFee, 5)} BTS, maker=${fmt(cfg.makerCreateFactor * 100, 1)}%, 1 BTS=${fmt(cfg.txFeePrice, 2)} units`);
     console.log(`  Combos/AMA:   ${totalCombos}  |  Total: ${totalCombos * strategies.length}\n`);
 

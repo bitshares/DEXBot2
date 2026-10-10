@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { MARKET_ADAPTER } from '../../modules/constants.js';
 import { escapeHtml, serializeJsonForScript, UPLOT_SHARED_SCRIPT, embedFunctionSources, uplotInlineTags } from '../chart_utils.js';
 import { cursorCSS, uplotBgCSS } from '../chart_css.js';
-import { zoomResetScript } from '../chart_ui.js';
+import { zoomResetScript, formatTimeLabelFn } from '../chart_ui.js';
 import { normalizeCandle } from '../math_utils.js';
 import { PATHS } from '../../modules/paths.js';
 import { getStorage } from '../../modules/storage/index.js';
@@ -1063,20 +1063,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             const d = new Date(ts * 1000);
             return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
-        function formatTimeLabel(tsSec, spanSec) {
-            const d = new Date(tsSec * 1000);
-            if (!Number.isFinite(spanSec)) spanSec = 0;
-            if (spanSec >= 365 * 24 * 3600 * 2) {
-                return String(d.getUTCFullYear());
-            }
-            if (spanSec >= 90 * 24 * 3600) {
-                return d.toLocaleString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
-            }
-            if (spanSec >= 14 * 24 * 3600) {
-                return d.toLocaleString(undefined, { month: 'short', day: '2-digit', timeZone: 'UTC' });
-            }
-            return d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
-        }
+        ${formatTimeLabelFn({ dateTimeSep: ', ', padDay: true })}
         function makeTimeAxis(showLabels) {
             return {
                 show: true,

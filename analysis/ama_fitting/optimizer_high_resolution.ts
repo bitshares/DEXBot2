@@ -3,14 +3,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { pathToFileURL, fileURLToPath } from 'node:url';
-import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { pathToFileURL } from 'node:url';
+import { isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strategies/ama.js';
 import { toIntervalLabel } from '../../market_adapter/interval_utils.js';
 import { generateHTML } from '../../market_adapter/lp_chart_core.js';
 import { PATHS } from '../../modules/paths.js';
 import { ensureDir } from '../../modules/order/utils/system.js';
-import { range, geometricRange } from '../math_utils.js';
+import { range, geometricRange, percentile } from '../math_utils.js';
+import { runModuleWorker, splitIntoShards } from '../worker_pool.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { normalizeAssetSymbol } from '../../modules/utils/asset_symbols.js';
 const { readJSON, writeJSON } = getStorage();
@@ -255,18 +256,6 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
 
     return out;
-}
-
-function percentile(values: number[], q: number): number | null {
-    if (!Array.isArray(values) || values.length === 0) return null;
-    const sorted = [...values].sort((a, b) => a - b);
-    const qq = Math.max(0, Math.min(1, q));
-    const pos = (sorted.length - 1) * qq;
-    const lo = Math.floor(pos);
-    const hi = Math.ceil(pos);
-    if (lo === hi) return sorted[lo];
-    const t = pos - lo;
-    return sorted[lo] * (1 - t) + sorted[hi] * t;
 }
 
 function getAmaObjectivesFromArgs(args: Record<string, unknown>) {
@@ -517,32 +506,17 @@ function runSearchShard(payload: ShardPayload, onProgress: ((msg: ProgressMsg) =
 }
 
 function spawnShardWorker(payload: ShardPayload, onProgress: ((msg: ProgressMsg) => void) | null): Promise<SearchResult> {
-    return new Promise((resolve, reject) => {
-        // ESM: resolve this module's path from import.meta.url
-        // (__filename is undefined in ES modules).
-        const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { type: 'search_shard', payload } });
-        worker.on('message', (msg) => {
-            if (!msg || typeof msg !== 'object') return;
-            if (msg.type === 'progress') {
-                if (onProgress) onProgress(msg);
-                return;
+    return runModuleWorker<SearchResult>(import.meta.url, { type: 'search_shard', payload }, {
+        onProgress: (msg) => {
+            if (msg && typeof msg === 'object' && (msg as { type?: unknown }).type === 'progress') {
+                onProgress?.(msg as ProgressMsg);
             }
-            if (msg.type === 'done') resolve(msg.result);
-        });
-        worker.on('error', reject);
-        worker.on('exit', (code) => {
-            if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
-        });
+        },
+        resolveOn: (msg) =>
+            msg && typeof msg === 'object' && (msg as { type?: unknown }).type === 'done'
+                ? { done: true, value: (msg as { result: SearchResult }).result }
+                : { done: false },
     });
-}
-
-function splitIntoShards(values: number[], shardCount: number): number[][] {
-    const out: number[][] = [];
-    const size = Math.ceil(values.length / shardCount);
-    for (let i = 0; i < values.length; i += size) {
-        out.push(values.slice(i, i + size));
-    }
-    return out.filter((s) => s.length > 0);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -633,7 +607,8 @@ async function run() {
 
     const objectiveResults = objectives.map((objective) => {
         const distanceWeight = objective.distanceWeight;
-        const computedCap = skipCap ? null : percentile(maxDistVals, objective.distanceCapQuantile);
+        // distanceCapQuantile is a fraction in (0, 1]; percentile takes [0, 100].
+        const computedCap = skipCap ? null : percentile(maxDistVals, objective.distanceCapQuantile * 100);
         const cappedEntries = skipCap || computedCap == null ? entries : entries.filter((e) => e.area.maxDist <= computedCap!);
 
         let best: WeightedEntry | null = null;

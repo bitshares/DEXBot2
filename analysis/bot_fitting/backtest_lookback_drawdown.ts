@@ -35,9 +35,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strategies/ama.js';
-import { loadCandles } from '../trend_detection/backtest_ama_slope_huber.js';
 import { parseListOrRange } from './shared_utils.js';
-import { median } from '../math_utils.js';
+import { printHelpHeader, helpRow } from '../analyze_args.js';
+import { median, percentile, fmtNum as fmt, loadCandleSeries } from '../math_utils.js';
 import { simulatePersistentGrid, WEIGHT_PROFILES } from './backtest_ama_sweep.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
@@ -107,23 +107,19 @@ function parseArgs() {
 }
 
 function printHelp() {
-    console.log('Lookback -> fill-model drawdown backtest (paired persistent-grid simulation)');
-    console.log('');
-    console.log('Usage: node dist/analysis/bot_fitting/backtest_lookback_drawdown.js [options]');
-    console.log('');
-    console.log('Options:');
-    console.log('  --data <path>            LP candle file or shard directory (required)');
-    console.log(`  --ama <AMA1..AMA4>       Built-in AMA preset (default: ${MA.DEFAULT_AMA_KEY})`);
-    console.log(`  --lookbacks <spec>       Lookbacks to compare: 12,14,16,20 (default: ${DEFAULT_LOOKBACKS.join(',')})`);
-    console.log(`  --spread <spec>          Spread grid (default: ${DEFAULT_SPREADS.join(',')})`);
-    console.log(`  --increment <spec>       Increment grid (default: ${DEFAULT_INCREMENTS.join(',')})`);
-    console.log(`  --ratio <spec>           Max/min ratio grid (default: ${DEFAULT_RATIOS.join(',')})`);
-    console.log('  --max-orders <n>         Size cap per side (default: 20)');
-    console.log('  --fee <pct>              Round-trip fee % (default: 0.20)');
-    console.log('  --capital <n>            Notional capital per side (default: 10000)');
-    console.log(`  --reposition <pct>       AMA drift % to re-center (default: ${MA.AMA_DELTA_THRESHOLD_PERCENT})`);
-    console.log('  --no-asymmetric-bounds   Disable trigger B + slope offset (default: enabled)');
-    console.log('  --out <path>             JSON output path');
+    printHelpHeader('Lookback -> fill-model drawdown backtest (paired persistent-grid simulation)', 'bot_fitting/backtest_lookback_drawdown.js');
+    console.log(helpRow('--data <path>', 'LP candle file or shard directory (required)', 25));
+    console.log(helpRow('--ama <AMA1..AMA4>', `Built-in AMA preset (default: ${MA.DEFAULT_AMA_KEY})`, 25));
+    console.log(helpRow('--lookbacks <spec>', `Lookbacks to compare: 12,14,16,20 (default: ${DEFAULT_LOOKBACKS.join(',')})`, 25));
+    console.log(helpRow('--spread <spec>', `Spread grid (default: ${DEFAULT_SPREADS.join(',')})`, 25));
+    console.log(helpRow('--increment <spec>', `Increment grid (default: ${DEFAULT_INCREMENTS.join(',')})`, 25));
+    console.log(helpRow('--ratio <spec>', `Max/min ratio grid (default: ${DEFAULT_RATIOS.join(',')})`, 25));
+    console.log(helpRow('--max-orders <n>', 'Size cap per side (default: 20)', 25));
+    console.log(helpRow('--fee <pct>', 'Round-trip fee % (default: 0.20)', 25));
+    console.log(helpRow('--capital <n>', 'Notional capital per side (default: 10000)', 25));
+    console.log(helpRow('--reposition <pct>', `AMA drift % to re-center (default: ${MA.AMA_DELTA_THRESHOLD_PERCENT})`, 25));
+    console.log(helpRow('--no-asymmetric-bounds', 'Disable trigger B + slope offset (default: enabled)', 25));
+    console.log(helpRow('--out <path>', 'JSON output path', 25));
 }
 
 function resolveAma(name: string) {
@@ -133,19 +129,10 @@ function resolveAma(name: string) {
     return { name, er: preset.erPeriod, fast: preset.fastPeriod, slow: preset.slowPeriod };
 }
 
-function percentile(values: number[], pct: number): number {
-    const s = values.slice().sort((a, b) => a - b);
-    return s[Math.min(s.length - 1, Math.max(0, Math.floor((pct / 100) * (s.length - 1))))];
-}
-
-function fmt(x: number | null | undefined, d = 2): string {
-    return Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
-}
-
 function run() {
     const cfg = parseArgs();
     const amaDef = resolveAma(cfg.amaName);
-    const { candles, files } = loadCandles(cfg.dataPath);
+    const { candles, files } = loadCandleSeries(cfg.dataPath);
     const closes = candles.map((c) => c.close);
     const amaValues = calculateAMA(closes, { erPeriod: amaDef.er, fastPeriod: amaDef.fast, slowPeriod: amaDef.slow });
     const warmupBars = getAmaWarmupBars(amaDef.er, amaDef.slow, 0, amaDef.fast);
@@ -235,7 +222,7 @@ function run() {
         console.log(
             `  ${String(lb).padStart(2)} | ` +
             `${fmt(median(deltas) ?? Number.NaN).padStart(12)} | ` +
-            `${fmt(percentile(deltas, 25))} .. ${fmt(percentile(deltas, 75))} | ` +
+            `${fmt(percentile(deltas, 25, { interpolation: 'nearest', rounding: 'floor', empty: Number.NaN }))} .. ${fmt(percentile(deltas, 75, { interpolation: 'nearest', rounding: 'floor', empty: Number.NaN }))} | ` +
             `${lower}/${deltas.length} (${fmt((100 * lower) / deltas.length, 0)}%)`
         );
     }

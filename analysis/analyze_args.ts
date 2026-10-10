@@ -62,3 +62,25 @@ export function consumeCommonAnalysisArg(
             return false;
     }
 }
+
+/**
+ * Print the standard analysis-CLI help preamble:
+ * `title` / blank / `Usage: node dist/analysis/<usagePath> [options]` / blank /
+ * `Options:`. Callers then emit their own option rows (see `helpRow`).
+ */
+export function printHelpHeader(title: string, usagePath: string): void {
+    console.log(title);
+    console.log('');
+    console.log(`Usage: node dist/analysis/${usagePath} [options]`);
+    console.log('');
+    console.log('Options:');
+}
+
+/**
+ * Render one aligned option row for a hand-written help body:
+ * two-space indent, `flag` padded to `width`, then `description`.
+ * `width` is per-tool so adopting this helper keeps the original column.
+ */
+export function helpRow(flag: string, description: string, width: number): string {
+    return `  ${flag.padEnd(width)}${description}`;
+}

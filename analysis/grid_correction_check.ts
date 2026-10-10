@@ -41,13 +41,11 @@ import * as C from '../modules/constants.js';
 import { loadBotSettings, computeBotKey } from './bot_key_utils.js';
 import { resolveBotAccount } from './account_resolver.js';
 import {
-    BTS_ID,
     FillRecord,
-    assetPrec,
+    classifyFill,
     assetSymbol,
     fetchAllFills,
     resolveAssetPrecisions,
-    toReal,
 } from './fills_source.js';
 
 const { kibanaSearch, DEFAULT_CONFIG: BASE_CONFIG } = KC;
@@ -361,56 +359,24 @@ async function fetchAllOrderUpdates(config: Record<string, unknown>, accountId: 
 }
 
 // ─── Fill classification ─────────────────────────────────────────────────────
+// Direction/base/quote resolution is shared with trade_profitability via
+// fills_source.classifyFill; this wrapper only owns the skip count and the
+// TradeFill shape (no market-fee fields — grid checks prices, not PnL).
 function classifyFills(fills: FillRecord[]): { trades: TradeFill[]; skipped: number } {
     const trades: TradeFill[] = [];
     let skipped = 0;
     for (const f of fills) {
-        const pAsset = f.pays.asset_id;
-        const rAsset = f.receives.asset_id;
-        let direction: 'buy' | 'sell';
-        let baseAsset: string;
-        let quoteAsset: string;
-        let baseAmount: number;
-        let quoteAmount: number;
-        let price: number;
-
-        if (pAsset === BTS_ID && rAsset !== BTS_ID) {
-            direction = 'buy';
-            baseAsset = rAsset; quoteAsset = BTS_ID;
-            baseAmount = toReal(f.receives.amount, rAsset);
-            quoteAmount = toReal(f.pays.amount, BTS_ID);
-            if (!Number.isFinite(baseAmount) || !Number.isFinite(quoteAmount) || baseAmount <= 0 || quoteAmount <= 0) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-        } else if (rAsset === BTS_ID && pAsset !== BTS_ID) {
-            direction = 'sell';
-            baseAsset = pAsset; quoteAsset = BTS_ID;
-            baseAmount = toReal(f.pays.amount, pAsset);
-            quoteAmount = toReal(f.receives.amount, BTS_ID);
-            if (!Number.isFinite(baseAmount) || !Number.isFinite(quoteAmount) || baseAmount <= 0 || quoteAmount <= 0) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-        } else {
-            const baseForCheck = pAsset < rAsset ? pAsset : rAsset;
-            const quoteForCheck = pAsset < rAsset ? rAsset : pAsset;
-            if (assetPrec(baseForCheck) === undefined || assetPrec(quoteForCheck) === undefined) { skipped++; continue; }
-            const isSell = pAsset < rAsset;
-            direction = isSell ? 'sell' : 'buy';
-            baseAsset = isSell ? pAsset : rAsset;
-            quoteAsset = isSell ? rAsset : pAsset;
-            baseAmount = toReal(isSell ? f.pays.amount : f.receives.amount, baseAsset);
-            quoteAmount = toReal(isSell ? f.receives.amount : f.pays.amount, quoteAsset);
-            if (!Number.isFinite(baseAmount) || !Number.isFinite(quoteAmount) || baseAmount <= 0 || quoteAmount <= 0) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-        }
-
+        const c = classifyFill(f);
+        if (!c) { skipped++; continue; }
         trades.push({
             time: f.time,
             orderId: f.orderId,
-            direction,
-            baseAsset,
-            quoteAsset,
-            baseAmount,
-            quoteAmount,
-            price,
+            direction: c.direction,
+            baseAsset: c.baseAsset,
+            quoteAsset: c.quoteAsset,
+            baseAmount: c.baseAmount,
+            quoteAmount: c.quoteAmount,
+            price: c.price,
             isMaker: f.isMaker,
             sequence: f.blockNum * 1e6 + f.opNum,
         });

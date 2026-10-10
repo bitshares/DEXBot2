@@ -6,7 +6,7 @@ import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strate
 import { computeHuberWindowSlopePct } from '../../market_adapter/core/strategies/ama_slope_model.js';
 import { applyAsymmetricBounds } from '../../market_adapter/core/asymmetric_bounds.js';
 import { range } from '../math_utils.js';
-import { parseListOrRange, loadLpData, fmt, loadAmaStrategies } from './shared_utils.js';
+import { loadLpData, fmt, loadAmaStrategies, consumeBacktestArg, slopeResetThresholdPct, DEFAULT_FEE_ROUNDTRIP_PCT, DEFAULT_MIN_SPREAD_FACTOR, DEFAULT_BTS_CREATE_FEE, DEFAULT_BTS_CANCEL_FEE, DEFAULT_BTS_MAKER_CREATE_FACTOR, DEFAULT_TX_FEE_PRICE, DEFAULT_REPOSITION_PCT, SLOPE_TRIGGER_FACTOR, SLOPE_MAX_PCT, SLOPE_LOOKBACK_BARS } from './shared_utils.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
 import { GRID_LIMITS, MARKET_ADAPTER } from '../../modules/constants.js';
@@ -17,17 +17,15 @@ const { ensureDir, writeJSON } = getStorage();
 // bounds (modules/order/grid.ts), it does not cap per side. Infinity = all
 // slots; --active-orders N restores a bounded run.
 const DEFAULT_ACTIVE_ORDERS = Infinity;
-const DEFAULT_FEE_ROUNDTRIP_PCT = 0.20;
 
-// BTS operation fees — same model as backtest_ama_sweep. Every placement
-// (initial grid, reset rebuild, per-cycle slot refill) pays a maker create
-// fee, every cancel pays a cancel fee. Fees are converted into percentage
-// points against --bts-fee-capital so they deduct from net capture in the
-// same units as the rest of the accounting.
-const DEFAULT_BTS_CREATE_FEE = 0.48260;
-const DEFAULT_BTS_CANCEL_FEE = 0.00482;
-const DEFAULT_BTS_MAKER_CREATE_FACTOR = 0.10;
-const DEFAULT_TX_FEE_PRICE = 1.0;
+// BTS operation fees are shared with backtest_ama_sweep via shared_utils; the
+// fee-capital base (the notional the fee percentage is measured against) is
+// bot_fitting-specific.
+//
+// Every placement (initial grid, reset rebuild, per-cycle slot refill) pays a
+// maker create fee, every cancel pays a cancel fee. Fees are converted into
+// percentage points against --bts-fee-capital so they deduct from net capture
+// in the same units as the rest of the accounting.
 const DEFAULT_BTS_FEE_CAPITAL = 10000;
 
 // ── Production grid-reset triggers (MARKET_ADAPTER, modules/constants.ts) ────
@@ -37,7 +35,6 @@ const DEFAULT_BTS_FEE_CAPITAL = 10000;
 // from that recorded center; the center re-records only when a trigger fires
 // (ratchet semantics — see analyze_ama_price_changes.trackRepositions).
 // --reposition-pct overrides the default.
-const DEFAULT_REPOSITION_PCT = MARKET_ADAPTER.AMA_DELTA_THRESHOLD_PERCENT;
 //
 // Trigger B — AMA slope delta, plus the grid price offset, are BOTH gated in
 // production behind the per-bot asymmetricBounds whitelist
@@ -51,18 +48,12 @@ const DEFAULT_REPOSITION_PCT = MARKET_ADAPTER.AMA_DELTA_THRESHOLD_PERCENT;
 // where slopePct is the Huber-robust per-bar AMA slope over
 // DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS (computeHuberWindowSlopePct) and the
 // baseline mirrors botState.gridRangeScalingAmaSlope (re-seeded every reset).
-const SLOPE_TRIGGER_FACTOR = MARKET_ADAPTER.AMA_SLOPE_DELTA_THRESHOLD_PERCENT;
-const SLOPE_MAX_PCT = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_MAX_SLOPE_PCT;
-const SLOPE_LOOKBACK_BARS = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS;
 const SLOPE_NEUTRAL_ZONE_PCT = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_NEUTRAL_ZONE_PCT;
 
 // Spread-gap floor knobs (GRID_LIMITS): the effective target spread is
 // clamped up to incrementPercent × MIN_SPREAD_FACTOR and the gap is never
 // narrower than MIN_SPREAD_ORDERS slots — mirrored from calculateGapSlots
 // (modules/order/utils/math.ts).
-const DEFAULT_MIN_SPREAD_FACTOR = GRID_LIMITS.MIN_SPREAD_FACTOR;
-
-// Inventory-risk penalty weights (in score points)
 const RISK_W_DURATION = 1.0;   // avg open bars
 const RISK_W_PEAK_OPEN = 2.0;  // peak simultaneous open orders
 const RISK_W_IMBALANCE = 1.2;  // avg |openBuy-openSell|
@@ -123,57 +114,14 @@ function parseArgs() {
         if (arg === '--asymmetric-bounds') { out.asymmetricBounds = true; continue; }
         const val = args[i + 1];
         if (!val) continue;
+        if (consumeBacktestArg(arg, val, out, {
+            spreadValues: DEFAULT_SPREAD_VALUES,
+            incrementValues: DEFAULT_INCREMENT_VALUES,
+            ratioValues: DEFAULT_RATIO_VALUES,
+        })) { i++; continue; }
         switch (arg) {
-            case '--data':
-                out.dataPath = path.resolve(val);
-                i++;
-                break;
-            case '--results':
-                out.resultsPath = path.resolve(val);
-                i++;
-                break;
-            case '--spread':
-                out.spreadValues = parseListOrRange(val, DEFAULT_SPREAD_VALUES);
-                i++;
-                break;
-            case '--increment':
-                out.incrementValues = parseListOrRange(val, DEFAULT_INCREMENT_VALUES);
-                i++;
-                break;
-            case '--ratio':
-                out.ratioValues = parseListOrRange(val, DEFAULT_RATIO_VALUES);
-                i++;
-                break;
             case '--active-orders':
                 out.activeOrders = Number(val);
-                i++;
-                break;
-            case '--fee':
-                out.feeRoundtripPct = Number(val);
-                i++;
-                break;
-            case '--min-spread-factor':
-                out.minSpreadFactor = Number(val);
-                i++;
-                break;
-            case '--reposition-pct':
-                out.repositionPct = Number(val);
-                i++;
-                break;
-            case '--bts-create-fee':
-                out.btsCreateFee = Number(val);
-                i++;
-                break;
-            case '--bts-cancel-fee':
-                out.btsCancelFee = Number(val);
-                i++;
-                break;
-            case '--maker-create-factor':
-                out.makerCreateFactor = Number(val);
-                i++;
-                break;
-            case '--tx-fee-price':
-                out.txFeePrice = Number(val);
                 i++;
                 break;
             case '--bts-fee-capital':
@@ -451,7 +399,7 @@ function simulateForParams(candles: SimCandle[], amaValues: number[], params: Si
     // start on SMA-warmup values when the fitted ER period is large.
     const skip = Math.min(params.warmupBars, Math.max(0, candles.length - 2));
     const singleLegFeePct = feeRoundtripPct / 2;
-    const slopeDeltaThresholdPct = (SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT;
+    const slopeDeltaThresholdPct = slopeResetThresholdPct();
     const makerCreateFeeBts = btsCreateFee * makerCreateFactor;
     const stepUpFrac = 1 + incrementPct; // one-rail-step rotation distance
     // Optional gate/band overrides. `slopePersistBars` follows the production
@@ -814,7 +762,7 @@ function run() {
     console.log(`  Spread floor: spread >= ${cfg.minSpreadFactor} x increment`);
     console.log(`  Reset (A):    AMA drift >= ${cfg.repositionPct}% from recorded center${cfg.repositionPct === DEFAULT_REPOSITION_PCT ? ' (AMA_DELTA_THRESHOLD_PERCENT)' : ''}`);
     console.log(`  Asym. bounds: ${cfg.asymmetricBounds ? 'ON — slope reset (B) + grid price offset enabled (whitelist semantics)' : 'OFF — typical non-whitelisted bot (production default)'}`);
-    console.log(`  Reset (B):    |slope - slope@lastReset| >= ${(SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT}% (${SLOPE_TRIGGER_FACTOR}% x ${SLOPE_MAX_PCT}, lookback ${SLOPE_LOOKBACK_BARS})${cfg.asymmetricBounds ? '' : ' [gated off]'}`);
+    console.log(`  Reset (B):    |slope - slope@lastReset| >= ${slopeResetThresholdPct()}% (${SLOPE_TRIGGER_FACTOR}% x ${SLOPE_MAX_PCT}, lookback ${SLOPE_LOOKBACK_BARS})${cfg.asymmetricBounds ? '' : ' [gated off]'}`);
     console.log(`  Tx fees:      create=${fmt(cfg.btsCreateFee * cfg.makerCreateFactor, 5)} BTS, cancel=${fmt(cfg.btsCancelFee, 5)} BTS, 1 BTS=${fmt(cfg.txFeePrice, 2)} units, capital=${fmt(cfg.btsFeeCapital, 0)}`);
     console.log(`  Risk W:       duration=${cfg.riskWDuration}, peakOpen=${cfg.riskWPeakOpen}, imbalance=${cfg.riskWImbalance}, cancel=${cfg.riskWCancel}`);
     console.log(`  Combos/AMA:   ${totalCombos}\n`);
@@ -915,7 +863,7 @@ function run() {
                 baseScore: 'totalNetCaptureAfterFeesPct * (fillEfficiency / 100)',
                 gridModel: 'persistent fixed chain prices (createOrderGrid port): master rail at sqrt(1±inc) offsets bounded by [center/ratio, center*ratio], gapSlots spread zone centered on center; prices never follow AMA after placement',
                 spreadParam: 'targetSpreadPercent for calculateGapSlots (floored at increment * MIN_SPREAD_FACTOR)',
-                resetTriggers: `(A) AMA drift >= ${cfg.repositionPct}% from recorded center (ratchet)${cfg.asymmetricBounds ? ` OR (B) |slope - slopeAtLastReset| >= ${(SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT}% over ${SLOPE_LOOKBACK_BARS}-bar average slope (baseline re-seeded on every reset)` : ' (trigger B gated off — asymmetricBounds whitelist)'}`,
+                resetTriggers: `(A) AMA drift >= ${cfg.repositionPct}% from recorded center (ratchet)${cfg.asymmetricBounds ? ` OR (B) |slope - slopeAtLastReset| >= ${slopeResetThresholdPct()}% over ${SLOPE_LOOKBACK_BARS}-bar average slope (baseline re-seeded on every reset)` : ' (trigger B gated off — asymmetricBounds whitelist)'}`,
                 gridPriceOffset: cfg.asymmetricBounds ? 'slope-ratio offset applied to placement center (direction * min(|slope|/maxSlopePct,1) * targetSpread/2) on every grid build' : 'disabled (asymmetricBounds whitelist)',
                 repositionAccounting: 'unfilled orders canceled + counted (incl armed refills/rebids); bought-and-held base carries across resets in a weighted-average-entry inventory pool (resync never market-sells); end-of-run inventory mark is informational and excluded from scoring',
                 cycleEconomics: 'slot rotation: filled buy re-offers one rail step up; that refill selling books ~increment% minus round-trip fee and the freed quote re-bids one step down; unlinked initial-grid sells only execute against held inventory at weighted-average entry (no shorting)',

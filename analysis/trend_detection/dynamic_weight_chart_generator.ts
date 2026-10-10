@@ -12,7 +12,7 @@ import {
 } from '../../market_adapter/core/signals/kalman_velocity_smoothing.js';
 import { embedFunctionSources, escapeHtml, serializeJsonForScript, toEpochSeconds, UPLOT_SHARED_SCRIPT, uplotInlineTags } from '../chart_utils.js';
 import { sharedChartCSS } from '../chart_css.js';
-import { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, wireChartEvents, zoomResetScript, sizeChartsFn } from '../chart_ui.js';
+import { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, wireChartEvents, zoomResetScript, sizeChartsFn, formatTimeLabelFn, refreshChartsPreservingZoomFn } from '../chart_ui.js';
 
 // Browser-embedded shared functions — the interactive chart runs the exact same
 // pure logic as the live market adapter service instead of a hand-copied copy.
@@ -764,21 +764,15 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
 
         ${UPLOT_SHARED_SCRIPT}
 
-        function refreshChartsPreservingZoom() {
-            const xs = outputChart?.scales?.x;
-            const savedX = xs ? {
-                min: Number.isFinite(xs.min) ? xs.min : xMin,
-                max: Number.isFinite(xs.max) ? xs.max : xMax,
-            } : null;
-
-            amaChart.setData([data.dates, dynamicAmaSlopePct], false);
-            kalmanChart.setData([data.dates, currentKalmanVelocityPct, data.kalmanDisplacementPct], false);
-            outputChart.setData([data.dates, combinedOff, echoCombinedOff], false);
-
-            if (savedX) {
-                charts.forEach(c => c.batch(() => c.setScale('x', savedX)));
-            }
-        }
+        ${refreshChartsPreservingZoomFn({
+            anchor: 'outputChart?.scales?.x',
+            reload: [
+                'amaChart.setData([data.dates, dynamicAmaSlopePct], false);',
+                'kalmanChart.setData([data.dates, currentKalmanVelocityPct, data.kalmanDisplacementPct], false);',
+                'outputChart.setData([data.dates, combinedOff, echoCombinedOff], false);',
+            ],
+            charts: 'charts',
+        })}
 
         let lastLiveIdx = data.realBarCount - 1;
 
@@ -972,27 +966,7 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
 
         const cursorCfg = ${makeCursorConfig()};
 
-        const TIME_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-        function pad2(n) {
-            return String(n).padStart(2, '0');
-        }
-
-        function formatTimeLabel(tsSec, spanSec) {
-            const d = new Date(tsSec * 1000);
-            if (!Number.isFinite(spanSec)) spanSec = 0;
-
-            if (spanSec >= 365 * 24 * 3600 * 2) {
-                return String(d.getUTCFullYear());
-            }
-            if (spanSec >= 90 * 24 * 3600) {
-                return TIME_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
-            }
-            if (spanSec >= 14 * 24 * 3600) {
-                return TIME_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate();
-            }
-            return TIME_MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
-        }
+        ${formatTimeLabelFn()}
 
         function makeTimeAxis(showLabels = false) {
             return {

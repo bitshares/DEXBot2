@@ -10,10 +10,12 @@ import {
     assetPrec as getPrec,
     assetSymbol,
     resolveAssetPrecisions,
-    toReal,
     FillRecord,
+    classifyFill,
+    matchesAssetRef,
 } from './fills_source.js';
 import { writePnlReport } from './pnl_report.js';
+import { percentile } from './math_utils.js';
 import { fetchFillsCached } from './fills_cache.js';
 import { toFileUrl } from './chart_utils.js';
 import { PATHS } from '../modules/paths.js';
@@ -269,88 +271,36 @@ function parseArgs(argv: string[] = process.argv.slice(2)) {
 // ─── Fill Classification ─────────────────────────────────────────────────────
 
 /**
- * A fill needs strictly positive, finite amounts on both legs. A zero base
- * amount would produce an infinite price (quoteAmount / 0) that poisons
- * downstream inventory lots and PnL aggregates.
+ * Classify fills into trade records. Direction/base/quote resolution and the
+ * amount sanity check live in fills_source.classifyFill (single home, also used
+ * by grid_correction_check); this wrapper owns the PnL-specific market-fee
+ * handling, the asset/pair filters and the unknown-precision skip count.
  */
-function isValidFillAmounts(baseAmount: number, quoteAmount: number): boolean {
-    return Number.isFinite(baseAmount) && Number.isFinite(quoteAmount)
-        && baseAmount > 0 && quoteAmount > 0;
-}
-
-/** Match a user-supplied pair leg against a chain asset id or its symbol. */
-function matchesAssetRef(ref: string, assetId: string): boolean {
-    const want = String(ref).trim().toUpperCase();
-    if (!want) return false;
-    return assetId.toUpperCase() === want || assetSymbol(assetId).toUpperCase() === want;
-}
-
 function classifyFills(fills: FillRecord[], filterAsset: string | null, pairFilter: { base: string; quote: string } | null = null): { trades: TradeFill[]; pairs: Set<string> } {
     const trades: TradeFill[] = [];
     const pairs = new Set<string>();
     let skipped = 0;
 
     for (const f of fills) {
-        const pAsset = f.pays.asset_id;
-        const rAsset = f.receives.asset_id;
-        let direction: 'buy' | 'sell';
-        let baseAsset: string;
-        let quoteAsset: string;
-        let baseAmount: number;
-        let quoteAmount: number;
-        let price: number;
-        let marketFeeReal: number;
-        let marketFeeAsset: string;
+        const c = classifyFill(f);
+        if (!c) { skipped++; continue; }
 
+        // Market fee is always deducted from receives; an unknown fee asset
+        // precision makes the fee (and therefore net PnL) uncomputable.
         const feePrec = getPrec(f.fee.asset_id);
         if (feePrec === undefined || isNaN(f.fee.amount)) { skipped++; continue; }
-        const feeReal = f.fee.amount / Math.pow(10, feePrec);
+        const marketFeeReal = f.fee.amount / Math.pow(10, feePrec);
+        const marketFeeAsset = f.fee.asset_id;
 
-        if (pAsset === BTS_ID && rAsset !== BTS_ID) {
-            direction = 'buy';
-            baseAsset = rAsset;
-            quoteAsset = BTS_ID;
-            baseAmount = toReal(f.receives.amount, rAsset);
-            quoteAmount = toReal(f.pays.amount, BTS_ID);
-            if (!isValidFillAmounts(baseAmount, quoteAmount)) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-            marketFeeReal = feeReal;
-            marketFeeAsset = f.fee.asset_id;
-        } else if (rAsset === BTS_ID && pAsset !== BTS_ID) {
-            direction = 'sell';
-            baseAsset = pAsset;
-            quoteAsset = BTS_ID;
-            baseAmount = toReal(f.pays.amount, pAsset);
-            quoteAmount = toReal(f.receives.amount, BTS_ID);
-            if (!isValidFillAmounts(baseAmount, quoteAmount)) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-            marketFeeReal = feeReal;
-            marketFeeAsset = f.fee.asset_id;
-        } else {
-            // Non-BTS cross-pair: use consistent ordering (lower asset ID = base)
-            const baseForCheck = pAsset < rAsset ? pAsset : rAsset;
-            const quoteForCheck = pAsset < rAsset ? rAsset : pAsset;
-            // Skip if either asset precision is unknown
-            if (getPrec(baseForCheck) === undefined || getPrec(quoteForCheck) === undefined) { skipped++; continue; }
-            const isSell = pAsset < rAsset;
-            direction = isSell ? 'sell' : 'buy';
-            baseAsset = isSell ? pAsset : rAsset;
-            quoteAsset = isSell ? rAsset : pAsset;
-            baseAmount = toReal(isSell ? f.pays.amount : f.receives.amount, baseAsset);
-            quoteAmount = toReal(isSell ? f.receives.amount : f.pays.amount, quoteAsset);
-            if (!isValidFillAmounts(baseAmount, quoteAmount)) { skipped++; continue; }
-            price = quoteAmount / baseAmount;
-            marketFeeReal = feeReal;
-            marketFeeAsset = f.fee.asset_id;
-        }
+        const { direction, baseAsset, quoteAsset, baseAmount, quoteAmount, price } = c;
 
         if (filterAsset && baseAsset !== filterAsset) continue;
         if (pairFilter && !(matchesAssetRef(pairFilter.base, baseAsset) && matchesAssetRef(pairFilter.quote, quoteAsset))) continue;
 
         // Validate market fee asset: fee is always deducted from receives
         // (base for buys, quote for sells). Warn if unexpected.
-        if (marketFeeReal > 0 && marketFeeAsset !== '' && marketFeeAsset !== rAsset) {
-            console.warn(`  [warn] Fill ${f.orderId}: fee asset ${marketFeeAsset} ≠ receives asset ${rAsset}. Market fee PnL may be incorrect.`);
+        if (marketFeeReal > 0 && marketFeeAsset !== '' && marketFeeAsset !== f.receives.asset_id) {
+            console.warn(`  [warn] Fill ${f.orderId}: fee asset ${marketFeeAsset} ≠ receives asset ${f.receives.asset_id}. Market fee PnL may be incorrect.`);
         }
 
         const pairKey = `${baseAsset}:${quoteAsset}`;
@@ -750,17 +700,6 @@ interface TradingMetrics {
     pctRLessNeg1: number;
 }
 
-function percentile(sorted: number[], p: number): number {
-    const n = sorted.length;
-    if (n === 0) return 0;
-    if (n === 1) return sorted[0];
-    const k = (p / 100) * (n - 1);
-    const f = Math.floor(k);
-    const c = Math.ceil(k);
-    if (f === c) return sorted[f];
-    return sorted[f] * (c - k) + sorted[c] * (k - f);
-}
-
 function computeMetrics(pair: PairAnalysis, window?: WindowRange): TradingMetrics {
     const pnls = pair.realizedPnls;
     const total = pnls.length;
@@ -922,7 +861,7 @@ function computeMetrics(pair: PairAnalysis, window?: WindowRange): TradingMetric
         ? fillCounts.reduce((a, b) => Math.max(a, b), 0)
         : 0;
     const sortedCounts = [...fillCounts].sort((a, b) => a - b);
-    const fillsPerOrderMedian = sellOrdersFilled > 0 ? percentile(sortedCounts, 50) : 0;
+    const fillsPerOrderMedian = sellOrdersFilled > 0 ? percentile(sortedCounts, 50, { sorted: true, empty: 0 }) : 0;
     const oneShotOrderRatio = sellOrdersFilled > 0
         ? fillCounts.filter(c => c === 1).length / sellOrdersFilled
         : 0;
@@ -1050,15 +989,15 @@ function computeMetrics(pair: PairAnalysis, window?: WindowRange): TradingMetric
 
     // Payoff distribution stats
     const pnlPcts = [...pnls.map(r => r.pnlPct)].sort((a, b) => a - b);
-    const medianPnlPct = percentile(pnlPcts, 50);
-    const p25PnlPct = percentile(pnlPcts, 25);
-    const p75PnlPct = percentile(pnlPcts, 75);
+    const medianPnlPct = percentile(pnlPcts, 50, { sorted: true, empty: 0 });
+    const p25PnlPct = percentile(pnlPcts, 25, { sorted: true, empty: 0 });
+    const p75PnlPct = percentile(pnlPcts, 75, { sorted: true, empty: 0 });
     const absAvgLoss = Math.abs(avgLoss);
     let rValues: number[] = [];
     if (absAvgLoss > 0) {
         rValues = pnls.map(r => r.pnl / absAvgLoss).sort((a, b) => a - b);
     }
-    const medianR = rValues.length > 0 ? percentile(rValues, 50) : 0;
+    const medianR = rValues.length > 0 ? percentile(rValues, 50, { sorted: true, empty: 0 }) : 0;
     const pctRGreater1 = rValues.length > 0 ? rValues.filter(r => r > 1).length / rValues.length : 0;
     const pctRGreater2 = rValues.length > 0 ? rValues.filter(r => r > 2).length / rValues.length : 0;
     const pctRLessNeg1 = rValues.length > 0 ? rValues.filter(r => r < -1).length / rValues.length : 0;

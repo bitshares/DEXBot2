@@ -44,16 +44,16 @@ import { calculateAMA, getAmaWarmupBars } from '../../market_adapter/core/strate
 import { computeAmaSlopeClipThreshold } from '../../market_adapter/core/strategies/dynamic_weight_series.js';
 import { createHuberEstimator, type HuberScaleMode, type HuberEstimator } from './huber_scale_variants.js';
 import { simulateGridResetSeries, GRID_RESET_BOOTSTRAP } from '../tradingview/grid_reset_sim.js';
-import { normalizeCandle, range, median } from '../math_utils.js';
+import { range, median, percentile, fmtNum as fmt, loadCandleSeries } from '../math_utils.js';
 import { parseListOrRange } from '../bot_fitting/shared_utils.js';
+import { printHelpHeader, helpRow } from '../analyze_args.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { PATHS } from '../../modules/paths.js';
 import { MARKET_ADAPTER } from '../../modules/constants.js';
 
-const { readJSON, writeJSON } = getStorage();
+const { writeJSON } = getStorage();
 const MA = MARKET_ADAPTER;
 
-type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 type AmaDef = { name: string; er: number; fast: number; slow: number };
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -134,25 +134,21 @@ function parseArgs() {
 }
 
 function printHelp() {
-    console.log('AMA-Slope-Huber lookback backtest');
-    console.log('');
-    console.log('Usage: node dist/analysis/trend_detection/backtest_ama_slope_huber.js [options]');
-    console.log('');
-    console.log('Options:');
-    console.log('  --data <path>                LP candle file or shard directory (required)');
-    console.log(`  --ama <AMA1..AMA4>           Built-in AMA preset (default: ${MA.DEFAULT_AMA_KEY})`);
-    console.log('  --er/--fast/--slow <n>       Override AMA periods (override --ama)');
-    console.log('  --lookback <spec>            Lookback sweep in bars (default: 28h,26h,...,8h; also accepts 28:8:2 or 8:28:2)');
-    console.log(`  --price-threshold <pct>      Drift reset threshold (default: ${MA.AMA_DELTA_THRESHOLD_PERCENT})`);
-    console.log(`  --slope-threshold-factor <n> % of max slope for the slope reset (default: ${MA.AMA_SLOPE_DELTA_THRESHOLD_PERCENT})`);
-    console.log(`  --slope-persist <bars>       Bars the slope delta must persist before resetting (default: ${MA.AMA_SLOPE_PERSIST_BARS})`);
-    console.log('  --no-slope                   Disable the slope-delta reset (drift only)');
-    console.log('  --confirm <frac>             Slope confirmation size as a fraction of max slope (default: 0.25)');
-    console.log('  --scale-mode <mode>          Huber scale estimate: none (production) | df | mscale (default: none)');
-    console.log('  --whipsaw <bars>             Back-to-back reset gap counted as a whipsaw (default: 3)');
-    console.log('  --truth-window <bars>        Centred reference half-window (default: max lookback)');
-    console.log('  --forward-window <bars>      Realized forward horizon for range tilt direction (default: lookback)');
-    console.log('  --out <path>                 JSON output path');
+    printHelpHeader('AMA-Slope-Huber lookback backtest', 'trend_detection/backtest_ama_slope_huber.js');
+    console.log(helpRow('--data <path>', 'LP candle file or shard directory (required)', 29));
+    console.log(helpRow('--ama <AMA1..AMA4>', `Built-in AMA preset (default: ${MA.DEFAULT_AMA_KEY})`, 29));
+    console.log(helpRow('--er/--fast/--slow <n>', 'Override AMA periods (override --ama)', 29));
+    console.log(helpRow('--lookback <spec>', 'Lookback sweep in bars (default: 28h,26h,...,8h; also accepts 28:8:2 or 8:28:2)', 29));
+    console.log(helpRow('--price-threshold <pct>', `Drift reset threshold (default: ${MA.AMA_DELTA_THRESHOLD_PERCENT})`, 29));
+    console.log(helpRow('--slope-threshold-factor <n>', `% of max slope for the slope reset (default: ${MA.AMA_SLOPE_DELTA_THRESHOLD_PERCENT})`, 29));
+    console.log(helpRow('--slope-persist <bars>', `Bars the slope delta must persist before resetting (default: ${MA.AMA_SLOPE_PERSIST_BARS})`, 29));
+    console.log(helpRow('--no-slope', 'Disable the slope-delta reset (drift only)', 29));
+    console.log(helpRow('--confirm <frac>', 'Slope confirmation size as a fraction of max slope (default: 0.25)', 29));
+    console.log(helpRow('--scale-mode <mode>', 'Huber scale estimate: none (production) | df | mscale (default: none)', 29));
+    console.log(helpRow('--whipsaw <bars>', 'Back-to-back reset gap counted as a whipsaw (default: 3)', 29));
+    console.log(helpRow('--truth-window <bars>', 'Centred reference half-window (default: max lookback)', 29));
+    console.log(helpRow('--forward-window <bars>', 'Realized forward horizon for range tilt direction (default: lookback)', 29));
+    console.log(helpRow('--out <path>', 'JSON output path', 29));
 }
 
 function resolveAma(cfg: ReturnType<typeof parseArgs>): AmaDef {
@@ -169,50 +165,7 @@ function resolveAma(cfg: ReturnType<typeof parseArgs>): AmaDef {
 }
 
 // ─── Data loading ────────────────────────────────────────────────────────────
-
-function loadCandles(input: string) {
-    const resolved = path.resolve(input);
-    if (!fs.existsSync(resolved)) throw new Error(`Data path not found: ${resolved}`);
-    const stat = fs.statSync(resolved);
-
-    const files = stat.isDirectory()
-        ? fs.readdirSync(resolved)
-            .filter((name) => /\.json$/i.test(name) && !/manifest/i.test(name))
-            .map((name) => path.join(resolved, name))
-            .sort()
-        : [resolved];
-
-    const byTime = new Map<number, Candle>();
-    let meta: Record<string, unknown> | null = null;
-    for (const file of files) {
-        let raw: { candles?: unknown; meta?: Record<string, unknown> } | null = null;
-        try { raw = readJSON(file) as { candles?: unknown; meta?: Record<string, unknown> }; } catch { continue; }
-        const arr = Array.isArray(raw?.candles) ? raw.candles : (Array.isArray(raw) ? raw : null);
-        if (!arr || arr.length === 0) continue;
-        if (!meta && raw?.meta) meta = raw.meta;
-        for (const c of arr) {
-            const n = normalizeCandle(c);
-            if (n) byTime.set(n.time, { time: n.time, open: n.open, high: n.high, low: n.low, close: n.close, volume: n.volume });
-        }
-    }
-
-    const candles = [...byTime.values()].sort((a, b) => a.time - b.time);
-    if (candles.length === 0) throw new Error(`No candles found under ${resolved}`);
-    return { candles, meta, files: files.length };
-}
-
-// ─── Small stats helpers ─────────────────────────────────────────────────────
-
-function percentile(values: number[], pct: number): number | null {
-    if (values.length === 0) return null;
-    const s = values.slice().sort((a, b) => a - b);
-    const idx = Math.min(s.length - 1, Math.max(0, Math.round((pct / 100) * (s.length - 1))));
-    return s[idx];
-}
-
-function fmt(x: number | null | undefined, d = 2): string {
-    return Number.isFinite(Number(x)) ? Number(x).toFixed(d) : 'n/a';
-}
+// File/directory shard loading lives in math_utils.loadCandleSeries.
 
 // ─── Lag estimators ──────────────────────────────────────────────────────────
 
@@ -442,7 +395,7 @@ function analyzeLookback(
         resetsPerDay,
         avgBarsBetweenResets: gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null,
         medianBarsBetweenResets: median(gaps),
-        p90BarsBetweenResets: percentile(gaps, 90),
+        p90BarsBetweenResets: percentile(gaps, 90, { interpolation: 'nearest' }),
         minBarsBetweenResets: gaps.length > 0 ? Math.min(...gaps) : null,
         whipsawResets: whipsaws,
         whipsawPct: gaps.length > 0 ? (whipsaws / gaps.length) * 100 : 0,
@@ -463,7 +416,7 @@ function analyzeLookback(
         rangeTiltActivePct: evaluatedBars > 0 ? (tiltActiveBars / evaluatedBars) * 100 : null,
         meanWrongStreakBars: wrongStreaks.length > 0 ? wrongStreaks.reduce((a, b) => a + b, 0) / wrongStreaks.length : null,
         medianAdverseMoveWhileWrongPct: median(adverseMoves),
-        p90AdverseMoveWhileWrongPct: percentile(adverseMoves, 90),
+        p90AdverseMoveWhileWrongPct: percentile(adverseMoves, 90, { interpolation: 'nearest' }),
         // context
         warmupBars,
         finiteSlopeBars: finite,
@@ -502,7 +455,7 @@ function addCompositeScore(results: LookbackResult[]) {
 function run() {
     const cfg = parseArgs();
     const amaDef = resolveAma(cfg);
-    const { candles, meta, files } = loadCandles(cfg.dataPath);
+    const { candles, meta, files } = loadCandleSeries(cfg.dataPath);
     const closes = candles.map((c) => c.close);
     const n = closes.length;
 
@@ -663,4 +616,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { run(); } catch (err) { console.error(err); process.exit(1); }
 }
 
-export { loadCandles }
+export {};

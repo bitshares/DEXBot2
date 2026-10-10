@@ -1,12 +1,37 @@
 'use strict';
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { getStorage } from '../../modules/storage/index.js';
 const { readJSON } = getStorage();
-import { normalizeCandle } from '../math_utils.js';
+import { normalizeCandle, fmtNum, loadCandleFile } from '../math_utils.js';
+import { GRID_LIMITS, MARKET_ADAPTER } from '../../modules/constants.js';
 
 /**
  * Shared utilities for bot-fitting scripts.
+ *
+ * Also owns the backtest defaults/fee model shared by backtest_ama_sweep and
+ * backtest_bot_fitting, which previously declared byte-identical local copies.
  */
+
+// Transaction / fee model shared by the two bot-fitting backtests.
+const DEFAULT_FEE_ROUNDTRIP_PCT = 0.20;
+const DEFAULT_MIN_SPREAD_FACTOR = GRID_LIMITS.MIN_SPREAD_FACTOR;
+const DEFAULT_BTS_CREATE_FEE = 0.48260;
+const DEFAULT_BTS_CANCEL_FEE = 0.00482;
+const DEFAULT_BTS_MAKER_CREATE_FACTOR = 0.10;
+const DEFAULT_TX_FEE_PRICE = 1.0;
+
+// AMA reset trigger shared by both backtests.
+const DEFAULT_REPOSITION_PCT = MARKET_ADAPTER.AMA_DELTA_THRESHOLD_PERCENT;
+const SLOPE_TRIGGER_FACTOR = MARKET_ADAPTER.AMA_SLOPE_DELTA_THRESHOLD_PERCENT;
+const SLOPE_MAX_PCT = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_MAX_SLOPE_PCT;
+const SLOPE_LOOKBACK_BARS = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_LOOKBACK_BARS;
+
+/** Slope-reset threshold in percent: (trigger factor/100) * max slope pct. */
+function slopeResetThresholdPct(): number {
+    return (SLOPE_TRIGGER_FACTOR / 100) * SLOPE_MAX_PCT;
+}
 
 interface AmaStrategy {
     id: string;
@@ -90,14 +115,92 @@ function parseListOrRange(spec: string | null | undefined, fallback: number[]): 
 }
 
 function loadLpData(filePath: string) {
-    const json = readJSON<{ candles?: unknown[]; meta?: unknown }>(filePath);
-    return { candles: toCandles((json.candles ?? json) as unknown[]), meta: json.meta ?? null };
+    // Shape detection (flat / {candles} / {data}) lives in math_utils.loadCandleFile.
+    // loadCandleFile returns an empty list for a missing file; keep the historical
+    // readJSON hard failure so a typo'd --data path is not silently treated as empty.
+    //
+    // Two intentional deltas vs the old inline readJSON+toCandles version:
+    //  (a) a `{candles:[...]}` file without `meta` now yields the whole file object
+    //      as `meta` (loadCandleFile's fallback). Both backtest consumers ignore
+    //      `meta`, so this is inert today.
+    //  (b) `{data:[...]}` files now load instead of crashing in toCandles (which
+    //      called `.map` on the non-array object).
+    if (!filePath || !fs.existsSync(filePath)) throw new Error(`Data file not found: ${filePath}`);
+    const { candles, meta } = loadCandleFile(filePath);
+    return { candles: toCandles(candles), meta };
 }
 
-function fmt(x: number, d = 2) {
-    if (!Number.isFinite(x)) return '  n/a';
-    return Number(x).toFixed(d);
+// Strict (no Number() coercion) and padded fallback, matching the historical
+// shared_utils output contract; formatting itself lives in math_utils.fmtNum.
+const fmt = (x: number, d = 2): string => fmtNum(x, d, { fallback: '  n/a', strict: true });
+
+interface BacktestArgTarget {
+    dataPath?: string | null;
+    resultsPath?: string | null;
+    spreadValues?: number[];
+    incrementValues?: number[];
+    ratioValues?: number[];
+    feeRoundtripPct?: number;
+    minSpreadFactor?: number;
+    repositionPct?: number;
+    btsCreateFee?: number;
+    btsCancelFee?: number;
+    makerCreateFactor?: number;
+    txFeePrice?: number;
 }
 
-export { parseListOrRange, loadLpData, fmt, loadAmaStrategies }
+interface BacktestListDefaults {
+    spreadValues: number[];
+    incrementValues: number[];
+    ratioValues: number[];
+}
+
+/**
+ * Consume one flag shared by backtest_ama_sweep and backtest_bot_fitting.
+ * Returns true when `arg` was handled, so the caller advances past its value.
+ * Both `--reposition` and `--reposition-pct` spellings are accepted so the two
+ * tools converge without breaking either CLI.
+ */
+function consumeBacktestArg(
+    arg: string,
+    val: string,
+    out: BacktestArgTarget,
+    defaults: BacktestListDefaults,
+): boolean {
+    switch (arg) {
+        case '--data': out.dataPath = path.resolve(val); return true;
+        case '--results': out.resultsPath = path.resolve(val); return true;
+        case '--spread': out.spreadValues = parseListOrRange(val, defaults.spreadValues); return true;
+        case '--increment': out.incrementValues = parseListOrRange(val, defaults.incrementValues); return true;
+        case '--ratio': out.ratioValues = parseListOrRange(val, defaults.ratioValues); return true;
+        case '--fee': out.feeRoundtripPct = Number(val); return true;
+        case '--min-spread-factor': out.minSpreadFactor = Number(val); return true;
+        case '--reposition':
+        case '--reposition-pct': out.repositionPct = Number(val); return true;
+        case '--bts-create-fee': out.btsCreateFee = Number(val); return true;
+        case '--bts-cancel-fee': out.btsCancelFee = Number(val); return true;
+        case '--maker-create-factor': out.makerCreateFactor = Number(val); return true;
+        case '--tx-fee-price': out.txFeePrice = Number(val); return true;
+        default: return false;
+    }
+}
+
+export {
+    parseListOrRange,
+    loadLpData,
+    fmt,
+    loadAmaStrategies,
+    consumeBacktestArg,
+    slopeResetThresholdPct,
+    DEFAULT_FEE_ROUNDTRIP_PCT,
+    DEFAULT_MIN_SPREAD_FACTOR,
+    DEFAULT_BTS_CREATE_FEE,
+    DEFAULT_BTS_CANCEL_FEE,
+    DEFAULT_BTS_MAKER_CREATE_FACTOR,
+    DEFAULT_TX_FEE_PRICE,
+    DEFAULT_REPOSITION_PCT,
+    SLOPE_TRIGGER_FACTOR,
+    SLOPE_MAX_PCT,
+    SLOPE_LOOKBACK_BARS,
+}
 
