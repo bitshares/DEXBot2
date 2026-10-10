@@ -31,13 +31,6 @@ interface CredentialClientOptions {
     batchId?: string | null;
     nodeUrl?: string;
     /**
-     * Accepted for interface compatibility only. The daemon cycles its own
-     * node list internally, and an uncertain broadcast must never be re-sent
-     * (a landed tx would be duplicated), so the client no longer cycles
-     * through fallbacks. Callers may keep passing this field; it is ignored.
-     */
-    fallbackNodes?: string[];
-    /**
      * Fired with the node the daemon reports as in play when a broadcast ends
      * uncertain (BROADCAST_DEADLINE / outer timeout). The daemon echoes the
      * node actually used in the typed reply — including the node the daemon
@@ -216,8 +209,7 @@ async function executeOperationsViaCredentialDaemon(accountName: string, operati
     // (connect/send errors); an uncertain broadcast (RPC timeout, dropped
     // connection, 25s inner BROADCAST_DEADLINE) is never re-signed, and
     // re-sending the ops here is unsafe: an uncertain broadcast may have
-    // landed, duplicating on-chain orders. `fallbackNodes` is kept for
-    // interface compatibility but never cycled — the recovery layers (COW
+    // landed, duplicating on-chain orders. The recovery layers (COW
     // retry verification, startup adoption, broadcast reconciliation)
     // verify chain inclusion before any re-broadcast. onNodeFailed fires for
     // the node the daemon reports as actually in play (the daemon echoes it in

@@ -133,26 +133,17 @@ class Logger {
      * @param {string} [category='DEXBot'] - Logger category/prefix
      * @param {Object} [options]
      * @param {boolean} [options.quiet] - Suppress console output
-     * @param {boolean} [options.quietUnderPm2=false] - Legacy opt-in to suppress
-     *   console output under PM2. Keep this false in normal operation: under
-     *   PM2 stdout is the only sink (direct file writes are suppressed), so
-     *   auto-quieting drops every log line.
      * @param {string} [options.logFile] - Optional path to log file
      * @param {string} [options.level='info'] - Log level
      * @param {Object} [options.configOverride] - Override LOGGING_CONFIG
      * @param {string} [options.correlationId] - Tracing ID for JSON output
      */
-    constructor(category = 'DEXBot', options: { quiet?: boolean; quietUnderPm2?: boolean; logFile?: string; level?: string; configOverride?: LoggerConfig; correlationId?: string } = {}) {
+    constructor(category = 'DEXBot', options: { quiet?: boolean; logFile?: string; level?: string; configOverride?: LoggerConfig; correlationId?: string } = {}) {
         this.category = category;
-
-        const isUnderPm2 = !!Config.pm_exec_path;
 
         this.logFile = options.logFile || null;
         if (options.quiet !== undefined) {
             this.quiet = options.quiet;
-        } else if (options.quietUnderPm2 === true && isUnderPm2) {
-            // Legacy escape hatch: explicit opt-in to the old silent behaviour.
-            this.quiet = true;
         } else {
             // Non-PM2 runs with a logFile write to the file only, so console is
             // quiet to avoid duplication. Under PM2 the file sink is suppressed
@@ -666,7 +657,7 @@ function isPm2LogCaptureActive(): boolean {
     return !!(Config.pm_out_log_path || Config.pm_err_log_path);
 }
 
-function createPm2AwareLogger(category: string, options: { quietUnderPm2?: boolean } = {}) {
+function createPm2AwareLogger(category: string, options: ConstructorParameters<typeof Logger>[1] = {}) {
     return new Logger(category, options);
 }
 export { createPm2AwareLogger, isPm2Runtime, isPm2LogCaptureActive, setGlobalConsoleLevel, getGlobalConsoleLevel }

@@ -19,7 +19,7 @@ const SETTINGS_FILE = PATHS.PROFILES.GENERAL_SETTINGS_JSON;
  * The on-disk general settings document. Open-ended (dynamic top-level
  * sections) but `NODES` is typed because several callers read it directly.
  */
-export interface GeneralSettingsDocument {
+interface GeneralSettingsDocument {
     NODES?: {
         enabled?: boolean;
         list?: string[];

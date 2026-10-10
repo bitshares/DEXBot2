@@ -481,11 +481,9 @@ function isDaemonSigningToken(value: unknown) {
 async function executeViaDaemonToken(accountName: string | null | undefined, signingToken: unknown, operations: unknown[], extraOptions: Record<string, unknown> = {}) {
     const nodeManager = getNodeManager();
     const healthyNodes = nodeManager?.getHealthyNodes() ?? [];
-    const fallbackNodes = healthyNodes.length > 1 ? healthyNodes.slice(1) : undefined;
     const opts: Record<string, unknown> = extraOptions;
-    if (healthyNodes.length > 0 && nodeManager && !opts.fallbackNodes && !opts.nodeUrl) {
+    if (healthyNodes.length > 0 && nodeManager && !opts.nodeUrl) {
         opts.nodeUrl = healthyNodes[0];
-        opts.fallbackNodes = fallbackNodes;
         opts.onNodeFailed = (nodeUrl: string) => nodeManager.reportNodeFailure(nodeUrl, DAEMON_CODES.BROADCAST_DEADLINE, 'broadcast');
     }
     return getKeyStore().executeOperations(accountName as string, operations as Parameters<ReturnType<typeof getKeyStore>['executeOperations']>[1], signingToken, opts);
@@ -1337,7 +1335,7 @@ async function findOverReducingUpdateOpError(operations: unknown): Promise<Error
  * @param {string} accountName - Account paying fees (usually the bot account)
  * @param {string|Object} privateKey - Private key for signing (or daemon signing token)
  * @param {Array} operations - Array of operation objects { op_name, op_data } returned by build helpers
- * @param {Object} [extraOptions] - Optional parameters (fallbackNodes, etc.)
+ * @param {Object} [extraOptions] - Optional parameters (nodeUrl, onNodeFailed, etc.)
  * @returns {Promise<Object>} Transaction result
  */
 async function executeBatch(accountName: string | null | undefined, privateKey: unknown, operations: OperationLike[], extraOptions: Record<string, unknown> = {}) {

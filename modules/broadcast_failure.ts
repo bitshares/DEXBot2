@@ -13,7 +13,7 @@
  * call() and the signing client (modules/bitshares-native/signing_client.ts).
  */
 
-export type BroadcastFailureClass = 'retryable' | 'uncertain' | 'definite';
+type BroadcastFailureClass = 'retryable' | 'uncertain' | 'definite';
 
 /**
  * Classify a broadcast-phase failure.

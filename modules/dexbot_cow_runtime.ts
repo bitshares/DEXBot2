@@ -126,7 +126,7 @@ export interface CowResult extends JsonObj {
 }
 
 /** Result of the pre-broadcast guard chain. */
-export interface PreBroadcastGuardResult extends JsonObj {
+interface PreBroadcastGuardResult extends JsonObj {
     proceed: boolean;
     result?: JsonObj;
     crossingCandidates?: unknown[];

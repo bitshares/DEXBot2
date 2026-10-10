@@ -86,8 +86,6 @@ Config.pm_exec_path = 'pm2';
 Config.pm_out_log_path = '/tmp/dexbot-test.log';
 assert.strictEqual(isPm2LogCaptureActive(), true, 'pm_out_log_path/pm_err_log_path presence must classify PM2 log capture as active');
 assert.strictEqual(createPm2AwareLogger('default').quiet, false, 'PM2-aware logger must NOT auto-quiet: PM2 captures stdout and direct file writes are suppressed');
-assert.strictEqual(createPm2AwareLogger('verbose', { quietUnderPm2: false }).quiet, false, 'explicit quietUnderPm2=false keeps stdout enabled under PM2');
-assert.strictEqual(createPm2AwareLogger('legacy-quiet', { quietUnderPm2: true }).quiet, true, 'explicit quietUnderPm2=true opts back into the legacy silent behaviour');
 
 // Regression: the OrderManager-style logger (logFile set, no quiet override)
 // must still reach stdout under PM2, otherwise every bot log line is dropped.

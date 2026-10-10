@@ -622,7 +622,6 @@ class OrderManager implements OrderManagerLike {
     _deferredRebalanceAt: number;
     _lastHeldPlanSignature: { boundaryIdx: number | null; pivot: number | null; fillsAt: number | null } | null;
     _heldPlanSuppressionCount: number;
-    _onBroadcastRegionEnd?: () => void;
     _onBroadcastRegionEndListeners: Array<() => void>;
     _lastBoundaryHoldResyncAt: number;
     _gapEvacStreaks: Map<string, number>;
@@ -1022,18 +1021,12 @@ class OrderManager implements OrderManagerLike {
      * without rescheduling, so this is the only wake-up for fills enqueued
      * during a region; the watchdog path must fire it too or a hung broadcast's
      * queued fills wait for the next fill event.
-     * Fans out to the legacy single listener plus every registered listener
-     * (see addBroadcastRegionEndListener): a second wirer must never silently
-     * displace the fill-queue drain. Guarded so a listener error never escapes
-     * into a finally/watchdog frame.
+     * Fans out to every listener registered via addBroadcastRegionEndListener:
+     * a second wirer must never silently displace the fill-queue drain.
+     * Guarded so a listener error never escapes into a finally/watchdog frame.
      * @returns {void}
      */
     _fireBroadcastRegionEnd() {
-        try {
-            (this._onBroadcastRegionEnd)?.();
-        } catch (err) {
-            this.logger?.log?.(`[BROADCAST] Region-end hook failed: ${getErrorMessage(err)}`, 'warn');
-        }
         const listeners = this._onBroadcastRegionEndListeners;
         if (Array.isArray(listeners)) {
             for (const listener of listeners) {
@@ -1047,9 +1040,8 @@ class OrderManager implements OrderManagerLike {
     }
 
     /**
-     * Register an additional broadcast-region-end listener without displacing
-     * the legacy single listener or previously registered ones. Duplicate
-     * registrations of the same function reference are ignored.
+     * Register a broadcast-region-end listener. Duplicate registrations of the
+     * same function reference are ignored.
      * @param {() => void} listener
      * @returns {void}
      */

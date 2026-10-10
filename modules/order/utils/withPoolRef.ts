@@ -7,7 +7,7 @@ import Logger from '../../order/logger.js';
 
 const log = new Logger('PoolRef');
 
-export interface PoolPriceOverrides {
+interface PoolPriceOverrides {
   derivePoolPrice(symA: string, symB: string): Promise<number | null>;
 }
 

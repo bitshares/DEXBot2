@@ -15,7 +15,7 @@
  * NodeManager. Callers own the side effects.
  */
 
-export interface ConnectedNodePolicyInput {
+interface ConnectedNodePolicyInput {
     /** `nodeConfig.healthCheck.enabled !== false`. */
     healthCheckEnabled: boolean;
     /** A restart/failover is already in progress; do not start another. */
@@ -28,7 +28,7 @@ export interface ConnectedNodePolicyInput {
     getHealthyNodes: () => string[];
 }
 
-export type ConnectedNodePolicyAction =
+type ConnectedNodePolicyAction =
     | { action: 'switch'; nodes: string[]; reason: 'connected-on-blacklisted-node' }
     | { action: 'align'; nodes: string[] }
     | { action: 'none' };

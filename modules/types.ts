@@ -45,9 +45,8 @@ export type SpreadCorrectionStall = 'no-free-funds' | 'unfunded' | 'no-candidate
 export type UnknownRecord = Record<string, unknown>;
 
 /** A value that survives JSON round-tripping. */
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
-export type JsonArray = JsonValue[];
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export interface JsonObject {
   [key: string]: JsonValue;
 }
@@ -90,13 +89,13 @@ export function isUnknownRecord(value: unknown): value is UnknownRecord {
 // ============================================================
 
 /** Graphene `asset_amount` (e.g. `{ amount: 12345, asset_id: '1.3.0' }`). */
-export interface ChainAssetAmount {
+interface ChainAssetAmount {
   amount: number | string;
   asset_id: string;
 }
 
 /** Graphene `price` (sell_price.base / sell_price.quote). */
-export interface ChainPrice {
+interface ChainPrice {
   base: ChainAssetAmount;
   quote: ChainAssetAmount;
 }
@@ -342,7 +341,7 @@ export interface BotLike {
 // DOMAIN: ORDER (DISCRIMINATED UNION)
 // ============================================================
 
-export interface OrderBase {
+interface OrderBase {
   id: string;
   price: number;
   type: OrderType;
@@ -358,18 +357,18 @@ export interface OrderBase {
   sideHint?: string;
 }
 
-export interface VirtualOrder extends OrderBase {
+interface VirtualOrder extends OrderBase {
   state: 'virtual';
   orderId: null | '';
 }
 
-export interface ActiveOrder extends OrderBase {
+interface ActiveOrder extends OrderBase {
   state: 'active';
   orderId: string;
   size: number;
 }
 
-export interface PartialOrder extends OrderBase {
+interface PartialOrder extends OrderBase {
   state: 'partial';
   orderId: string;
   size: number;
@@ -410,13 +409,13 @@ export interface AccountTotals {
 }
 
 /** Per-side fund amounts. */
-export interface SideFunds {
+interface SideFunds {
   buy: number;
   sell: number;
 }
 
 /** Chain/grid split of a fund category. */
-export interface ChainGridFunds {
+interface ChainGridFunds {
   chain: SideFunds;
   grid: SideFunds;
 }
@@ -438,7 +437,7 @@ export interface ManagerFunds {
 }
 
 /** `manager.persistGrid()` result — validation outcome plus skip flags. */
-export interface PersistGridResult extends UnknownRecord {
+interface PersistGridResult extends UnknownRecord {
   isValid: boolean;
   skipped?: boolean;
   suspended?: boolean;
@@ -505,13 +504,8 @@ export interface FillBatchResult extends UnknownRecord {
   deferred?: boolean;
 }
 
-/** Result of `_cancelDustOrders`. */
-export interface DustCancelResult extends UnknownRecord {
-  batchResult?: { aborted?: boolean; [key: string]: unknown };
-}
-
 /** Result of `manager.checkGridHealth()`. */
-export interface GridHealthResult extends UnknownRecord {
+interface GridHealthResult extends UnknownRecord {
   buyDustOrders?: unknown[];
   sellDustOrders?: unknown[];
 }
@@ -544,7 +538,7 @@ export interface IncomingFill extends UnknownRecord {
 }
 
 /** Aggregate chain-funds summary produced by `computeChainFundTotals`. */
-export interface ChainFundsTotals {
+interface ChainFundsTotals {
   chainFreeBuy: number;
   chainFreeSell: number;
   committedChainBuy: number;
@@ -655,7 +649,7 @@ export interface GridFeeParams extends UnknownRecord {
 }
 
 /** `config.timing` knobs. */
-export interface TimingConfig extends UnknownRecord {
+interface TimingConfig extends UnknownRecord {
   SAFETY_NET_SYNC_TIMEOUT_MS?: number;
   CREDIT_DEAL_EXPIRY_THRESHOLD_HOURS?: number;
   CREDIT_REBORROW_MAX_ATTEMPTS?: number;
@@ -665,7 +659,7 @@ export interface TimingConfig extends UnknownRecord {
 }
 
 /** `config.fillProcessing` knobs read by the fill consumer. */
-export interface FillProcessingConfig extends UnknownRecord {
+interface FillProcessingConfig extends UnknownRecord {
   CONSUMER_BACKOFF_INITIAL_MS?: number;
   CONSUMER_BACKOFF_MAX_MS?: number;
   MAX_CONSECUTIVE_CONSUMER_FAILURES?: number;
@@ -683,18 +677,18 @@ export interface ManagerLock {
 }
 
 /** `refreshAccountTotalsIfStale()` freshness gate. */
-export interface AccountTotalsGate {
+interface AccountTotalsGate {
   ok: boolean;
   [key: string]: unknown;
 }
 
 /** Accountant surface the sync engine calls directly. */
 /** Result of `accountant.processFillAccounting()`. */
-export interface FillAccountingResult extends UnknownRecord {
+interface FillAccountingResult extends UnknownRecord {
   status: string;
 }
 
-export interface AccountantLike {
+interface AccountantLike {
   processFillAccounting(fillOp: unknown, fillKey: string, options?: UnknownRecord): Promise<boolean>;
   adjustTotalBalance(orderType: string, delta: number, operation: string): Promise<unknown>;
   addToChainFree(orderType: string, size: number, operation: string): Promise<unknown>;
@@ -876,7 +870,7 @@ export interface ManagerLogger {
 }
 
 /** Mutable recovery-state record (all fields optional to allow partial writes). */
-export interface ManagerRecoveryState {
+interface ManagerRecoveryState {
   phase?: string;
   attemptCount?: number;
   lastAttemptAt?: number;

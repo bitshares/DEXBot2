@@ -22,7 +22,7 @@
 import { DEFAULT_CONFIG } from './constants.js';
 import type { UnknownRecord } from './types.js';
 
-export interface SeedOptions {
+interface SeedOptions {
     /** Defaults source; omit to use the merged DEFAULT_CONFIG. */
     defaults?: UnknownRecord;
 }

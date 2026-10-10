@@ -1881,9 +1881,9 @@ class DEXBot implements BotLike {
      * long region (e.g. the structural resync's Phase-2 placement) would
      * starve indefinitely — which also keeps the maintenance idle gate shut
      * forever (the queue-length check returns the full settle delay).
-     * Registered via addBroadcastRegionEndListener (fan-out) rather than the
-     * legacy single slot, so a second wirer can never silently displace the
-     * drain. Re-entry safe: the marker keeps repeated wiring idempotent.
+     * Registered via addBroadcastRegionEndListener (fan-out) so a second wirer
+     * can never silently displace the drain. Re-entry safe: the marker keeps
+     * repeated wiring idempotent.
      */
     _wireBroadcastRegionEndDrain() {
         const manager = this.manager;

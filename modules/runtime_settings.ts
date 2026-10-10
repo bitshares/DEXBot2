@@ -29,7 +29,7 @@ function _deepMerge<T extends UnknownRecord>(target: T | undefined, source: unkn
     return deepMerge(target ?? ({} as T), _normalizeKeys(source) as UnknownRecord) as T;
 }
 
-export interface BotRuntimeSettings {
+interface BotRuntimeSettings {
     gridLimits: typeof GRID_LIMITS;
     feeParams: typeof FEE_PARAMETERS;
     incrementBounds: typeof INCREMENT_BOUNDS;
@@ -44,7 +44,7 @@ export interface BotRuntimeSettings {
     };
 }
 
-export type BotRuntimeSettingsOverrides = Partial<BotRuntimeSettings> & {
+type BotRuntimeSettingsOverrides = Partial<BotRuntimeSettings> & {
     poolSlippageTolerance?: number;
 };
 

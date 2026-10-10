@@ -61,7 +61,7 @@ interface ChainConfig {
  *                 again, but a recovery attempt is in flight/recent.
  * - `unavailable` no live socket to tear down, so no recovery attempt exists.
  */
-export type ForcedReconnectOutcome = 'issued' | 'coalesced' | 'unavailable';
+type ForcedReconnectOutcome = 'issued' | 'coalesced' | 'unavailable';
 
 /**
  * Build the per-client forced-reconnect gate shared by the main and read-only

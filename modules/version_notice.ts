@@ -76,7 +76,7 @@ const storage = getStorage();
 const { readJSON } = storage;
 
 /** How the running copy was installed — selects the hint text. */
-export type InstallKind = 'npm-global' | 'git' | 'other';
+type InstallKind = 'npm-global' | 'git' | 'other';
 
 /**
  * The pending one-time announcement: what the operator is told when a newer
@@ -84,7 +84,7 @@ export type InstallKind = 'npm-global' | 'git' | 'other';
  * wording and colour are rendered by `printVersionStatus`, so there is exactly
  * one place that decides how a version verdict looks.
  */
-export interface VersionNotice {
+interface VersionNotice {
     currentVersion: string;
     latestVersion: string;
     installKind: InstallKind;
@@ -94,9 +94,9 @@ export interface VersionNotice {
 }
 
 /** Green when current, orange when a newer release exists, gray when unknown. */
-export type VersionState = 'up-to-date' | 'update-available' | 'unknown';
+type VersionState = 'up-to-date' | 'update-available' | 'unknown';
 
-export interface VersionStatus {
+interface VersionStatus {
     /** Installed version — `Config.VERSION` unless overridden. */
     currentVersion: string;
     /** Latest version observed this run, or from the throttle cache. Null when
@@ -140,7 +140,7 @@ interface VersionCheckCache {
     lastError?: string;
 }
 
-export interface VersionNoticeOptions {
+interface VersionNoticeOptions {
     /** Override the installed version (defaults to `Config.VERSION`). */
     currentVersion?: string;
     /** Override the cache location (tests). */
@@ -216,19 +216,19 @@ export function detectInstallKind(projectRoot: string = PATHS.PROJECT_ROOT): Ins
 }
 
 /** Minimal structural view of a fetch response used by the probe. */
-export interface FetchResponseLike {
+interface FetchResponseLike {
     ok?: boolean;
     status?: number;
     json(): Promise<unknown>;
 }
 
-export type FetchImpl = (
+type FetchImpl = (
     url: string,
     init: { method?: string; headers?: Record<string, string>; signal?: AbortSignal }
 ) => Promise<FetchResponseLike | null | undefined>;
 
 /** One place the published version can be read from. */
-export interface VersionSource {
+interface VersionSource {
     id: string;
     url: string;
     /** Pull the version out of the source's JSON shape. Returns null when the
@@ -755,7 +755,7 @@ export function printVersionStatusWhenReady(pending: Promise<VersionStatus | nul
 // (how long, how many attempts, what to say when it all fails) stays here
 // rather than being re-spelled per call site.
 
-export interface StagedVersionNoticeOptions extends VersionNoticeOptions {
+interface StagedVersionNoticeOptions extends VersionNoticeOptions {
     /** Wait at the top of the command before the caller prints anything else.
      *  Default `UPDATER.NOTICE_STAGE_GRACE_MS` (1s). */
     graceMs?: number;
@@ -764,7 +764,7 @@ export interface StagedVersionNoticeOptions extends VersionNoticeOptions {
     finalMs?: number;
 }
 
-export interface StagedVersionWait {
+interface StagedVersionWait {
     /** The status if it lands within `graceMs`, else null. Await this at the
      *  top of a report; the value is only interesting for its TIMING. */
     quick: Promise<VersionStatus | null>;

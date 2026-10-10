@@ -89,7 +89,7 @@ export interface PoolEntry {
     reserves?: PoolReserve[];
     [key: string]: unknown;
 }
-export interface BitSharesDb {
+interface BitSharesDb {
     lookup_asset_symbols?: (refs: string[]) => Promise<unknown[]>;
     get_assets?: (refs: string[]) => Promise<unknown[]>;
     get_objects?: (ids: string[]) => Promise<unknown[]>;
@@ -103,7 +103,7 @@ export interface BitSharesDb {
     call?: (method: string, args: unknown[]) => Promise<unknown>;
     [key: string]: unknown;
 }
-export interface BitSharesAssets {
+interface BitSharesAssets {
     [symbol: string]: Promise<unknown> | unknown;
 }
 export interface BitSharesClient {
@@ -616,7 +616,7 @@ async function resolveLiquidityPoolByShareAsset(BitShares: BitSharesClient, shar
     };
 }
 
-export interface ExtendedAssetMeta extends AssetMeta {
+interface ExtendedAssetMeta extends AssetMeta {
     current_supply?: number | string | { amount?: number; value?: number };
     dynamic_asset_data_id?: string;
     dynamicDataId?: string;
@@ -853,7 +853,7 @@ function _loadFeeCacheFromDisk(): Record<string, FeeCacheEntryData> {
     return {};
 }
 
-export interface AssetOptions {
+interface AssetOptions {
     flags?: number | string;
     market_fee_percent?: number;
     taker_fee_percent?: number;
@@ -874,7 +874,7 @@ export interface FeeCacheEntryData {
     makerFeeDiscountPercent?: number;
 }
 
-export interface GlobalProps {
+interface GlobalProps {
     parameters?: {
         current_fees?: { parameters?: Array<[number, { fee?: number | string }]> };
         extensions?: { maker_fee_discount_percent?: number };

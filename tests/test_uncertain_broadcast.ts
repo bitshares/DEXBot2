@@ -761,7 +761,6 @@ async function testCredentialClientFallbackRetrySucceeds() {
                 socketPath: transport.socketPath,
                 requestType: 'broadcast',
                 timeoutMs: 100,
-                fallbackNodes: ['wss://fallback-1.bitshares.org/ws'],
             }),
             (err) => {
                 assert(err instanceof BroadcastUncertainError);
@@ -769,7 +768,7 @@ async function testCredentialClientFallbackRetrySucceeds() {
                 return true;
             }
         );
-        assert.strictEqual(requestCount, 1, 'Must NOT re-send on fallback nodes: the broadcast may have landed and re-sending duplicates on-chain orders');
+        assert.strictEqual(requestCount, 1, 'Must NOT re-send: the broadcast may have landed and re-sending duplicates on-chain orders');
     } finally {
         transport.restore();
     }
@@ -777,7 +776,7 @@ async function testCredentialClientFallbackRetrySucceeds() {
 }
 
 async function testCredentialClientFallbackRetryExhausted() {
-    console.log('\n[UNC-008i-2] credential client DEADLINE → throws immediately regardless of fallback list...');
+    console.log('\n[UNC-008i-2] credential client DEADLINE → throws immediately after a single attempt...');
     const operations = [{ op_name: 'limit_order_cancel', op_data: { order: '1.7.2' } }];
     let requestCount = 0;
     const transport = installFakeCredentialDaemonTransport((request, socket) => {
@@ -790,10 +789,6 @@ async function testCredentialClientFallbackRetryExhausted() {
                 socketPath: transport.socketPath,
                 requestType: 'broadcast',
                 timeoutMs: 100,
-                fallbackNodes: [
-                    'wss://fallback-1.bitshares.org/ws',
-                    'wss://fallback-2.bitshares.org/ws',
-                ],
             }),
             (err) => {
                 assert(err instanceof BroadcastUncertainError);
@@ -809,7 +804,7 @@ async function testCredentialClientFallbackRetryExhausted() {
 }
 
 async function testCredentialClientFallbackSkipsPlainError() {
-    console.log('\n[UNC-008i-3] credential client fallbackNodes: plain Error → no retry...');
+    console.log('\n[UNC-008i-3] credential client: plain Error → no retry...');
     const operations = [{ op_name: 'limit_order_cancel', op_data: { order: '1.7.3' } }];
     let requestCount = 0;
     const transport = installFakeCredentialDaemonTransport((request, socket) => {
@@ -822,7 +817,6 @@ async function testCredentialClientFallbackSkipsPlainError() {
                 socketPath: transport.socketPath,
                 requestType: 'broadcast',
                 timeoutMs: 100,
-                fallbackNodes: ['wss://fallback-1.bitshares.org/ws'],
             }),
             (err) => {
                 assert(!(err instanceof BroadcastUncertainError));
@@ -838,7 +832,7 @@ async function testCredentialClientFallbackSkipsPlainError() {
 }
 
 async function testCredentialClientFallbackEmptyList() {
-    console.log('\n[UNC-008i-4] credential client fallbackNodes: [] → no retry (regression guard)...');
+    console.log('\n[UNC-008i-4] credential client: single uncertain broadcast → no retry (regression guard)...');
     const operations = [{ op_name: 'limit_order_cancel', op_data: { order: '1.7.4' } }];
     let requestCount = 0;
     const transport = installFakeCredentialDaemonTransport((request, socket) => {
@@ -851,14 +845,13 @@ async function testCredentialClientFallbackEmptyList() {
                 socketPath: transport.socketPath,
                 requestType: 'broadcast',
                 timeoutMs: 100,
-                fallbackNodes: [],
             }),
             (err) => {
                 assert(err instanceof BroadcastUncertainError);
                 return true;
             }
         );
-        assert.strictEqual(requestCount, 1, 'Empty fallback list should not retry');
+        assert.strictEqual(requestCount, 1, 'A single uncertain broadcast must not retry');
     } finally {
         transport.restore();
     }
@@ -866,7 +859,7 @@ async function testCredentialClientFallbackEmptyList() {
 }
 
 async function testCredentialClientFallbackReportsFailedNode() {
-    console.log('\n[UNC-008i-5] credential client DEADLINE → single attempt, onNodeFailed never fires for fallback list...');
+    console.log('\n[UNC-008i-5] credential client DEADLINE → single attempt, onNodeFailed never fires without an explicit nodeUrl...');
     const operations = [{ op_name: 'limit_order_cancel', op_data: { order: '1.7.5' } }];
     let requestCount = 0;
     const failedNodes: string[] = [];
@@ -880,15 +873,11 @@ async function testCredentialClientFallbackReportsFailedNode() {
                 socketPath: transport.socketPath,
                 requestType: 'broadcast',
                 timeoutMs: 100,
-                fallbackNodes: [
-                    'wss://fallback-1.bitshares.org/ws',
-                    'wss://fallback-2.bitshares.org/ws',
-                ],
                 onNodeFailed: (nodeUrl) => { failedNodes.push(nodeUrl); },
             }),
             (err) => err instanceof BroadcastUncertainError
         );
-        assert.strictEqual(requestCount, 1, 'Single attempt: uncertain broadcasts must not be re-sent on fallback nodes');
+        assert.strictEqual(requestCount, 1, 'Single attempt: uncertain broadcasts must not be re-sent');
         assert.strictEqual(failedNodes.length, 0, 'onNodeFailed must never fire without an explicit nodeUrl (no fallback cycling to blame)');
     } finally {
         transport.restore();

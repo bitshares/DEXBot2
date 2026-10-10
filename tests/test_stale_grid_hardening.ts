@@ -280,14 +280,13 @@ function newTestManager() {
 }
 
 async function testHOOK001_FanOutToAllListeners() {
-    console.log('\n[HOOK-001] Region-end fires the legacy listener plus all registered ones...');
+    console.log('\n[HOOK-001] Region-end fires all registered listeners...');
     const m = newTestManager();
     const calls: string[] = [];
-    m._onBroadcastRegionEnd = () => { calls.push('legacy'); };
     m.addBroadcastRegionEndListener(() => { calls.push('a'); });
     m.addBroadcastRegionEndListener(() => { calls.push('b'); });
     m._fireBroadcastRegionEnd();
-    assert.deepStrictEqual(calls.sort(), ['a', 'b', 'legacy'], 'every listener fires exactly once');
+    assert.deepStrictEqual(calls.sort(), ['a', 'b'], 'every listener fires exactly once');
     console.log('✓ HOOK-001 passed');
 }
 

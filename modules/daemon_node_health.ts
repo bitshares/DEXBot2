@@ -38,13 +38,13 @@ import { createFailureLedger } from './node_failure_ledger.js';
 import { removeNodesFromHealthCache } from './node_health_cache.js';
 import { getErrorMessage } from './utils/errors.js';
 
-export interface NodeHealthLedgerEntry {
+interface NodeHealthLedgerEntry {
     failureCount: number;
     blacklistedUntil: number;
     lastReportedAt: number;
 }
 
-export interface NodeHealthLedgerOptions {
+interface NodeHealthLedgerOptions {
     /** Override the shared health-cache file (tests). Defaults to the shared cache. */
     healthCacheFile?: string;
     /** Override the failure threshold (tests). Defaults to NODE_MANAGEMENT.BLACKLIST_THRESHOLD. */
@@ -56,7 +56,7 @@ export interface NodeHealthLedgerOptions {
     logger?: { warn?: Function; log?: Function; debug?: Function };
 }
 
-export interface NodeHealthLedger {
+interface NodeHealthLedger {
     /** Whether the node is currently blacklisted (cooldown active). */
     isBlacklisted(nodeUrl: string): boolean;
     /** Report a failed node rotation; counts toward the blacklist threshold. */

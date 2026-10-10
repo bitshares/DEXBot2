@@ -50,7 +50,7 @@ export interface BtsdexTx {
     [key: string]: unknown;
 }
 
-export interface SigningClient {
+interface SigningClient {
     client: {
         initPromise: Promise<void> | null;
         newTx(): BtsdexTx;

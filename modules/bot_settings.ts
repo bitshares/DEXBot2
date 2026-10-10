@@ -22,7 +22,7 @@ export interface BotLendingEntry extends UnknownRecord {
 }
 
 /** `debtPolicy` block of a bot entry. */
-export interface BotDebtPolicy extends UnknownRecord {
+interface BotDebtPolicy extends UnknownRecord {
     lending?: BotLendingEntry[];
     maxCollateralAmount?: unknown;
 }

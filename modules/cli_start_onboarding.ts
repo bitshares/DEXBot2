@@ -1,4 +1,4 @@
-export type StartOnboardingCommand = 'key' | 'bot' | null;
+type StartOnboardingCommand = 'key' | 'bot' | null;
 
 /**
  * Select the setup editor that should handle an otherwise-normal start

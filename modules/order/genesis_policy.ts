@@ -57,14 +57,12 @@ export const MISSING_GENESIS_REASON = {
     MIGRATION_FAILED: 'migration_failed'
 } as const;
 
-export type MissingGenesisReason = (typeof MISSING_GENESIS_REASON)[keyof typeof MISSING_GENESIS_REASON];
-
 export const ON_MISSING_GENESIS = {
     REBUILD: 'rebuild',
     HALT: 'halt'
 } as const;
 
-export type OnMissingGenesisPolicy = (typeof ON_MISSING_GENESIS)[keyof typeof ON_MISSING_GENESIS];
+type OnMissingGenesisPolicy = (typeof ON_MISSING_GENESIS)[keyof typeof ON_MISSING_GENESIS];
 
 /**
  * Thrown by `loadGrid` (and the startup gate) when a snapshot carries orders
@@ -186,7 +184,7 @@ export function buildGenesisFromLiveRail(config: GridConfig | null | undefined):
     }
 }
 
-export type GenesisResolution =
+type GenesisResolution =
     | { ok: true; genesis: GridGenesis | null; source: 'persisted' | 'in_memory' | 'migration' }
     | { ok: false; reason: string; detail: string; mismatchRatio: number | null };
 

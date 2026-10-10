@@ -184,7 +184,7 @@ async function testWDG001_StaleWatchdogFiresRegionEnd() {
     console.log('\n[WDG-001] Stale broadcast watchdog fires the region-end hook...');
     const m = newTestManager();
     let fired = 0;
-    m._onBroadcastRegionEnd = () => { fired++; };
+    m.addBroadcastRegionEndListener(() => { fired++; });
 
     // Fresh flag: not stale, no hook.
     m.startBroadcasting();
@@ -203,7 +203,7 @@ async function testWDG001_StaleWatchdogFiresRegionEnd() {
 async function testWDG002_RegionEndHookErrorsAreContained() {
     console.log('\n[WDG-002] Region-end hook errors never escape the watchdog...');
     const m = newTestManager();
-    m._onBroadcastRegionEnd = () => { throw new Error('listener boom'); };
+    m.addBroadcastRegionEndListener(() => { throw new Error('listener boom'); });
     m.startBroadcasting();
     m._broadcastingStartedAt = Date.now() - 121000;
     assert.doesNotThrow(() => m._clearStaleBroadcastFlag(), 'throwing listener must not propagate');

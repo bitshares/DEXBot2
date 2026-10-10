@@ -127,7 +127,7 @@ function applyNodesToNodeManagement(nodes: UnknownRecord, nm: UnknownRecord): vo
  * `selection` are typed because callers read/write those sub-fields directly;
  * the index signature keeps unmapped passthrough keys reachable.
  */
-export interface NodesHealthCheckView {
+interface NodesHealthCheckView {
     enabled?: boolean;
     intervalMs?: number;
     timeoutMs?: number;
@@ -136,7 +136,7 @@ export interface NodesHealthCheckView {
     [key: string]: unknown;
 }
 
-export interface NodesSelectionView {
+interface NodesSelectionView {
     strategy?: string;
     preferredNode?: string | null;
     [key: string]: unknown;

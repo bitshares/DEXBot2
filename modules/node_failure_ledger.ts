@@ -23,13 +23,13 @@
  *    blacklist's cooldown expired.
  */
 
-export interface FailureLedgerEntry {
+interface FailureLedgerEntry {
     failureCount: number;
     blacklistedUntil: number;
     lastReportedAt: number;
 }
 
-export interface FailureLedgerOptions {
+interface FailureLedgerOptions {
     /** Failure count that triggers a blacklist. */
     threshold: number;
     /** Blacklist duration once the threshold is reached. */
@@ -44,16 +44,16 @@ export interface FailureLedgerOptions {
     skipWhileBlacklisted?: boolean;
 }
 
-export type FailureRecordOutcome = 'counted' | 'blacklisted' | 'rate-limited' | 'skipped-blacklisted';
+type FailureRecordOutcome = 'counted' | 'blacklisted' | 'rate-limited' | 'skipped-blacklisted';
 
-export interface FailureRecordResult {
+interface FailureRecordResult {
     outcome: FailureRecordOutcome;
     /** The count as recorded (or the existing count for skipped outcomes). */
     failureCount: number;
     threshold: number;
 }
 
-export interface FailureLedger {
+interface FailureLedger {
     isBlacklisted(key: string): boolean;
     recordFailure(key: string, now?: number): FailureRecordResult;
     /** Clear a single entry (recovery: health-check success, resetNode). */

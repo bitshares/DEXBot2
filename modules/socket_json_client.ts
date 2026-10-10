@@ -23,7 +23,7 @@ const _require = createRequire(import.meta.url);
 
 export type SocketJsonFailureKind = 'timeout' | 'connection' | 'closed' | 'invalid';
 
-export interface SocketJsonRequestOptions {
+interface SocketJsonRequestOptions {
     socketPath: string;
     timeoutMs: number;
     /** Write the request to the connected socket (one JSON line). */
