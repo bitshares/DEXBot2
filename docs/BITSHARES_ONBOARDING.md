@@ -415,18 +415,17 @@ npm prefix -g        # must be a directory you own
 
 Check with `dexbot --help`.
 
-### "npm says it blocked dexbot's install scripts (`prepare` / `postinstall`)"
+### "npm says it blocked dexbot's install scripts (`prepare`)"
 
 npm 12+ no longer runs lifecycle scripts of installed packages unless they
 are allowlisted (supply-chain hardening,
 [npm/rfcs#868](https://github.com/npm/rfcs/blob/master/text/0868-allow-scripts.md)).
-You'll see `npm warn install-scripts ... blocked` listing dexbot's
-`postinstall` and `prepare`. It shows up with `npm link` because link adds
-your checkout to the **global** install tree as a `file:` dependency — npm
-treats it like any third-party package and blocks its scripts. The warning's
-own advice (`npm install-scripts ls` / `approve`) is a dead end here: in your
-project the checkout is the project root, which npm deliberately never lists
-or approves. Don't chase it.
+With `npm link` you'll see `npm warn install-scripts ... blocked` listing
+dexbot's `prepare`: link adds your checkout to the **global** install tree as
+a `file:` dependency — npm treats it like any third-party package and blocks
+its scripts. The warning's own advice (`npm install-scripts ls` / `approve`)
+is a dead end here: in your project the checkout is the project root, which
+npm deliberately never lists or approves. Don't chase it.
 
 A plain `npm install` is **not** gated — it runs the project's own `prepare`
 directly, so the correct from-source order is:
@@ -438,10 +437,7 @@ npm link         # a blocked prepare here is harmless
 ```
 
 If you skipped the install (or want to be sure), run `npm run build`. Bins
-are never gated, so once `dist/` exists the linked `dexbot` works. The
-blocked `postinstall` is only the "DEXBot2 installed!" banner — cosmetic;
-`npm i -g dexbot` may warn about the same banner and that's harmless too
-(the published package ships prebuilt).
+are never gated, so once `dist/` exists the linked `dexbot` works.
 
 ### "`Unknown command: dexbot` right after installing/linking"
 

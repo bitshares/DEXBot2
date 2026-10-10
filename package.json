@@ -32,7 +32,6 @@
     "scripts/pdev.sh",
     "scripts/pm2",
     "scripts/pmain.sh",
-    "scripts/postinstall.js",
     "scripts/ptest.sh",
     "scripts/README.md",
     "scripts/reset-settings.sh",
@@ -124,8 +123,7 @@
     "version": "npm run version:sync && npm run build:clean",
     "postversion": "npm run build:clean",
     "prepack": "npm run build:clean",
-    "prepare": "npm run build:clean",
-    "postinstall": "node scripts/postinstall.js"
+    "prepare": "npm run build:clean"
   },
   "repository": {
     "type": "git",
