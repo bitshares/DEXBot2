@@ -35,7 +35,6 @@ const liveTestFiles = new Set([
     'dist/tests/test_debug_orderbook.js',
     'dist/tests/test_twentix_only.js',
     'dist/tests/test_fee_cache.js',
-    'dist/tests/test_fee_cache_twentix.js',
     'dist/tests/test_subscriptions.js',
     'dist/tests/test_fills.js',
     'dist/tests/test_funds.js',

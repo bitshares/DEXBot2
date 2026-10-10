@@ -508,4 +508,5 @@ check('resolveProfilesDir returns a string',
 // ── Summary ────────────────────────────────────────────────────────────
 fs.rmSync(tmpRoot, { recursive: true, force: true });
 
-console.log(`\n✓ ${passed}/${total} paths tests passed`);
+console.log(`\n${passed === total ? '✓' : '✗'} ${passed}/${total} paths tests passed`);
+process.exit(passed === total ? 0 : 1);

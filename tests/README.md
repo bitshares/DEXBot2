@@ -1,12 +1,17 @@
 # DEXBot2 Test Suite
 
-Tests live as standalone `.ts` files in this directory. They are compiled to `dist/tests/` by the build and run from there with plain `node` — no test framework, no TypeScript loader. The suite uses Node's native `assert`.
+Tests live as standalone `.ts` files under `tests/` (plus `claw/tests/` for the Claw integration). They are compiled to `dist/tests/` and `dist/claw/tests/` by the build and run from there with plain `node` — no test framework, no TypeScript loader. The suite uses Node's native `assert`.
+
+`scripts/run-tests.ts` discovers every compiled `test_*.js` and runs them sequentially, echoing output and appending a timestamped log to `tests/tmp/`. Live-blockchain tests are opt-in via `RUN_LIVE_BITSHARES_TESTS=1` (see *Runner & environment* below).
 
 ## Quick Start
 
 ```bash
-# Run all tests (builds production code + tests first)
+# Run all offline tests (builds production code + tests first)
 npm test
+
+# Run including live-blockchain tests
+npm run test:live
 
 # Run a single test file
 npm run build:tests
@@ -18,21 +23,34 @@ node dist/tests/<file>.js
 ```
 tests/
   helpers/          # Shared test infrastructure (stubs, mocks, utilities)
-  tmp/              # Scratch space for tests that write temp files
+  tmp/              # Scratch space + per-run logs (gitignored)
   tsconfig.json     # Test-specific TS config (extends root)
   <name>.ts         # Test files (one file per module or concern)
+claw/tests/         # Claw integration tests (same conventions, run by npm test)
 ```
 
 `helpers/` contains reusable test support:
 - `bitshares_client_stub.ts` — mock blockchain client
-- `bitshares_native_stub.ts` — mock native chain client
-- `chain_keys_stub.ts` — key derivation test doubles
 - `chain_orders_stub.ts` — order lifecycle test doubles
 - `fee_cache_init.ts` — fee cache seeding for tests
 - `order_test_helpers.ts` — order construction utilities
 - `silent_logger.ts` — suppresses log output during tests
 - `module_cache_stub.ts` — isolates module state per test
+- `vault_fixture.ts` — chain-key vault fixtures
+- `pm2_path_shim.ts` — PM2 path isolation for `pm2.ts` tests
+- `esm_mocks.ts` + `esm_mock_hooks.mjs` / `esm_mock_loader.mjs` — loader-hook harness for stubbing compiled ESM named exports
 - `unlock_test_helpers.ts`, `foreign_cred_stub.js`, `dynamic_weight_files.ts` — domain-specific helpers
+
+## Runner & environment
+
+`scripts/run-tests.ts` runs each compiled `test_*.js` file as its own `node` process (no shared state between tests). Knobs:
+
+- `RUN_LIVE_BITSHARES_TESTS=1` — also run the live-chain tests; without it they are skipped and counted as `skippedLive`. The live set is the `liveTestFiles` allow-list in `scripts/run-tests.ts`.
+- `DEXBOT_TEST_CONCURRENCY=N` — run N files in parallel (default `1`; several tests share `tests/tmp` paths, so parallelism must be requested deliberately).
+- `DEXBOT_TEST_TIMEOUT_MS=N` — per-file watchdog (default `240000`); on expiry the child is `SIGTERM`/`SIGKILL`ed and marked `TIMEOUT`.
+- `DEXBOT_SUPPRESS_WARNINGS=1` — add `--no-warnings` to children (hides the warnings the diagnostics summary is meant to surface).
+
+Every run appends to `tests/tmp/test-run-<timestamp>.log` and prints an aggregate summary (per-test pass/fail, slowest tests, and a diagnostics scan for warn/error/circular-dependency/deprecation/leak patterns).
 
 ## Test Categories
 
@@ -44,7 +62,7 @@ Connection, subscriptions, node management, native chain client.
 
 ### Account & Authentication
 Key validation, balance queries, account selection.
-*Examples:* `test_key_validation.ts`, `test_account_totals.ts`, `test_account_selection.ts`, `test_chain_keys_vault.ts`
+*Examples:* `test_key_validation.ts`, `test_account_totals.ts`, `test_chain_keys_vault.ts`
 
 ### Market Data & Pricing
 Price derivation, orderbook inspection, tolerance checks.
@@ -147,4 +165,4 @@ Shared utility functions, precision handling, chain helpers.
 
 ---
 
-**Note:** Interactive/diagnostic scripts (`connection_test.ts`, `diag_*`) require network access and are not part of CI. Run these manually when debugging.
+**Note:** Interactive/diagnostic scripts (`connection_test.ts`, `diag_*`, `benchmark_cow.ts`, `sim_batching.ts`, `repro_phantom_orders.ts`) require network access or real state and are **not** run by `npm test` — the runner only globs `test_*.js`. Run these manually when debugging.

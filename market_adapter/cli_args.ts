@@ -14,8 +14,8 @@
  */
 
 export interface CliArgHandlers {
-    /** Flags that take a value; receives the raw next argv token. */
-    value?: Record<string, (raw: string | undefined) => void>;
+    /** Flags that take a value; receives the raw next argv token (never missing or flag-shaped). */
+    value?: Record<string, (raw: string) => void>;
     /** Flags that take no value. */
     flag?: Record<string, () => void>;
     /** Invoked for `--help` / `-h`; the caller decides whether to exit. */
@@ -36,7 +36,11 @@ export function walkCliArgs(args: readonly string[], handlers: CliArgHandlers): 
 
         const valueHandler = handlers.value?.[a];
         if (valueHandler) {
-            valueHandler(args[i + 1]);
+            const raw = args[i + 1];
+            if (raw === undefined || raw.startsWith('--')) {
+                throw new Error(`Flag ${a} expects a value; got ${raw === undefined ? 'nothing' : raw}`);
+            }
+            valueHandler(raw);
             i++;
             continue;
         }
