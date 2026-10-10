@@ -143,12 +143,17 @@ shows live weights with color: higher = red (losing), lower = green (winning),
 static = grey. Stale snapshot appends a red `(adapter offline)` alert to the
 static weights.
 
-### Kibana Candle Diagnostics
-**File:** `diagnose-kibana-candles.ts`
-**Purpose:** Fetch raw Kibana LP candles for a specific pool to verify trading activity.
+### Credit Analysis
+**File:** `analyze-credit.ts` (CLI: `dexbot credit`)
+**Purpose:** Live-chain overview of active MPA (margin) and credit (borrowed-deal) positions, summed per asset per bot — the credit counterpart to `analyze-orders.ts` / `dexbot order`.
 ```bash
-node dist/scripts/diagnose-kibana-candles.js
+# Credit-enabled bots only
+node dist/scripts/analyze-credit.js
+
+# Single bot (name or key)
+node dist/scripts/analyze-credit.js <bot>
 ```
+Credit deals report per-pair and average CR, but only for pairs whitelisted in `bots.json` (`debtPolicy.lending`) and listed on the current credit offer; everything else is shown as ignored/unpriced and excluded from the average. A borrow-now preview per configured pair shows today's rate.
 
 ### Pool History Diagnostics
 **File:** `diagnose-pool-history.ts`
@@ -192,36 +197,6 @@ npm run native:corpus
 npm run native:release-gates
 ```
 The corpus report lands in `<profiles>/native_validation/mainnet_corpus_report.json`. The gates fail unless the report has `passed=true` and `transactionCount>=50`.
-
----
-
-## 🔍 GIT & DEVELOPMENT WORKFLOW
-
-### Interactive Git Changes Monitor
-**File:** `git-viewer.sh`
-**Purpose:** Interactive monitor for uncommitted, committed, and pushed changes.
-```bash
-# Launch interactive git changes viewer with fzf search
-bash scripts/git-viewer.sh
-```
-
-**Features**:
-- View uncommitted (working tree) changes
-- View committed (staged) changes
-- View pushed vs. remote-tracking changes
-- Smart auto-refresh (1s for local, 15s for remote)
-- Fuzzy search with `fzf` for finding files
-- Toggle between full file view and diff-only view
-
-**Usage**:
-```bash
-# Press '1' to view all changes
-# Press '2' to search uncommitted files (with fzf)
-# Press '3' to search unpushed commits (with fzf)
-# Press '4' to search pushed commits (with fzf)
-# Press 'q' to quit
-```
-Inside file viewer: `f` full file, `d` diff view, `q` back to search, `b` main menu.
 
 ---
 
@@ -285,6 +260,7 @@ npm run version:check
 # Rewrite aligned manifests from root package.json
 npm run version:sync
 ```
+
 ---
 
 ## 🌳 BRANCH SYNCHRONIZATION

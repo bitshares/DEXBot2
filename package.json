@@ -26,7 +26,6 @@
     "scripts/clear-orders.sh",
     "scripts/create-bot-symlinks.sh",
     "scripts/dexbot",
-    "scripts/git-viewer.sh",
     "scripts/keys",
     "scripts/lib/dexbot-paths.sh",
     "scripts/pdev.sh",
