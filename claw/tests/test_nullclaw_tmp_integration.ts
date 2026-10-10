@@ -6,7 +6,7 @@ const os = require('os');
 const { getErrorMessage } = require('../../modules/utils/errors');
 const path = require('path');
 const { createClawBridge, runClawCommand } = require('../modules/claw_bridge');
-const { buildRuntimeSkillMarkdown, writeRuntimeSkillMarkdown } = require('../modules/claw_skill_md');
+const { writeRuntimeSkillMarkdown } = require('../modules/claw_skill_md');
 
 async function main() {
   const repoRoot = path.resolve(__dirname, '..');

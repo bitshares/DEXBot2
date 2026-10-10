@@ -464,7 +464,7 @@ function createActionsHarness() {
         calls.subscribe.push({ accountName, topic });
         subscribeHandlers.push(callback);
       },
-      unsubscribe: (topic: any, callback: any, accountName: any) => {
+      unsubscribe: (topic: any, _callback: any, accountName: any) => {
         calls.unsubscribe.push({ accountName, topic });
         return Promise.resolve();
       }

@@ -242,7 +242,7 @@ node dist/scripts/analyze-git.js
 
 ### Explicit-`any` Budget Ratchet
 **File:** `check_any.ts`
-**Purpose:** Count explicit `any` tokens on code lines (comments/JSDoc excluded) and fail when the count rises above the committed budget in `any-budget.json`, keeping `any` removal monotonic.
+**Purpose:** Count explicit `any` tokens on code lines (comments/JSDoc excluded) and fail when the count rises above the committed budget in `any-budget.json`, keeping `any` removal monotonic. Two scopes are tracked independently: `root` (`modules/`, `market_adapter/`, `analysis/`, `scripts/`, plus root-level `*.ts`) and `claw` (the experimental `claw/` subtree, tests excluded), so the clean root count is not inflated by claw.
 ```bash
 # Compare against any-budget.json
 npm run check:any

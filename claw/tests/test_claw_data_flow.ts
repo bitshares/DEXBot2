@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('assert');
-const Module = require('module');
 const { runEsmMockStages, defineEsmMockAbs } = require('../../tests/helpers/esm_mocks');
 
 // Compiled ESM graphs cannot be mocked via require.cache; the helper installs

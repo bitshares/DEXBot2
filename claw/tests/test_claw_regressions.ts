@@ -277,7 +277,7 @@ async function testDecisionLoopReplacesAnalyzerOnConfigChange() {
       this.config = config;
     }
 
-    update(marketPrice: number, feedPrice: number) {
+    update(_marketPrice: number, _feedPrice: number) {
       return { confidence: 50, isReady: true, trend: 'NEUTRAL' };
     }
 

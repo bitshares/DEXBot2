@@ -17,7 +17,6 @@ const {
   crWeight,
   trendWeight,
 } = require('../modules/position_health');
-const sharedPlanner = require('../../modules/cr_planner');
 
 // --- classifyCrZone ---
 

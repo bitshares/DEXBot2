@@ -177,6 +177,7 @@ function buildRuntimeSetup(runtime: any, repoRoot: string, profileRoot: string) 
         'Install the native plugin from this repository:',
         '',
         '```bash',
+        'npm run build',
         `openclaw plugins install -l ${repoRoot}`,
         'openclaw plugins enable bitshares-claw',
         '```',

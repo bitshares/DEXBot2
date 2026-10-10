@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { runEsmMockStages, defineEsmMockAbs } = require('../../tests/helpers/esm_mocks');

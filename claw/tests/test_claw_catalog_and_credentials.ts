@@ -3,33 +3,10 @@
 const assert = require('assert');
 const fs = require('fs');
 const net = require('net');
-const { EventEmitter } = require('events');
 const path = require('path');
 
 function clearModule(modulePath: string) {
   delete require.cache[modulePath];
-}
-
-function createMockConnection(script: any) {
-  return (socketPath: string, onConnect: any) => {
-    const socket = new EventEmitter();
-    socket.socketPath = socketPath;
-    socket.write = (payload: any) => {
-      socket.payload = payload;
-    };
-    socket.end = () => {
-      socket.ended = true;
-    };
-    socket.destroy = () => {
-      socket.destroyed = true;
-    };
-
-    process.nextTick(() => {
-      script({ onConnect, socket, socketPath });
-    });
-
-    return socket;
-  };
 }
 
 function testClawCatalog() {

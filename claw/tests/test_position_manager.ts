@@ -249,7 +249,7 @@ async function testPositionManagerLifecycle() {
     const accountState = await manager.getPosition(watchedPositionId);
     assert.strictEqual(accountState.entry.orderId, '1.7.500');
 
-    const unsubscribe = await manager.watchAccount('alice', async (position: any, fill: any) => {
+    await manager.watchAccount('alice', async (position: any, fill: any) => {
       calls.listenForFills.push({ accountName: 'alice', fill, type: 'onFill', positionId: position.id });
     });
 

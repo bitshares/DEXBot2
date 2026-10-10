@@ -1,7 +1,4 @@
 
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
 import { createClawInfrastructure } from './claw_infra.js';
 import { describeClawBridge } from './claw_manifest.js';
 import { describeMemuBridge, runMemuCommand } from './memu_bridge.js';

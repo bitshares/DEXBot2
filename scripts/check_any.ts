@@ -6,6 +6,10 @@
  * this gate makes progress monotonic by failing when the code-line count rises
  * above the committed budget in `any-budget.json`.
  *
+ * The root scopes (`modules/`, `market_adapter/`, `analysis/`, `scripts/`) and
+ * the experimental `claw/` subtree are tracked with independent budgets so the
+ * now-clean root count is not inflated by claw, which is still being paid down.
+ *
  * Counts `any` tokens on code lines only (comment / JSDoc lines are ignored so
  * documentation cleanup is not double-counted).
  *
@@ -26,6 +30,9 @@ const ROOT: string = PATHS.PROJECT_ROOT;
 const BUDGET_FILE = path.join(ROOT, 'any-budget.json');
 const SCAN_DIRS = ['modules', 'market_adapter', 'analysis', 'scripts'];
 const SCAN_ROOT_FILES = true;
+const ROOT_SCOPE = 'root';
+const CLAW_SCOPE = 'claw';
+const CLAW_DIR = 'claw';
 
 interface FileCount {
   file: string;
@@ -86,6 +93,10 @@ function sourceFiles(): string[] {
   return files;
 }
 
+function clawFiles(): string[] {
+  return [...walk(path.join(ROOT, CLAW_DIR))];
+}
+
 function countAny(file: string): number {
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
   let count = 0;
@@ -97,40 +108,69 @@ function countAny(file: string): number {
   return count;
 }
 
-const counts: FileCount[] = sourceFiles()
-  .map((file) => ({ file: path.relative(ROOT, file), count: countAny(file) }))
-  .filter((entry) => entry.count > 0)
-  .sort((a, b) => b.count - a.count);
+interface ScopeCount {
+  scope: string;
+  files: FileCount[];
+  total: number;
+}
 
-const total = counts.reduce((sum, entry) => sum + entry.count, 0);
+function countScope(scope: string, files: string[]): ScopeCount {
+  const fileCounts = files
+    .map((file) => ({ file: path.relative(ROOT, file), count: countAny(file) }))
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count);
+  return { scope, files: fileCounts, total: fileCounts.reduce((sum, entry) => sum + entry.count, 0) };
+}
+
+const scopes: ScopeCount[] = [
+  countScope(ROOT_SCOPE, sourceFiles()),
+  countScope(CLAW_SCOPE, clawFiles())
+];
+
 const listMode = process.argv.includes('--list');
 const updateMode = process.argv.includes('--update');
 
 if (listMode) {
-  for (const entry of counts) console.log(`${String(entry.count).padStart(5)}  ${entry.file}`);
-  console.log(`${String(total).padStart(5)}  TOTAL (${counts.length} files)`);
+  for (const scope of scopes) {
+    for (const entry of scope.files) console.log(`${String(entry.count).padStart(5)}  ${entry.file}`);
+    console.log(`${String(scope.total).padStart(5)}  ${scope.scope.toUpperCase()} SUBTOTAL (${scope.files.length} files)`);
+  }
   process.exit(0);
 }
 
 if (updateMode) {
-  fs.writeFileSync(BUDGET_FILE, `${JSON.stringify({ total, updated: new Date().toISOString().slice(0, 10) }, null, 2)}\n`);
-  console.log(`budget file updated: total=${total}`);
+  const next = {
+    root: scopes.find((scope) => scope.scope === ROOT_SCOPE)!.total,
+    claw: scopes.find((scope) => scope.scope === CLAW_SCOPE)!.total,
+    updated: new Date().toISOString().slice(0, 10)
+  };
+  fs.writeFileSync(BUDGET_FILE, `${JSON.stringify(next, null, 2)}\n`);
+  console.log(`budget file updated: root=${next.root} claw=${next.claw}`);
   process.exit(0);
 }
 
-let budget = Infinity;
-if (fs.existsSync(BUDGET_FILE)) {
-  budget = JSON.parse(fs.readFileSync(BUDGET_FILE, 'utf8')).total;
+const fileBudget: Record<string, number> = fs.existsSync(BUDGET_FILE)
+  ? JSON.parse(fs.readFileSync(BUDGET_FILE, 'utf8'))
+  : {};
+
+let exceeded = false;
+for (const scope of scopes) {
+  const committed = typeof fileBudget[scope.scope] === 'number'
+    ? fileBudget[scope.scope]
+    // Backward compatibility with the original single-scope `{ total }` file.
+    : (scope.scope === ROOT_SCOPE && typeof fileBudget.total === 'number' ? fileBudget.total : Infinity);
+
+  if (scope.total > committed) {
+    console.error(`\u2716 explicit type budget exceeded [${scope.scope}]: ${scope.total} > ${committed}`);
+    exceeded = true;
+  } else if (scope.total < committed) {
+    console.log(`\u2713 [${scope.scope}] explicit type count ${scope.total} is below budget ${committed}. Lower the budget file to ${scope.total} to lock in the gain.`);
+  } else {
+    console.log(`\u2713 [${scope.scope}] explicit type count ${scope.total} is at budget ${committed}.`);
+  }
 }
 
-if (total > budget) {
-  console.error(`\u2716 explicit type budget exceeded: ${total} > ${budget}`);
+if (exceeded) {
   console.error('  Reduce usages, or run `node dist/scripts/check_any.js --update` only when lowering the budget.');
   process.exit(1);
-}
-
-if (total < budget) {
-  console.log(`\u2713 explicit type count ${total} is below budget ${budget}. Lower the budget file to ${total} to lock in the gain.`);
-} else {
-  console.log(`\u2713 explicit type count ${total} is at budget ${budget}.`);
 }

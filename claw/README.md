@@ -233,6 +233,7 @@ Install the native plugin bundle from this repository:
 ```bash
 CLAW_ROOT="$(pwd)"
 DEXBOT_ROOT="$(cd .. && pwd)"
+npm run build
 openclaw plugins install -l "$CLAW_ROOT"
 openclaw plugins enable bitshares-claw
 ```

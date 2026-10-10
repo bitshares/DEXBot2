@@ -4,7 +4,7 @@
   "private": true,
   "description": "Claw bridge and runtime integration layer for BitShares and DEXBot2.",
   "type": "module",
-  "main": "index.js",
+  "main": "../dist/claw/index.js",
   "peerDependencies": {
     "openclaw": ">=2026.3.27"
   },
@@ -15,7 +15,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./runtimes/openclaw-plugin/index.js"
+      "../dist/claw/runtimes/openclaw-plugin/index.js"
     ]
   },
   "scripts": {

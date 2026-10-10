@@ -5,10 +5,6 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 
-function countOccurrences(text: string, needle: string) {
-  return (text.match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-}
-
 async function testClawSkillMarkdown() {
   const { buildRuntimeSkillMarkdown, writeRuntimeSkillMarkdown } = require('../modules/claw_skill_md');
 

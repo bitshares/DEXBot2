@@ -319,6 +319,8 @@ type ConstraintSet = {
 
 All functions below are implemented in the modules cited under "Core Types" or their headers and are reachable through the adapters/factories they document. Standalone names are exported from the cited modules; methods like `getBotSettings`, `previewBotSettingsUpdate`, `applyBotSettingsPatch`, and `getClawProfileContext` are closures returned by `createDexbotProfileAdapter` (not module-level exports). Signatures reflect the runtime types; see [../modules/types.ts](../modules/types.ts) for the authoritative TypeScript interfaces.
 
+Internal-only modules that are intentionally **not** re-exported from [../index.ts](../index.ts): `modules/claw_launcher.ts`, `modules/launcher_mode_detector.ts`, `modules/launcher_paths.ts`, `modules/mcp_utils.ts`, `modules/mpa_utils.ts`, `modules/skill_utils.ts`, `modules/utils.ts`, and the type-only `modules/types.ts`. Import them directly when building inside `claw/`; they are not part of the public bridge surface.
+
 ### 1. `createRuntimeContext(options)`
 
 Creates a shared runtime object for Claw ([../modules/claw_infra.ts](../modules/claw_infra.ts)).
