@@ -100,36 +100,35 @@ function createResolvers(chainClient: ChainClient) {
         }
     }
 
-    async function resolveAccountId(name: string): Promise<string> {
-        if (!name) throw new Error('account name required');
-        if (/^1\.2\./.test(String(name))) return name;
+    /**
+     * Resolve an account reference to the requested field, caching through
+     * `accountIdCache`. `direction` selects the returned field ('id' or
+     * 'name'); a reference already shaped as the target is returned untouched.
+     */
+    async function resolveAccountField(ref: string, direction: 'id' | 'name'): Promise<string> {
+        if (!ref) throw new Error(`account ${direction === 'id' ? 'name' : 'id'} required`);
+        const isChainId = /^1\.2\./.test(String(ref));
+        if (direction === 'id' ? isChainId : !isChainId) return ref;
 
-        const cacheKey = `id:${name}`;
+        const cacheKey = `${direction}:${ref}`;
         const cached = accountIdCache.get(cacheKey);
         if (cached) return cached;
 
-        const account = await resolveAccount(name);
-        if (account && account.id) {
-            accountIdCache.set(cacheKey, account.id);
-            return account.id;
+        const account = await resolveAccount(ref);
+        const result = direction === 'id' ? account?.id : account?.name;
+        if (result) {
+            accountIdCache.set(cacheKey, result);
+            return result;
         }
-        throw new Error(`Could not resolve account ID for: ${name}`);
+        throw new Error(`Could not resolve account ${direction === 'id' ? 'ID' : 'name'} for: ${ref}`);
+    }
+
+    async function resolveAccountId(name: string): Promise<string> {
+        return resolveAccountField(name, 'id');
     }
 
     async function resolveAccountName(id: string): Promise<string> {
-        if (!id) throw new Error('account id required');
-        if (!/^1\.2\./.test(String(id))) return id;
-
-        const cacheKey = `name:${id}`;
-        const cached = accountIdCache.get(cacheKey);
-        if (cached) return cached;
-
-        const account = await resolveAccount(id);
-        if (account && account.name) {
-            accountIdCache.set(cacheKey, account.name);
-            return account.name;
-        }
-        throw new Error(`Could not resolve account name for: ${id}`);
+        return resolveAccountField(id, 'name');
     }
 
     function invalidateAsset(assetId: string): void {

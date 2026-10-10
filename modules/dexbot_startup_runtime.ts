@@ -3,6 +3,16 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
+/**
+ * Build a lazy pass-through to a named export. The require runs on each call
+ * (Node caches modules), which keeps heavy or circular targets out of the
+ * static import graph without a hand-written wrapper per function. The
+ * returned function keeps the previous `(...args: unknown[]) => any` shape.
+ */
+function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
+    return (...args: unknown[]) => require(modulePath)[exportName](...args);
+}
+
 import { path } from './path_api.js';
 import * as chainOrders from './chain_orders.js';
 import { readOpenOrdersGuarded } from './chain_orders.js';
@@ -24,19 +34,19 @@ import {
     resolvePersistedGenesis
 } from './order/genesis_policy.js';
 const { OrderManager, grid: Grid } = orderModule;
-function initializeFeeCache(...args: unknown[]) { return require('./order/utils/system').initializeFeeCache(...args); }
-function parseJsonWithComments(...args: unknown[]) { return require('./order/utils/system').parseJsonWithComments(...args); }
-function withBlockchainRetry(...args: unknown[]) { return require('./order/utils/system').withBlockchainRetry(...args); }
-function buildFillKey(...args: unknown[]) { return require('./order/utils/order').buildFillKey(...args); }
-function correctAllPriceMismatches(...args: unknown[]) { return require('./order/utils/order').correctAllPriceMismatches(...args); }
-function parseChainOrder(...args: unknown[]) { return require('./order/utils/order').parseChainOrder(...args); }
-function restoreGapEvacStreaks(...args: unknown[]) { return require('./order/utils/system').restoreGapEvacStreaks(...args); }
-function applyPersistedPendingCrawls(...args: unknown[]) { return require('./order/utils/system').applyPersistedPendingCrawls(...args); }
-function startupSleep(...args: unknown[]) { return require('./order/utils/system').sleep(...args); }
+const initializeFeeCache = lazyShim('./order/utils/system', 'initializeFeeCache');
+const parseJsonWithComments = lazyShim('./order/utils/system', 'parseJsonWithComments');
+const withBlockchainRetry = lazyShim('./order/utils/system', 'withBlockchainRetry');
+const buildFillKey = lazyShim('./order/utils/order', 'buildFillKey');
+const correctAllPriceMismatches = lazyShim('./order/utils/order', 'correctAllPriceMismatches');
+const parseChainOrder = lazyShim('./order/utils/order', 'parseChainOrder');
+const restoreGapEvacStreaks = lazyShim('./order/utils/system', 'restoreGapEvacStreaks');
+const applyPersistedPendingCrawls = lazyShim('./order/utils/system', 'applyPersistedPendingCrawls');
+const startupSleep = lazyShim('./order/utils/system', 'sleep');
 const storage = getStorage();
-function attemptResumePersistedGridByPriceMatch(...args: unknown[]) { return require('./order/grid_reconcile').attemptResumePersistedGridByPriceMatch(...args); }
-function decideStartupGridAction(...args: unknown[]) { return require('./order/grid_reconcile').decideStartupGridAction(...args); }
-function reconcileGridOrders(...args: unknown[]) { return require('./order/grid_reconcile').reconcileGridOrders(...args); }
+const attemptResumePersistedGridByPriceMatch = lazyShim('./order/grid_reconcile', 'attemptResumePersistedGridByPriceMatch');
+const decideStartupGridAction = lazyShim('./order/grid_reconcile', 'decideStartupGridAction');
+const reconcileGridOrders = lazyShim('./order/grid_reconcile', 'reconcileGridOrders');
 function botRetryLogger(bot: BotLike): { log: (msg: string) => void } {
     return { log: (msg: string) => bot._log(msg) };
 }

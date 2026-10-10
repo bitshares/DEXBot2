@@ -269,19 +269,23 @@ async function getPreferredAccount() {
 }
 
 /**
- * Resolve an account ID to its human-readable name via chain lookup.
- * Results are cached to prevent repeated lookups (fixes Issue #4).
- * @param {string} accountRef - Account ID (e.g., '1.2.12345') or name
- * @returns {Promise<string|null>} Account name or null if not found
+ * Resolve an account reference against the shared name<->id cache under the
+ * resolution lock. `direction` picks which field is looked up and returned:
+ * 'to-name' resolves an id to a name, 'to-id' a name to an id. A reference
+ * already shaped as the target (id for 'to-name', non-id for 'to-id') is
+ * returned untouched, and the reverse mapping is cached alongside the result.
+ * @param {string} accountRef - Account id or name
+ * @param {'to-name'|'to-id'} direction - Direction of resolution
+ * @returns {Promise<string|null>} Resolved value or null if not found
  */
-async function resolveAccountName(accountRef: string | null | undefined) {
+async function resolveAccount(accountRef: string | null | undefined, direction: 'to-name' | 'to-id') {
     if (!accountRef) return null;
     if (typeof accountRef !== 'string') return null;
-    if (!/^1\.2\./.test(accountRef)) return accountRef;
+    if (direction === 'to-name' ? !/^1\.2\./.test(accountRef) : /^1\.2\.\d+$/.test(accountRef)) return accountRef;
 
     return await _resolutionLock.acquire(async () => {
         // Check cache first
-        const cacheKey = `id->${accountRef}`;
+        const cacheKey = `${direction === 'to-name' ? 'id->' : 'name->'}${accountRef}`;
         if (_accountResolutionCache.has(cacheKey)) {
             return _accountResolutionCache.get(cacheKey) ?? null;
         }
@@ -289,12 +293,13 @@ async function resolveAccountName(accountRef: string | null | undefined) {
         try {
             await waitForConnected();
             const full = await BitShares.db.get_full_accounts([accountRef], false) as Array<[unknown, { account?: { name?: string; id?: string } }]>;
-            if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.name) {
-                const name = full[0][1].account.name;
-                _accountResolutionCache.set(cacheKey, name);
+            const account = full && full[0] && full[0][1] && full[0][1].account;
+            const result = direction === 'to-name' ? account?.name : account?.id;
+            if (result) {
+                _accountResolutionCache.set(cacheKey, result);
                 // Also cache reverse mapping
-                _accountResolutionCache.set(`name->${name}`, accountRef);
-                return name;
+                _accountResolutionCache.set(`${direction === 'to-name' ? 'name' : 'id'}->${result}`, accountRef);
+                return result;
             }
         } catch (err) {
             // ignore resolution failures
@@ -304,40 +309,23 @@ async function resolveAccountName(accountRef: string | null | undefined) {
 }
 
 /**
+ * Resolve an account ID to its human-readable name via chain lookup.
+ * Results are cached to prevent repeated lookups (fixes Issue #4).
+ * @param {string} accountRef - Account ID (e.g., '1.2.12345') or name
+ * @returns {Promise<string|null>} Account name or null if not found
+ */
+async function resolveAccountName(accountRef: string | null | undefined) {
+    return resolveAccount(accountRef, 'to-name');
+}
+
+/**
  * Resolve an account name to its ID via chain lookup.
  * Results are cached to prevent repeated lookups (fixes Issue #4).
  * @param {string} accountName - Human-readable account name
  * @returns {Promise<string|null>} Account ID or null if not found
  */
 async function resolveAccountId(accountName: string | null | undefined) {
-    if (!accountName) return null;
-    if (typeof accountName !== 'string') return null;
-    // If already in ID format, return as-is
-    if (/^1\.2\.\d+$/.test(accountName)) return accountName;
-
-    return await _resolutionLock.acquire(async () => {
-        // Check cache first
-        const cacheKey = `name->${accountName}`;
-        if (_accountResolutionCache.has(cacheKey)) {
-            return _accountResolutionCache.get(cacheKey) ?? null;
-        }
-
-        try {
-            await waitForConnected();
-            const full = await BitShares.db.get_full_accounts([accountName], false) as Array<[unknown, { account?: { name?: string; id?: string } }]>;
-            // full[0][0] is the account name (key), full[0][1] contains account data
-            if (full && full[0] && full[0][1] && full[0][1].account && full[0][1].account.id) {
-                const id = full[0][1].account.id;
-                _accountResolutionCache.set(cacheKey, id);
-                // Also cache reverse mapping
-                _accountResolutionCache.set(`id->${id}`, accountName);
-                return id;
-            }
-        } catch (err) {
-            // ignore resolution failures
-        }
-        return null;
-    });
+    return resolveAccount(accountName, 'to-id');
 }
 
 // Track active account subscriptions so we avoid duplicate listeners per account

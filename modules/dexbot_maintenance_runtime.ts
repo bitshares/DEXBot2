@@ -6,6 +6,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = _esmDirname(__filename);
 const require = createRequire(import.meta.url);
 
+/**
+ * Build a lazy pass-through to a named export. The require runs on each call
+ * (Node caches modules), which keeps heavy or circular targets out of the
+ * static import graph without a hand-written wrapper per function. The
+ * returned function keeps the previous `(...args: unknown[]) => any` shape.
+ */
+function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
+    return (...args: unknown[]) => require(modulePath)[exportName](...args);
+}
+
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { nowIso } from './order/utils/system.js';
@@ -74,48 +84,48 @@ interface HeldChainOrder {
 }
 import { isSameBotName } from './utils/sanitize_key.js';
 import { usesAmaGridPrice } from './grid_price_source.js';
-function hasOpenOrdersSyncLoopMsSet(...args: unknown[]) { return require('./config').hasOpenOrdersSyncLoopMsSet(...args); }
-function getOpenOrdersSyncLoopMs(...args: unknown[]) { return require('./config').getOpenOrdersSyncLoopMs(...args); }
+const hasOpenOrdersSyncLoopMsSet = lazyShim('./config', 'hasOpenOrdersSyncLoopMsSet');
+const getOpenOrdersSyncLoopMs = lazyShim('./config', 'getOpenOrdersSyncLoopMs');
 function isGridBloated(...args: unknown[]) { return (grid.isGridBloated as (...a: unknown[]) => { bloated?: boolean; details?: { gridSize?: number; maxAllowed?: number } })(...args); }
 function isGridBloatGraceActive(...args: unknown[]) { return (grid.isGridBloatGraceActive as (...a: unknown[]) => { active?: boolean; graceMs?: number })(...args); }
 function clearGridBloatFlag(...args: unknown[]) { return (grid.clearGridBloatFlag as (...a: unknown[]) => unknown)(...args); }
 function recalculateGrid(...args: unknown[]) { return (grid.recalculateGrid as (...a: unknown[]) => unknown)(...args); }
-function buildRuntimeScriptPath(...args: unknown[]) { return require('./launcher/runtime_entry').buildRuntimeScriptPath(...args); }
-function applyGridDivergenceCorrections(...args: unknown[]) { return require('./order/utils/system').applyGridDivergenceCorrections(...args); }
-function updateGridFromBlockchainSnapshot(...args: unknown[]) { return require('./order/grid').updateGridFromBlockchainSnapshot(...args); }
-function loadAmaCenterSnapshot(...args: unknown[]) { return require('./order/utils/system').loadAmaCenterSnapshot(...args); }
-function sleep(...args: unknown[]) { return require('./order/utils/system').sleep(...args); }
-function parseJsonWithComments(...args: unknown[]) { return require('./order/utils/system').parseJsonWithComments(...args); }
-function isPm2Runtime(...args: unknown[]) { return require('./order/logger').isPm2Runtime(...args); }
-function isWrapperAdapterOwner(...args: unknown[]) { return require('./launcher/adapter_requirement').isWrapperAdapterOwner(...args); }
-function readAdapterRequirement(...args: unknown[]) { return require('./launcher/adapter_requirement').readAdapterRequirement(...args); }
-function getSharedMarketAdapterRuntime(...args: unknown[]) { return require('./launcher/market_adapter_runtime').getSharedMarketAdapterRuntime(...args); }
-function resetMarketAdapterWhitelistCache(...args: unknown[]) { return require('./market_adapter_whitelist').resetMarketAdapterWhitelistCache(...args); }
-function isBotDynamicWeightWhitelisted(...args: unknown[]) { return require('./market_adapter_whitelist').isBotDynamicWeightWhitelisted(...args); }
+const buildRuntimeScriptPath = lazyShim('./launcher/runtime_entry', 'buildRuntimeScriptPath');
+const applyGridDivergenceCorrections = lazyShim('./order/utils/system', 'applyGridDivergenceCorrections');
+const updateGridFromBlockchainSnapshot = lazyShim('./order/grid', 'updateGridFromBlockchainSnapshot');
+const loadAmaCenterSnapshot = lazyShim('./order/utils/system', 'loadAmaCenterSnapshot');
+const sleep = lazyShim('./order/utils/system', 'sleep');
+const parseJsonWithComments = lazyShim('./order/utils/system', 'parseJsonWithComments');
+const isPm2Runtime = lazyShim('./order/logger', 'isPm2Runtime');
+const isWrapperAdapterOwner = lazyShim('./launcher/adapter_requirement', 'isWrapperAdapterOwner');
+const readAdapterRequirement = lazyShim('./launcher/adapter_requirement', 'readAdapterRequirement');
+const getSharedMarketAdapterRuntime = lazyShim('./launcher/market_adapter_runtime', 'getSharedMarketAdapterRuntime');
+const resetMarketAdapterWhitelistCache = lazyShim('./market_adapter_whitelist', 'resetMarketAdapterWhitelistCache');
+const isBotDynamicWeightWhitelisted = lazyShim('./market_adapter_whitelist', 'isBotDynamicWeightWhitelisted');
 function getRuntimeSettingsKeys() { return require('./runtime_settings').RUNTIME_SETTINGS_KEYS; }
-function cloneWeightDistribution(...args: unknown[]) { return require('./order/utils/math').cloneWeightDistribution(...args); }
-function calculateOrderCreationFees(...args: unknown[]) { return require('./order/utils/math').calculateOrderCreationFees(...args); }
-function calculateSwapInAmount(...args: unknown[]) { return require('./order/utils/math').calculateSwapInAmount(...args); }
-function floatToBlockchainInt(...args: unknown[]) { return require('./order/utils/math').floatToBlockchainInt(...args); }
-function blockchainToFloat(...args: unknown[]) { return require('./order/utils/math').blockchainToFloat(...args); }
-function updateDynamicGridSnapshotSync(...args: unknown[]) { return require('../market_adapter/utils/dynamic_grid_snapshot').updateDynamicGridSnapshotSync(...args); }
+const cloneWeightDistribution = lazyShim('./order/utils/math', 'cloneWeightDistribution');
+const calculateOrderCreationFees = lazyShim('./order/utils/math', 'calculateOrderCreationFees');
+const calculateSwapInAmount = lazyShim('./order/utils/math', 'calculateSwapInAmount');
+const floatToBlockchainInt = lazyShim('./order/utils/math', 'floatToBlockchainInt');
+const blockchainToFloat = lazyShim('./order/utils/math', 'blockchainToFloat');
+const updateDynamicGridSnapshotSync = lazyShim('../market_adapter/utils/dynamic_grid_snapshot', 'updateDynamicGridSnapshotSync');
 // Lazy require: dexbot_fill_runtime imports this module, so a static import
 // would be circular; at call time both modules are fully loaded.
-function scheduleFillConsumerRestartFn(...args: unknown[]) { return require('./dexbot_fill_runtime').scheduleFillConsumerRestart(...args); }
-function reconcileGridOrders(...args: unknown[]) { return require('./order/grid_reconcile').reconcileGridOrders(...args); }
-function resolveReserveCount(...args: unknown[]) { return require('./order/utils/order').resolveReserveCount(...args); }
-function reserveEdgeIdSet(...args: unknown[]) { return require('./order/utils/order').reserveEdgeIdSet(...args); }
-function liveWindowIdSet(...args: unknown[]) { return require('./order/utils/order').liveWindowIdSet(...args); }
-function resolveLiveReserveEdgeAnchorPrice(...args: unknown[]) { return require('./order/utils/order').resolveLiveReserveEdgeAnchorPrice(...args); }
-function formatUnmatchedChainOrder(...args: unknown[]) { return require('./order/utils/order').formatUnmatchedChainOrder(...args); }
-function isNonBlockingUnmatchedOrder(...args: unknown[]) { return require('./order/utils/order').isNonBlockingUnmatchedOrder(...args); }
-function isStrandedHoldOrder(...args: unknown[]) { return require('./order/utils/order').isStrandedHoldOrder(...args); }
-function getSideBudget(...args: unknown[]) { return require('./order/utils/order').getSideBudget(...args); }
+const scheduleFillConsumerRestartFn = lazyShim('./dexbot_fill_runtime', 'scheduleFillConsumerRestart');
+const reconcileGridOrders = lazyShim('./order/grid_reconcile', 'reconcileGridOrders');
+const resolveReserveCount = lazyShim('./order/utils/order', 'resolveReserveCount');
+const reserveEdgeIdSet = lazyShim('./order/utils/order', 'reserveEdgeIdSet');
+const liveWindowIdSet = lazyShim('./order/utils/order', 'liveWindowIdSet');
+const resolveLiveReserveEdgeAnchorPrice = lazyShim('./order/utils/order', 'resolveLiveReserveEdgeAnchorPrice');
+const formatUnmatchedChainOrder = lazyShim('./order/utils/order', 'formatUnmatchedChainOrder');
+const isNonBlockingUnmatchedOrder = lazyShim('./order/utils/order', 'isNonBlockingUnmatchedOrder');
+const isStrandedHoldOrder = lazyShim('./order/utils/order', 'isStrandedHoldOrder');
+const getSideBudget = lazyShim('./order/utils/order', 'getSideBudget');
 function getActiveOrdersTotal(config: unknown) { return require('./order/utils/order').getActiveOrdersTotal(config); }
-function correctAllPriceMismatches(...args: unknown[]) { return require('./order/utils/order').correctAllPriceMismatches(...args); }
-function isOrderOnChain(...args: unknown[]) { return require('./order/utils/order').isOrderOnChain(...args); }
-function parseChainOrder(...args: unknown[]) { return require('./order/utils/order').parseChainOrder(...args); }
-function parseSlotIndex(...args: unknown[]) { return require('./order/utils/order').parseSlotIndex(...args); }
+const correctAllPriceMismatches = lazyShim('./order/utils/order', 'correctAllPriceMismatches');
+const isOrderOnChain = lazyShim('./order/utils/order', 'isOrderOnChain');
+const parseChainOrder = lazyShim('./order/utils/order', 'parseChainOrder');
+const parseSlotIndex = lazyShim('./order/utils/order', 'parseSlotIndex');
 
 const CODE_ROOT = path.join(__dirname, '..');
 const PROFILES_DIR = PATHS.PROFILES_DIR;

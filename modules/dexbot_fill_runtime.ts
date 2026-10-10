@@ -3,6 +3,16 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
+/**
+ * Build a lazy pass-through to a named export. The require runs on each call
+ * (Node caches modules), which keeps heavy or circular targets out of the
+ * static import graph without a hand-written wrapper per function. The
+ * returned function keeps the previous `(...args: unknown[]) => any` shape.
+ */
+function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
+    return (...args: unknown[]) => require(modulePath)[exportName](...args);
+}
+
 import * as chainOrders from './chain_orders.js';
 import { PROCESSED_FILL_PERSISTENCE_MODES } from './order/processed_fill_store.js';
 import { NATIVE_CLIENT, FILL_PROCESSING, TIMING, MAINTENANCE, ORDER_TYPES } from './constants.js';
@@ -14,10 +24,10 @@ import { slotIndexForPrice, isChainPriceOutOfGrid, isSlotInRail } from './order/
 /** A queued incoming fill annotated with its resolved grid order. */
 type QueuedFill = IncomingFill & { gridOrder: ManagedOrder | { orderId?: string } };
 import { ORDER_STATES } from './constants.js';
-function buildFillKey(...args: unknown[]) { return require('./order/utils/order').buildFillKey(...args); }
-function correctAllPriceMismatches(...args: unknown[]) { return require('./order/utils/order').correctAllPriceMismatches(...args); }
-function parseChainOrder(...args: unknown[]) { return require('./order/utils/order').parseChainOrder(...args); }
-function retryPersistenceIfNeeded(...args: unknown[]) { return require('./order/utils/system').retryPersistenceIfNeeded(...args); }
+const buildFillKey = lazyShim('./order/utils/order', 'buildFillKey');
+const correctAllPriceMismatches = lazyShim('./order/utils/order', 'correctAllPriceMismatches');
+const parseChainOrder = lazyShim('./order/utils/order', 'parseChainOrder');
+const retryPersistenceIfNeeded = lazyShim('./order/utils/system', 'retryPersistenceIfNeeded');
 const { readOpenOrdersGuarded } = chainOrders;
 
 type ChainOrdersLike = typeof chainOrders;

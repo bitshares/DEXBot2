@@ -222,7 +222,7 @@ class AccountOrders {
   profilesPath: string;
   _persistenceLock: AsyncLock;
   _needsBootstrapSave: boolean;
-  data: BotData;
+  data!: BotData;
   _rejectedGenesis?: { reason: string; at: number };
 
   /**
@@ -244,7 +244,7 @@ class AccountOrders {
     this._persistenceLock = new AsyncLock();
 
     this._needsBootstrapSave = !storage.exists(this.profilesPath);
-    this.data = this._loadData() || emptyData();
+    this._reload();
     if (this._needsBootstrapSave) {
       this._persist();
     }
@@ -258,6 +258,25 @@ class AccountOrders {
   _loadData() {
     // Load the file directly - per-bot files only contain their own bot's data
     return this._readFile(this.profilesPath);
+  }
+
+  /**
+   * Reload `this.data` from disk, falling back to empty state on a miss.
+   * Single home for the read-modify-write preamble inside the persistence lock.
+   * @private
+   */
+  _reload(): void {
+    this.data = this._loadData() || emptyData();
+  }
+
+  /**
+   * Reload `this.data` from disk when `forceReload` is set. Shared preamble of
+   * every `loadX(forceReload)` accessor.
+   * @param {boolean} [forceReload=false]
+   * @private
+   */
+  _ensureLoaded(forceReload: boolean = false): void {
+    if (forceReload) this._reload();
   }
 
   /**
@@ -306,7 +325,7 @@ class AccountOrders {
 
     await this._persistenceLock.acquire(async () => {
       // Reload from disk to ensure we have the latest state
-      this.data = this._loadData() || emptyData();
+      this._reload();
 
       const cfg = botConfig as Record<string, unknown>;
       const newMeta = this._buildMeta(botConfig, this.botKey, typeof cfg.botIndex === 'number' ? cfg.botIndex : 0, this.data.meta);
@@ -382,7 +401,7 @@ class AccountOrders {
     // Use AsyncLock to serialize read-modify-write operations
     await this._persistenceLock.acquire(async () => {
       // Reload from disk before writing to prevent race conditions
-      this.data = this._loadData() || emptyData();
+      this._reload();
 
       const snapshot = Array.isArray(orders) ? orders.map((order) => this._serializeOrder(order)) : [];
       const debugSnapshot = debugInputs ? cloneForDebug(debugInputs) as Record<string, unknown> : null;
@@ -504,7 +523,7 @@ class AccountOrders {
    */
   async clearPersistedBoundary() {
     await this._persistenceLock.acquire(async () => {
-      this.data = this._loadData() || emptyData();
+      this._reload();
       this.data.boundaryIdx = null;
       this._persist();
     });
@@ -523,7 +542,7 @@ class AccountOrders {
    */
   async clearPersistedLastFillPivot() {
     await this._persistenceLock.acquire(async () => {
-      this.data = this._loadData() || emptyData();
+      this._reload();
       delete this.data.lastFillPivot;
       this.data.lastUpdated = nowIso();
       this._persist();
@@ -536,9 +555,7 @@ class AccountOrders {
    * @returns {Array|null} Order grid array or null if not found
    */
   loadGrid(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     return (this.data && Array.isArray(this.data.grid)) ? this.data.grid : null;
   }
 
@@ -560,9 +577,7 @@ class AccountOrders {
    * @returns {Object|null} The genesis object, or null when absent/invalid
    */
   loadGenesis(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     const genesis = this.data?.genesis;
     // Same predicate as loadGrid/genesis_policy: one definition of "usable
     // ladder", so the schema gate cannot diverge from the load-time gate.
@@ -596,9 +611,7 @@ class AccountOrders {
    * @returns {Object|null} {slotId: count} map or null when absent
    */
   loadGapEvacStreaks(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data && this.data.gapEvacStreaks && typeof this.data.gapEvacStreaks === 'object') {
       return this.data.gapEvacStreaks;
     }
@@ -606,9 +619,7 @@ class AccountOrders {
   }
 
   loadLastFillPivot(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     // Shared row gate (normalizeLastFillPivot): identical validation to the
     // storeMasterGrid sanitizer, one shape contract for the whole ledger.
     return normalizeLastFillPivot(this.data && this.data.lastFillPivot);
@@ -620,9 +631,7 @@ class AccountOrders {
    * @returns {Array} Sanitized pending crawl entries (possibly empty)
    */
   loadPendingFillCrawls(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     const out: { slotId: string; side: string; ts: number }[] = [];
     const stored = this.data && this.data.pendingFillCrawls;
     if (Array.isArray(stored)) {
@@ -642,9 +651,7 @@ class AccountOrders {
    * @returns {Object|null} Recent fill keys map or null if not found
    */
   loadRecentFillKeys(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data && this.data.recentFillKeys) {
       return this.data.recentFillKeys;
     }
@@ -657,9 +664,7 @@ class AccountOrders {
    * @returns {Object|null} Asset metadata { assetA, assetB } or null if not found
    */
   loadPersistedAssets(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data && this.data.assets) {
       return this.data.assets;
     }
@@ -672,9 +677,7 @@ class AccountOrders {
    * @returns {number|null} Boundary index or null if not found
    */
   loadBoundaryIdx(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data) {
       const idx = this.data.boundaryIdx;
       if (typeof idx === 'number' && Number.isFinite(idx)) {
@@ -690,9 +693,7 @@ class AccountOrders {
    * @returns {Object|null} BTS balance { free, total, locked } or null if not found
    */
   loadBtsBalance(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data && this.data.btsBalance && typeof this.data.btsBalance === 'object') {
       return this.data.btsBalance;
     }
@@ -707,9 +708,7 @@ class AccountOrders {
    * @returns {number} BTS fees owed or 0 if not found
    */
   loadBtsFeesOwed(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
     if (this.data) {
       const fees = this.data.btsFeesOwed;
       if (typeof fees === 'number' && Number.isFinite(fees)) {
@@ -725,7 +724,7 @@ class AccountOrders {
    */
   async clearGrid() {
     return await this._persistenceLock.acquire(async () => {
-      this.data = this._loadData() || emptyData();
+      this._reload();
       this.data.grid = [];
       this.data.btsFeesOwed = 0;
       this.data.boundaryIdx = null;
@@ -755,9 +754,7 @@ class AccountOrders {
       ? options.minTimestamp
       : null;
 
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
 
     if (this.data) {
       const fills = this.data.processedFills || {};
@@ -777,7 +774,7 @@ class AccountOrders {
     if (!(fills instanceof Map) || fills.size === 0) return;
 
     await this._persistenceLock.acquire(async () => {
-      this.data = this._loadData() || emptyData();
+      this._reload();
 
       if (!this.data.processedFills) {
         this.data.processedFills = {};
@@ -806,7 +803,7 @@ class AccountOrders {
   async cleanOldProcessedFills(olderThanMs: number = 3600000) {
     // Default: 1 hour (3600000ms)
     await this._persistenceLock.acquire(async () => {
-      this.data = this._loadData() || emptyData();
+      this._reload();
 
       if (!this.data.processedFills) {
         return;
@@ -837,9 +834,7 @@ class AccountOrders {
    * @returns {Object|null} Balance summary or null if no data
    */
   getAssetBalances(forceReload: boolean = false) {
-    if (forceReload) {
-      this.data = this._loadData() || emptyData();
-    }
+    this._ensureLoaded(forceReload);
 
     if (!this.data) return null;
     const meta: Partial<BotMeta> = this.data.meta || {};

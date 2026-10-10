@@ -43,9 +43,7 @@ export function getErrorName(err: unknown): string | undefined {
  * interval, credit-deal settle delay, deferred-fill retry backoff).
  */
 export function resolveSeamMs(value: unknown, fallback: number): number {
-  return value != null && Number.isFinite(Number(value)) && Number(value) >= 0
-    ? Number(value)
-    : fallback;
+  return resolveSeamMsOrNull(value) ?? fallback;
 }
 
 /**

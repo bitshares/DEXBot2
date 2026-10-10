@@ -68,6 +68,16 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
+/**
+ * Build a lazy pass-through to a named export. The require runs on each call
+ * (Node caches modules), which keeps heavy or circular targets out of the
+ * static import graph without a hand-written wrapper per function. The
+ * returned function keeps the previous `(...args: unknown[]) => any` shape.
+ */
+function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
+    return (...args: unknown[]) => require(modulePath)[exportName](...args);
+}
+
 import * as client from './bitshares_client.js';
 const { BitShares } = client;
 import * as chainKeys from './chain_keys.js';
@@ -96,12 +106,12 @@ import type { FillOpLike, FillLike, ReplayMessageFn } from './dexbot_fill_runtim
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
 import type {BotLike, AssetPair, IncomingFill, ManagerLogger, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken, SpreadCorrectionStall} from './types.js';
 
-function waitForConnected(...args: unknown[]) { return require('./bitshares_client').waitForConnected(...args); }
-function getKeyStore(...args: unknown[]) { return require('./key_store').getKeyStore(...args); }
-function hasExecutableActions(...args: unknown[]) { return require('./order/utils/validate').hasExecutableActions(...args); }
-function getRecalculateTriggerFile(...args: unknown[]) { return require('./paths').getRecalculateTriggerFile(...args); }
-function cloneWeightDistribution(...args: unknown[]) { return require('./order/utils/math').cloneWeightDistribution(...args); }
-function resolveBotRuntimeSettings(...args: unknown[]) { return require('./runtime_settings').resolveBotRuntimeSettings(...args); }
+const waitForConnected = lazyShim('./bitshares_client', 'waitForConnected');
+const getKeyStore = lazyShim('./key_store', 'getKeyStore');
+const hasExecutableActions = lazyShim('./order/utils/validate', 'hasExecutableActions');
+const getRecalculateTriggerFile = lazyShim('./paths', 'getRecalculateTriggerFile');
+const cloneWeightDistribution = lazyShim('./order/utils/math', 'cloneWeightDistribution');
+const resolveBotRuntimeSettings = lazyShim('./runtime_settings', 'resolveBotRuntimeSettings');
 
 class DEXBot implements BotLike {
     static normalizeBotEntry: typeof normalizeBotEntry;

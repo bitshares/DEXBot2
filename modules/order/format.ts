@@ -38,10 +38,11 @@
  * SECTION 4: RATIO/METRIC FORMATTING (1 function)
  *   12. formatMetric2(value) - Format to 2 decimals (timing, performance)
  *
- * SECTION 5: HELPER UTILITIES (3 functions)
+ * SECTION 5: HELPER UTILITIES (4 functions)
  *   13. isValidNumber(value) - Check if value is defined and finite
  *   14. toFiniteNumber(value, defaultValue) - Convert to finite number with fallback
- *   15. safeFormat(value, decimals, fallback) - Safely format with fallback
+ *   15. positiveOrNull(value) - Convert to a strictly-positive number, else null
+ *   16. safeFormat(value, decimals, fallback) - Safely format with fallback
  *
  * ===============================================================================
  */
@@ -265,6 +266,18 @@ function toFiniteNumber(value: unknown, defaultValue: number | null = 0): number
 }
 
 /**
+ * Convert a value to a strictly-positive finite number, else `null`.
+ *
+ * Single home for the `positiveOrNull` guard previously duplicated in
+ * cr_planner and credit_pricing. Zero, negatives, non-finite values and
+ * non-numeric strings all yield `null`.
+ */
+function positiveOrNull(value: unknown): number | null {
+	const num = Number(value);
+	return Number.isFinite(num) && num > 0 ? num : null;
+}
+
+/**
  * Safely format a numeric value with specified decimals and fallback.
  *
  * @param {*} value - The value to format
@@ -287,5 +300,5 @@ function safeFormat(value: unknown, decimals: number, fallback: string = 'N/A'):
 // EXPORTS
 // ===============================================================================
 
-export { formatAmount8, formatAmount, formatAmountByPrecision, formatSizeByOrderType, formatPrice, formatPrice6, formatPrice4, formatCurrency, formatFundsValue, formatPercent2, formatPercent, formatMetric2, isValidNumber, toFiniteNumber, safeFormat }
+export { formatAmount8, formatAmount, formatAmountByPrecision, formatSizeByOrderType, formatPrice, formatPrice6, formatPrice4, formatCurrency, formatFundsValue, formatPercent2, formatPercent, formatMetric2, isValidNumber, toFiniteNumber, positiveOrNull, safeFormat }
 

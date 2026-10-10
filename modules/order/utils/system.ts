@@ -59,7 +59,7 @@ import * as MathUtils from './math.js';
 import * as OrderUtils from './order.js';
 import Logger from '../../order/logger.js';
 import { runtime } from '../../runtime.js';
-import { getErrorMessage } from '../../utils/errors.js';
+import { getErrorMessage, sleepMs } from '../../utils/errors.js';
 import { normalizeAssetRef } from '../../utils/asset_symbols.js';
 import { withTimeout } from './timeout.js';
 import type { OrderManagerLike, BotLike, AccountOrdersLike, ManagedOrder, AccountTotals, CowAction } from '../../types.js';
@@ -1787,7 +1787,7 @@ export function nowIso(): string {
  * @returns {Promise<void>}
  */
 export function sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+    return sleepMs(ms);
 }
 
 /**

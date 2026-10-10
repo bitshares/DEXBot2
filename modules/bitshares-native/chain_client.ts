@@ -328,35 +328,22 @@ function createChainClient(config: ChainClientConfig = {}) {
         staleApiEscalation.note(apiName);
     }
 
-    async function dbCall(method: string, args?: unknown[]): Promise<unknown> {
-        return callWithApiRecovery(
-            'database',
-            toRpcMethodName(method),
-            args || [],
-            () => _dbApiId,
-            (id) => { _dbApiId = id; },
-        );
+    /**
+     * Bind a login_api namespace to its cached api-id slot. Centralizes the
+     * `callWithApiRecovery` wiring shared by dbCall/historyCall/broadcastCall.
+     */
+    function apiCaller(
+        apiName: string,
+        normalizeMethod: (method: string) => string,
+        getApiId: () => number | null,
+        setApiId: (id: number | null) => void,
+    ): (method: string, args?: unknown[]) => Promise<unknown> {
+        return (method, args) => callWithApiRecovery(apiName, normalizeMethod(method), args || [], getApiId, setApiId);
     }
 
-    async function historyCall(method: string, args?: unknown[]): Promise<unknown> {
-        return callWithApiRecovery(
-            'history',
-            toRpcMethodName(method),
-            args || [],
-            () => _historyApiId,
-            (id) => { _historyApiId = id; },
-        );
-    }
-
-    async function broadcastCall(method: string, args?: unknown[]): Promise<unknown> {
-        return callWithApiRecovery(
-            'network_broadcast',
-            method,
-            args || [],
-            () => _broadcastApiId,
-            (id) => { _broadcastApiId = id; },
-        );
-    }
+    const dbCall = apiCaller('database', toRpcMethodName, () => _dbApiId, (id) => { _dbApiId = id; });
+    const historyCall = apiCaller('history', toRpcMethodName, () => _historyApiId, (id) => { _historyApiId = id; });
+    const broadcastCall = apiCaller('network_broadcast', (method) => method, () => _broadcastApiId, (id) => { _broadcastApiId = id; });
 
     async function broadcastTx(signedTx: unknown): Promise<unknown> {
         return broadcastCall('broadcast_transaction', [signedTx]);
@@ -585,23 +572,16 @@ function createReadOnlyClient(config: ReadOnlyClientConfig = {}) {
         staleApiEscalation.note();
     }
 
-    async function db(method: string, args?: unknown[]): Promise<unknown> {
-        return callWithRecovery(
-            toRpcMethodName(method),
-            args || [],
-            () => _dbApiId,
-            (id) => { _dbApiId = id; },
-        );
+    /** Read-channel caller: wraps `callWithRecovery` for a bound api-id slot. */
+    function recoveredCaller(
+        getApiId: () => number | null,
+        setApiId: (id: number | null) => void,
+    ): (method: string, args?: unknown[]) => Promise<unknown> {
+        return (method, args) => callWithRecovery(toRpcMethodName(method), args || [], getApiId, setApiId);
     }
 
-    async function history(method: string, args?: unknown[]): Promise<unknown> {
-        return callWithRecovery(
-            toRpcMethodName(method),
-            args || [],
-            () => _historyApiId,
-            (id) => { _historyApiId = id; },
-        );
-    }
+    const db = recoveredCaller(() => _dbApiId, (id) => { _dbApiId = id; });
+    const history = recoveredCaller(() => _historyApiId, (id) => { _historyApiId = id; });
 
     function setNodes(servers: string[]): void {
         transport._setNodes(servers);

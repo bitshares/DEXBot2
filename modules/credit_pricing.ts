@@ -1,9 +1,12 @@
 'use strict';
 
+import { positiveOrNull, toFiniteNumber } from './order/format.js';
+
 /**
  * modules/credit_pricing.ts — Canonical credit-pricing math (single source of truth).
  *
- * Pure functions only: no imports, no I/O, browser-safe. Both the live
+ * Pure functions only: no I/O, browser-safe; imports only the dependency-free
+ * order/format number helpers. Both the live
  * credit runtime (modules/credit_runtime.ts) and the offline analyzer
  * (scripts/analyze-credit.ts) delegate to these helpers so offer-price
  * orientation, conversion rates, and collateral-ratio math cannot drift
@@ -26,16 +29,6 @@ interface PriceLeg {
 interface OfferPrice {
     base?: PriceLeg;
     quote?: PriceLeg;
-}
-
-function toFiniteOrNull(value: unknown): number | null {
-    const num = typeof value === 'string' && value.trim() !== '' ? Number(value) : Number(value);
-    return Number.isFinite(num) ? num : null;
-}
-
-function positiveOrNull(value: unknown): number | null {
-    const num = toFiniteOrNull(value);
-    return num !== null && num > 0 ? num : null;
 }
 
 /**
@@ -86,7 +79,7 @@ function creditPriceOrientation(
 }
 
 function priceLegToFloat(leg: PriceLeg | null | undefined, precision: number | null): number | null {
-    const raw = toFiniteOrNull(leg?.amount);
+    const raw = toFiniteNumber(leg?.amount, null);
     if (raw === null || raw <= 0 || precision === null || !Number.isFinite(precision) || precision < 0) {
         return null;
     }
@@ -149,8 +142,8 @@ function collateralValueFromOfferPrice(
     collateralAssetId: string,
     precisionOf: (assetId: string) => number | null,
 ): number | null {
-    const collRaw = toFiniteOrNull(collateralAmountInt);
-    const collPrec = toFiniteOrNull(collateralPrecision);
+    const collRaw = toFiniteNumber(collateralAmountInt, null);
+    const collPrec = toFiniteNumber(collateralPrecision, null);
     if (collRaw === null || collRaw <= 0 || collPrec === null) return null;
     const collateralFloat = collRaw / Math.pow(10, collPrec);
     if (!(collateralFloat > 0)) return null;
@@ -172,8 +165,8 @@ function resolvePriceFactors(
     debtAssetId: string | null,
     collateralAssetId: string | null,
 ): { baseAmount: number; quoteAmount: number; orientation: 'core' | 'legacy-reversed' } | null {
-    const baseAmount = toFiniteOrNull(collateralPrice?.base?.amount);
-    const quoteAmount = toFiniteOrNull(collateralPrice?.quote?.amount);
+    const baseAmount = toFiniteNumber(collateralPrice?.base?.amount, null);
+    const quoteAmount = toFiniteNumber(collateralPrice?.quote?.amount, null);
     if (baseAmount === null || quoteAmount === null || baseAmount <= 0 || quoteAmount <= 0) {
         return null;
     }
@@ -196,7 +189,7 @@ function requiredCollateralForBorrow(
     debtAssetId: string | null = null,
     collateralAssetId: string | null = null,
 ): number | null {
-    const borrowRaw = toFiniteOrNull(borrowAmountInt);
+    const borrowRaw = toFiniteNumber(borrowAmountInt, null);
     const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
     if (borrowRaw === null || borrowRaw <= 0 || factors === null) return null;
     const { baseAmount, quoteAmount, orientation } = factors;
@@ -216,7 +209,7 @@ function borrowAmountForCollateral(
     debtAssetId: string | null = null,
     collateralAssetId: string | null = null,
 ): number | null {
-    const collRaw = toFiniteOrNull(collateralAmountInt);
+    const collRaw = toFiniteNumber(collateralAmountInt, null);
     const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
     if (collRaw === null || collRaw <= 0 || factors === null) return null;
     const { baseAmount, quoteAmount, orientation } = factors;
@@ -240,7 +233,7 @@ function capBorrowToCollateral(
     debtAssetId: string | null = null,
     collateralAssetId: string | null = null,
 ): number | null {
-    const requested = toFiniteOrNull(requestedBorrowInt);
+    const requested = toFiniteNumber(requestedBorrowInt, null);
     if (requested === null || requested <= 0) return null;
     if (availableCollateralInt === null || availableCollateralInt === undefined) return requested;
     const budgetBorrow = borrowAmountForCollateral(availableCollateralInt, collateralPrice, debtAssetId, collateralAssetId);
@@ -258,7 +251,7 @@ function creditDealCollateralRatio(
     rate: unknown,
 ): number | null {
     const debt = positiveOrNull(debtFloat);
-    const coll = toFiniteOrNull(collateralFloat);
+    const coll = toFiniteNumber(collateralFloat, null);
     const price = positiveOrNull(rate);
     if (debt === null || coll === null || coll < 0 || price === null) return null;
     return (coll * price) / debt;
@@ -275,7 +268,7 @@ function averageCollateralRatio(entries: Array<{ debt: unknown; value: unknown }
     let valueSum = 0;
     for (const entry of entries || []) {
         const debt = positiveOrNull(entry?.debt);
-        const value = toFiniteOrNull(entry?.value);
+        const value = toFiniteNumber(entry?.value, null);
         if (debt === null || value === null || value < 0) continue;
         debtSum += debt;
         valueSum += value;
@@ -290,9 +283,9 @@ function averageCollateralRatio(entries: Array<{ debt: unknown; value: unknown }
  * a zero daily rate never exceeds maxFeeRatePerDay).
  */
 function dailyOfferFeeRate(offer: { fee_rate?: unknown; max_duration_seconds?: unknown } | null | undefined, feeDenom: unknown): number {
-    const feeRate = toFiniteOrNull(offer?.fee_rate);
-    const maxDurationSeconds = toFiniteOrNull(offer?.max_duration_seconds);
-    const denom = toFiniteOrNull(feeDenom);
+    const feeRate = toFiniteNumber(offer?.fee_rate, null);
+    const maxDurationSeconds = toFiniteNumber(offer?.max_duration_seconds, null);
+    const denom = toFiniteNumber(feeDenom, null);
     if (feeRate === null || maxDurationSeconds === null || denom === null || feeRate <= 0 || maxDurationSeconds <= 0 || denom <= 0) {
         return 0;
     }
@@ -304,9 +297,9 @@ function dailyOfferFeeRate(offer: { fee_rate?: unknown; max_duration_seconds?: u
  * (repay * feeRate + denom - 1) / denom. Zero when nothing is owed.
  */
 function creditDealFee(repayAmountInt: unknown, feeRate: unknown, feeDenom: unknown): number {
-    const repayRaw = toFiniteOrNull(repayAmountInt);
-    const rateRaw = toFiniteOrNull(feeRate);
-    const denomRaw = toFiniteOrNull(feeDenom);
+    const repayRaw = toFiniteNumber(repayAmountInt, null);
+    const rateRaw = toFiniteNumber(feeRate, null);
+    const denomRaw = toFiniteNumber(feeDenom, null);
     if (repayRaw === null || rateRaw === null || denomRaw === null || denomRaw <= 0) return 0;
     const repay = BigInt(Math.max(0, Math.trunc(repayRaw)));
     const rate = BigInt(Math.max(0, Math.trunc(rateRaw)));

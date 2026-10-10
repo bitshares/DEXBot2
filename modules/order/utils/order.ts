@@ -875,6 +875,35 @@ async function _batchCancelCorrections(manager: OrderManagerLike, entries: Pendi
 }
 
 /**
+ * Read a numeric fillProcessing setting: bot config override first, then the
+ * frozen default, then an optional extra default. Returns null when the raw
+ * value is absent/non-finite or fails the minimum bound, so callers keep their
+ * own fallback and rounding policy. Shared by the correction backlog resolvers
+ * below (see resolveCorrectionHoldBudget et al.).
+ * @param {unknown} manager
+ * @param {string} key - fillProcessing key
+ * @param {Object} [options]
+ * @param {unknown} [options.extraDefault] - Third-level default (rare)
+ * @param {number} [options.min=0] - Minimum accepted value
+ * @param {boolean} [options.exclusive=false] - Require value strictly > min
+ * @returns {number|null}
+ */
+function readFillProcessingNumber(
+    manager: OrderManagerLike,
+    key: string,
+    options: { extraDefault?: unknown; min?: number; exclusive?: boolean } = {},
+): number | null {
+    const { extraDefault, min = 0, exclusive = false } = options;
+    const raw = (manager?.config?.fillProcessing as Record<string, unknown> | undefined)?.[key]
+        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.[key]
+        ?? extraDefault;
+    if (raw == null) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return exclusive ? (n > min ? n : null) : (n >= min ? n : null);
+}
+
+/**
  * Resolve the wall-clock budget for the sequential price-update drain in
  * correctAllPriceMismatches. Cancel-class entries are never budgeted; only
  * the SYNC_DELAY_MS-spaced update loop is bounded, so an unbounded backlog
@@ -885,11 +914,8 @@ async function _batchCancelCorrections(manager: OrderManagerLike, entries: Pendi
  * @returns {number} Positive hold budget in milliseconds
  */
 function resolveCorrectionHoldBudget(manager: OrderManagerLike): number {
-    const raw = manager?.config?.fillProcessing?.CORRECTION_LOCK_HOLD_BUDGET_MS
-        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_LOCK_HOLD_BUDGET_MS;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
-    return 4000;
+    const n = readFillProcessingNumber(manager, 'CORRECTION_LOCK_HOLD_BUDGET_MS', { exclusive: true });
+    return n === null ? 4000 : Math.floor(n);
 }
 
 /**
@@ -901,12 +927,8 @@ function resolveCorrectionHoldBudget(manager: OrderManagerLike): number {
  * @returns {number} Finite cap, or Infinity when uncapped
  */
 function resolveCorrectionMaxUpdates(manager: OrderManagerLike): number {
-    const raw = manager?.config?.fillProcessing?.CORRECTION_MAX_UPDATES_PER_CYCLE
-        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_MAX_UPDATES_PER_CYCLE;
-    if (raw == null) return Infinity;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
-    return Infinity;
+    const n = readFillProcessingNumber(manager, 'CORRECTION_MAX_UPDATES_PER_CYCLE');
+    return n === null ? Infinity : Math.floor(n);
 }
 
 /**
@@ -918,13 +940,8 @@ function resolveCorrectionMaxUpdates(manager: OrderManagerLike): number {
  * @returns {number} Non-negative delay in milliseconds
  */
 function resolveCorrectionInterOpDelayMs(manager: OrderManagerLike): number {
-    const raw = manager?.config?.fillProcessing?.CORRECTION_INTER_OP_DELAY_MS
-        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_INTER_OP_DELAY_MS;
-    if (raw != null) {
-        const n = Number(raw);
-        if (Number.isFinite(n) && n >= 0) return Math.floor(n);
-    }
-    return TIMING.SYNC_DELAY_MS;
+    const n = readFillProcessingNumber(manager, 'CORRECTION_INTER_OP_DELAY_MS');
+    return n === null ? TIMING.SYNC_DELAY_MS : Math.floor(n);
 }
 
 /**
@@ -934,11 +951,8 @@ function resolveCorrectionInterOpDelayMs(manager: OrderManagerLike): number {
  * @returns {number}
  */
 function resolveCorrectionWarnThreshold(manager: OrderManagerLike): number {
-    const raw = manager?.config?.fillProcessing?.CORRECTION_QUEUE_WARN_THRESHOLD
-        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_QUEUE_WARN_THRESHOLD;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
-    return 0;
+    const n = readFillProcessingNumber(manager, 'CORRECTION_QUEUE_WARN_THRESHOLD', { exclusive: true });
+    return n === null ? 0 : Math.floor(n);
 }
 
 /**
@@ -947,12 +961,11 @@ function resolveCorrectionWarnThreshold(manager: OrderManagerLike): number {
  * @returns {number}
  */
 function resolveCorrectionWarnRateLimitMs(manager: OrderManagerLike): number {
-    const raw = manager?.config?.fillProcessing?.CORRECTION_QUEUE_WARN_RATE_LIMIT_MS
-        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.CORRECTION_QUEUE_WARN_RATE_LIMIT_MS
-        ?? TIMING?.STALE_TOTALS_WARN_RATE_LIMIT_MS;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-    return 5 * 60 * 1000;
+    const n = readFillProcessingNumber(manager, 'CORRECTION_QUEUE_WARN_RATE_LIMIT_MS', {
+        extraDefault: TIMING?.STALE_TOTALS_WARN_RATE_LIMIT_MS,
+        exclusive: true,
+    });
+    return n === null ? 5 * 60 * 1000 : n;
 }
 
 /**

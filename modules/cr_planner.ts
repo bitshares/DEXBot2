@@ -1,6 +1,6 @@
 'use strict';
 
-import { toFiniteNumber } from './order/format.js';
+import { positiveOrNull } from './order/format.js';
 import { resolveConfigValue, isPercentageString, roundToDecimals } from './order/utils/math.js';
 
 interface CrPolicy {
@@ -31,11 +31,6 @@ interface CollateralFallbackPlanOptions {
     targetCollateralRatio?: number;
     maxCollateralAmount?: number | string;
     collateralLimitReferenceAmount?: number;
-}
-
-function positiveOrNull(value: unknown): number | null {
-    const num = toFiniteNumber(value, undefined);
-    return Number.isFinite(num) && num > 0 ? num : null;
 }
 
 function resolveCollateralLimit(value: unknown, referenceAmount: unknown): number | null {

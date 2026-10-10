@@ -1168,22 +1168,25 @@ class CreditRuntime {
     }
 
     _getCreditDebtForAsset(asset: unknown): number {
-        const assetId = (asset as UnknownRecord | null | undefined)?.id ?? asset;
-        const deals = Array.isArray(this.state?.creditDeals) ? this.state.creditDeals : [];
-        return deals.reduce((sum: number, deal: Record<string, unknown>) => {
-            if (String(deal?.debtAssetId) === String(assetId)) {
-                return sum + (blockchainAmountToFloat(deal?.debtAmount, asset) || 0);
-            }
-            return sum;
-        }, 0);
+        return this._sumCreditFieldForAsset(asset, 'debtAssetId', 'debtAmount');
     }
 
     _getCreditCollateralForAsset(asset: unknown): number {
+        return this._sumCreditFieldForAsset(asset, 'collateralAssetId', 'collateralAmount');
+    }
+
+    /**
+     * Sum a raw credit-deal amount across all deals matching `asset` on the
+     * given asset-id field, converted to float at the asset's precision.
+     * Shared by the debt and collateral totals (see _getCreditDebtForAsset and
+     * _getCreditCollateralForAsset).
+     */
+    _sumCreditFieldForAsset(asset: unknown, assetField: string, amountField: string): number {
         const assetId = (asset as UnknownRecord | null | undefined)?.id ?? asset;
         const deals = Array.isArray(this.state?.creditDeals) ? this.state.creditDeals : [];
         return deals.reduce((sum: number, deal: Record<string, unknown>) => {
-            if (String(deal?.collateralAssetId) === String(assetId)) {
-                return sum + (blockchainAmountToFloat(deal?.collateralAmount, asset) || 0);
+            if (String(deal?.[assetField]) === String(assetId)) {
+                return sum + (blockchainAmountToFloat(deal?.[amountField], asset) || 0);
             }
             return sum;
         }, 0);

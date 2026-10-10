@@ -72,7 +72,25 @@ const CLEANUP_HANDLER_TIMEOUT_MS = 10000;
 let cleanupHandlers: Array<{ name: string; handler: () => unknown }> = [];
 let shutdownInProgress = false;
 const shutdownLogger = new Logger('Shutdown');
-const exitWipeCallbacks: Array<{ name: string; wipeFn: () => void }> = [];
+const exitWipeCallbacks: Array<{ name: string; handler: () => unknown }> = [];
+
+/**
+ * Shared registration guard for the cleanup and exit-wipe lists. Both hold
+ * `{ name, handler }` records and reject non-function handlers, so the
+ * validation and push live in one place.
+ * @private
+ */
+function registerHandler(
+    list: Array<{ name: string; handler: () => unknown }>,
+    name: string,
+    handler: () => unknown,
+    label: string,
+): void {
+    if (typeof handler !== 'function') {
+        throw new Error(`${label} for '${name}' must be a function`);
+    }
+    list.push({ name, handler });
+}
 
 /**
  * Register a synchronous wipe callback that runs AFTER all LIFO cleanup
@@ -85,10 +103,7 @@ const exitWipeCallbacks: Array<{ name: string; wipeFn: () => void }> = [];
  * @param {Function} wipeFn - Synchronous function to execute last
  */
 function registerExitWipe(name: string, wipeFn: () => void) {
-    if (typeof wipeFn !== 'function') {
-        throw new Error(`Exit wipe callback for '${name}' must be a function`);
-    }
-    exitWipeCallbacks.push({ name, wipeFn });
+    registerHandler(exitWipeCallbacks, name, wipeFn, 'Exit wipe callback');
 }
 
 /**
@@ -98,10 +113,7 @@ function registerExitWipe(name: string, wipeFn: () => void) {
  * @param {Function} handler - Async or sync function to call on shutdown
  */
 function registerCleanup(name: string, handler: () => unknown) {
-    if (typeof handler !== 'function') {
-        throw new Error(`Cleanup handler for '${name}' must be a function`);
-    }
-    cleanupHandlers.push({ name, handler });
+    registerHandler(cleanupHandlers, name, handler, 'Cleanup handler');
 }
 
 /**
@@ -169,9 +181,9 @@ async function executeCleanup() {
     }
 
     for (let i = 0; i < exitWipeCallbacks.length; i++) {
-        const { name, wipeFn } = exitWipeCallbacks[i];
+        const { name, handler } = exitWipeCallbacks[i];
         try {
-            wipeFn();
+            handler();
             shutdownLogger.info(`✓ ${name} (exit wipe)`);
         } catch (err) {
             shutdownLogger.error(`✗ Exit wipe ${name} failed: ${getErrorMessage(err) || err}`);
@@ -202,7 +214,7 @@ function setupGracefulShutdown() {
     // allows synchronous work, which suits the wipe callbacks.
     runtime.onSignal('exit', () => {
         for (let i = 0; i < exitWipeCallbacks.length; i++) {
-            try { exitWipeCallbacks[i].wipeFn(); } catch (_) {}
+            try { exitWipeCallbacks[i].handler(); } catch (_) {}
         }
     });
 
