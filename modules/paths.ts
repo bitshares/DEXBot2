@@ -151,6 +151,27 @@ function resolveProfilesDir(projectRoot = PROJECT_ROOT): string {
 const PROFILES_DIR = resolveProfilesDir();
 
 /**
+ * Shared layout rule for bundled data dirs (market_adapter, claw, analysis):
+ * the source layout is used only when the profiles dir also resolves to the
+ * repo checkout (and, where required, the bundled dir exists); otherwise the
+ * root follows the relocated profiles dir. Env vars override both. `root()`
+ * resolves an env-overridable sub-root (e.g. `data`, `state`) under the chosen
+ * layout; `DIR` companions use `sourceDir`/`relocatedDir` directly.
+ */
+function resolveBundledLayout(name: string, profilesDir: string, projectRoot: string, requireExisting = false) {
+    const sourceDir = path.join(projectRoot, name);
+    const relocatedDir = path.join(profilesDir, name);
+    const useSourceLayout = profilesDir === path.join(projectRoot, 'profiles')
+        && (!requireExisting || fs.existsSync(sourceDir));
+    const root = (envVar: string, sourceSub = '', relocatedSub = sourceSub): string => {
+        const env = getEnvLive(envVar);
+        if (env) return path.resolve(env);
+        return useSourceLayout ? path.join(sourceDir, sourceSub) : path.join(relocatedDir, relocatedSub);
+    };
+    return { sourceDir, relocatedDir, useSourceLayout, root };
+}
+
+/**
  * Market adapter data/state dirs. State stays next to the code (source
  * layout) only when the profiles dir also resolves to the repo layout —
  * otherwise all user/runtime state follows the resolved profiles dir
@@ -159,22 +180,11 @@ const PROFILES_DIR = resolveProfilesDir();
  * state across the repo and home. Env vars override both.
  */
 function resolveMarketAdapterDirs(profilesDir = PROFILES_DIR, projectRoot = PROJECT_ROOT) {
-    const sourceDir = path.join(projectRoot, 'market_adapter');
-    const useSourceLayout = profilesDir === path.join(projectRoot, 'profiles') && fs.existsSync(sourceDir);
-    const dataEnv = getEnvLive('DEXBOT_MARKET_ADAPTER_DATA_DIR');
-    const stateEnv = getEnvLive('DEXBOT_MARKET_ADAPTER_STATE_DIR');
-    const dataRoot = dataEnv
-        ? path.resolve(dataEnv)
-        : useSourceLayout
-            ? path.join(sourceDir, 'data')
-            : path.join(profilesDir, 'market_adapter', 'data');
-    const stateRoot = stateEnv
-        ? path.resolve(stateEnv)
-        : useSourceLayout
-            ? path.join(sourceDir, 'state')
-            : path.join(profilesDir, 'market_adapter', 'state');
+    const layout = resolveBundledLayout('market_adapter', profilesDir, projectRoot, true);
+    const dataRoot = layout.root('DEXBOT_MARKET_ADAPTER_DATA_DIR', 'data');
+    const stateRoot = layout.root('DEXBOT_MARKET_ADAPTER_STATE_DIR', 'state');
     return {
-        DIR: useSourceLayout ? sourceDir : path.join(profilesDir, 'market_adapter'),
+        DIR: layout.useSourceLayout ? layout.sourceDir : layout.relocatedDir,
         DATA_DIR: dataRoot,
         LP_DATA_DIR: path.join(dataRoot, 'lp'),
         FEED_DATA_DIR: path.join(dataRoot, 'feed'),
@@ -197,22 +207,16 @@ const MARKET_ADAPTER = resolveMarketAdapterDirs(PROFILES_DIR, PROJECT_ROOT);
  * overrides the data root.
  */
 function resolveClawDirs(profilesDir = PROFILES_DIR, projectRoot = PROJECT_ROOT) {
-    const sourceDir = path.join(projectRoot, 'claw');
-    const useSourceLayout = profilesDir === path.join(projectRoot, 'profiles');
-    const clawEnv = getEnvLive('DEXBOT_CLAW_DATA_DIR');
-    const dataRoot = clawEnv
-        ? path.resolve(clawEnv)
-        : useSourceLayout
-            ? path.join(sourceDir, 'data')
-            : path.join(profilesDir, 'claw', 'data');
+    const layout = resolveBundledLayout('claw', profilesDir, projectRoot);
+    const dataRoot = layout.root('DEXBOT_CLAW_DATA_DIR', 'data');
     return {
-        DIR: sourceDir,
+        DIR: layout.sourceDir,
         DATA_DIR: dataRoot,
         STATE_DIR: path.join(dataRoot, 'state'),
         POSITIONS_FILE: path.join(dataRoot, 'positions.json'),
         WATCHER_HEALTH_FILE: path.join(dataRoot, 'watcher-health.json'),
         MEMU_DIR: path.join(dataRoot, 'memu'),
-        MEMU_RUNNER_SCRIPT: path.join(sourceDir, 'scripts', 'memu_runner.py'),
+        MEMU_RUNNER_SCRIPT: path.join(layout.sourceDir, 'scripts', 'memu_runner.py'),
     };
 }
 
@@ -227,14 +231,8 @@ const CLAW = resolveClawDirs(PROFILES_DIR, PROJECT_ROOT);
  * DEXBOT_ANALYSIS_DIR overrides the root.
  */
 function resolveAnalysisDirs(profilesDir = PROFILES_DIR, projectRoot = PROJECT_ROOT) {
-    const sourceDir = path.join(projectRoot, 'analysis');
-    const useSourceLayout = profilesDir === path.join(projectRoot, 'profiles') && fs.existsSync(sourceDir);
-    const analysisEnv = getEnvLive('DEXBOT_ANALYSIS_DIR');
-    const outRoot = analysisEnv
-        ? path.resolve(analysisEnv)
-        : useSourceLayout
-            ? sourceDir
-            : path.join(profilesDir, 'analysis');
+    const layout = resolveBundledLayout('analysis', profilesDir, projectRoot, true);
+    const outRoot = layout.root('DEXBOT_ANALYSIS_DIR');
     return {
         DIR: outRoot,
         CHARTS_DIR: path.join(outRoot, 'charts'),
@@ -243,7 +241,7 @@ function resolveAnalysisDirs(profilesDir = PROFILES_DIR, projectRoot = PROJECT_R
         CACHE_DIR: path.join(outRoot, 'cache'),
         // Vendored read-only assets always live with the code (repo checkout
         // or npm package), never under the relocated output root.
-        ASSETS_DIR: path.join(sourceDir, 'uplot'),
+        ASSETS_DIR: path.join(layout.sourceDir, 'uplot'),
     };
 }
 

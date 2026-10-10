@@ -166,6 +166,7 @@
     "./dist/modules/dexbot_state_recovery.js": false,
     "./dist/modules/dexbot_startup_runtime.js": false,
     "./dist/modules/dexbot_class.js": false,
+    "./dist/modules/lazy_shim.js": false,
     "./dist/modules/graceful_shutdown.js": false,
     "./dist/modules/process_discovery.js": false,
     "./dist/modules/credential_runtime.js": false,

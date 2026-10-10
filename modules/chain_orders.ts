@@ -792,6 +792,33 @@ async function listenForFills(accountRef: unknown, callback?: unknown) {
 }
 
 /**
+ * Receive amount for a limit_order_update. Policy:
+ * - minToReceive provided: absolute override.
+ * - newPrice provided: `sellFloat` scaled by the price (multiply for a sell,
+ *   divide for a buy).
+ * - otherwise: keep the existing on-chain price ratio (`sellInt * quote/base`).
+ * Shared by the pre- and post-delta computations so both agree.
+ */
+function computeOrderReceiveInt(
+    newParams: UpdateOrderParams,
+    receivePrecision: number,
+    sellInt: number,
+    sellFloat: number,
+    priceRatioBase: number,
+    priceRatioQuote: number,
+): number {
+    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null) {
+        return floatToBlockchainInt(newParams.minToReceive, receivePrecision);
+    }
+    if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
+        const price = toFiniteNumber(newParams.newPrice);
+        const receiveFloat = newParams.orderType === 'sell' ? sellFloat * price : sellFloat / price;
+        return floatToBlockchainInt(receiveFloat, receivePrecision);
+    }
+    return Math.round((sellInt * priceRatioQuote) / priceRatioBase);
+}
+
+/**
  * Build a limit_order_update operation.
  * @param {string} accountName - The name of the account.
  * @param {string} orderId - The ID of the order to update.
@@ -839,7 +866,6 @@ async function buildUpdateOrderOp(accountName: string | null | undefined, orderI
     const receivePrecision = await _getAssetPrecision(receiveAssetId);
 
     const currentSellInt = toFiniteNumber(order.for_sale);
-    const currentSellFloat = blockchainToFloat(currentSellInt, sellPrecision);
 
     const priceRatioBase = toFiniteNumber(order.sell_price.base.amount);
     const priceRatioQuote = toFiniteNumber(order.sell_price.quote.amount);
@@ -860,23 +886,9 @@ async function buildUpdateOrderOp(accountName: string | null | undefined, orderI
     }
 
     // Determine an initial receive amount for price-change detection.
-    // Policy:
-    // - If minToReceive is provided: use it as an absolute override.
-    // - Else if newPrice is provided: compute receive from the (new or current) sell amount.
-    // - Else: keep the existing on-chain price by scaling receive with sell.
-    let candidateReceiveInt;
-    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null) {
-        candidateReceiveInt = floatToBlockchainInt(newParams.minToReceive, receivePrecision);
-    } else if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
-        const price = toFiniteNumber(newParams.newPrice);
-        const sellFloat = (newParams.amountToSell !== undefined && newParams.amountToSell !== null) ? newParams.amountToSell : currentSellFloat;
-        const receiveFloat = (newParams.orderType === 'sell')
-            ? (sellFloat * price)
-            : (sellFloat / price);
-        candidateReceiveInt = floatToBlockchainInt(receiveFloat, receivePrecision);
-    } else {
-        candidateReceiveInt = Math.round((newSellInt * priceRatioQuote) / priceRatioBase);
-    }
+    const candidateReceiveInt = computeOrderReceiveInt(
+        newParams, receivePrecision, newSellInt, newSellFloat, priceRatioBase, priceRatioQuote,
+    );
 
     // Validate amounts before converting to blockchain integers / computing deltas
     const candidateReceiveFloat = blockchainToFloat(candidateReceiveInt, receivePrecision);
@@ -910,20 +922,9 @@ async function buildUpdateOrderOp(accountName: string | null | undefined, orderI
     }
 
     // First, compute the receive amount with the current delta (not adjusted yet)
-    let newReceiveInt;
-
-    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null) {
-        newReceiveInt = floatToBlockchainInt(newParams.minToReceive, receivePrecision);
-    } else if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
-        const price = toFiniteNumber(newParams.newPrice);
-        const receiveFloat = (newParams.orderType === 'sell')
-            ? (newSellFloat * price)
-            : (newSellFloat / price);
-        newReceiveInt = floatToBlockchainInt(receiveFloat, receivePrecision);
-    } else {
-        // Keep existing on-chain price ratio.
-        newReceiveInt = Math.round((newSellInt * priceRatioQuote) / priceRatioBase);
-    }
+    let newReceiveInt = computeOrderReceiveInt(
+        newParams, receivePrecision, newSellInt, newSellFloat, priceRatioBase, priceRatioQuote,
+    );
 
     // Check if price or amount is actually changing
     const priceChanged = newReceiveInt !== currentReceiveInt;
@@ -941,19 +942,9 @@ async function buildUpdateOrderOp(accountName: string | null | undefined, orderI
     const adjustedSellInt = currentSellInt + deltaSellInt;
 
     // Recompute the final receive amount with the adjusted sell amount
-    if (newParams.minToReceive !== undefined && newParams.minToReceive !== null) {
-        newReceiveInt = floatToBlockchainInt(newParams.minToReceive, receivePrecision);
-    } else if (newParams.newPrice !== undefined && newParams.newPrice !== null) {
-        const price = toFiniteNumber(newParams.newPrice);
-        const adjustedSellFloat = blockchainToFloat(adjustedSellInt, sellPrecision);
-        const receiveFloat = (newParams.orderType === 'sell')
-            ? (adjustedSellFloat * price)
-            : (adjustedSellFloat / price);
-        newReceiveInt = floatToBlockchainInt(receiveFloat, receivePrecision);
-    } else {
-        // Keep existing on-chain price ratio.
-        newReceiveInt = Math.round((adjustedSellInt * priceRatioQuote) / priceRatioBase);
-    }
+    newReceiveInt = computeOrderReceiveInt(
+        newParams, receivePrecision, adjustedSellInt, blockchainToFloat(adjustedSellInt, sellPrecision), priceRatioBase, priceRatioQuote,
+    );
 
     const adjustedSellFloat = blockchainToFloat(adjustedSellInt, sellPrecision);
 

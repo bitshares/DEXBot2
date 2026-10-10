@@ -5,20 +5,11 @@ import { dirname as _esmDirname } from 'node:path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = _esmDirname(__filename);
 const require = createRequire(import.meta.url);
-
-/**
- * Build a lazy pass-through to a named export. The require runs on each call
- * (Node caches modules), which keeps heavy or circular targets out of the
- * static import graph without a hand-written wrapper per function. The
- * returned function keeps the previous `(...args: unknown[]) => any` shape.
- */
-function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
-    return (...args: unknown[]) => require(modulePath)[exportName](...args);
-}
+import { lazyShim } from './lazy_shim.js';
 
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { nowIso } from './order/utils/system.js';
+import { nowIso, fireStructuralResync } from './order/utils/system.js';
 import { path } from './path_api.js';
 import * as chainOrders from './chain_orders.js';
 import * as grid from './order/grid.js';
@@ -1859,24 +1850,11 @@ function considerDeferredHoldEscalation(bot: BotLike, strandedOrders: HeldChainO
         `${describeDeferredHolds(bot, strandedOrders)}`,
         'error'
     );
-    try {
-        const res = bot.manager.requestStructuralGridResync('deferred-hold-stale', {
-            reason: `${held} deferred chain order(s) held unchanged for ~${heldHours}h`,
-            heldCount: held,
-            heldMs,
-        });
-        res?.catch?.((err: unknown) => {
-            bot.manager?.logger?.log?.(
-                `[HOLD] Structural resync for stale hold failed: ${getErrorMessage(err)}`,
-                'error'
-            );
-        });
-    } catch (err) {
-        bot.manager?.logger?.log?.(
-            `[HOLD] Structural resync for stale hold failed: ${getErrorMessage(err)}`,
-            'error'
-        );
-    }
+    fireStructuralResync(bot, 'deferred-hold-stale', {
+        reason: `${held} deferred chain order(s) held unchanged for ~${heldHours}h`,
+        heldCount: held,
+        heldMs,
+    }, '[HOLD] Structural resync for stale hold failed');
 }
 
 /**
@@ -2847,22 +2825,9 @@ export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, 
                 `requesting structural re-center`,
                 'warn'
             );
-            try {
-                const res = bot.manager.requestStructuralGridResync('spread-stale-persistent', {
-                    reason: `Spread out of tolerance for ${staleMin}min with no effective correction (outOfSpread=${outOfSpread})`
-                });
-                res?.catch?.((err: unknown) => {
-                    bot.manager?.logger?.log?.(
-                        `[SPREAD-STALE] Structural re-center request failed: ${getErrorMessage(err)}`,
-                        'error'
-                    );
-                });
-            } catch (err) {
-                bot.manager?.logger?.log?.(
-                    `[SPREAD-STALE] Structural re-center request failed: ${getErrorMessage(err)}`,
-                    'error'
-                );
-            }
+            fireStructuralResync(bot, 'spread-stale-persistent', {
+                reason: `Spread out of tolerance for ${staleMin}min with no effective correction (outOfSpread=${outOfSpread})`
+            }, '[SPREAD-STALE] Structural re-center request failed');
             return { staleMs, escalated: true };
         }
     }

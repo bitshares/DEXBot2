@@ -433,20 +433,8 @@ async function askWeightDistributionValue(promptText: string, defaultValue: numb
     if (showLegend) {
         console.log(`  ${COLORS.cyan}-1=SuperValley${COLORS.reset} ←→ ${COLORS.blue}0=Valley${COLORS.reset} ←→ ${COLORS.gray}0.5=Neutral${COLORS.reset} ←→ ${COLORS.bold}${COLORS.orange}1=Mountain${COLORS.reset} ←→ ${COLORS.redStrong}2=SuperMountain${COLORS.reset}`);
     }
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${defaultValue}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `)).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number.');
-        return askWeightDistributionValue(promptText, defaultValue, showLegend);
-    }
-    if (parsed < MIN_WEIGHT || parsed > MAX_WEIGHT) {
-        console.log(`Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.`);
-        return askWeightDistributionValue(promptText, defaultValue, showLegend);
-    }
-    return parsed;
+    return askNumeric(promptText, defaultValue, (parsed) =>
+        parsed < MIN_WEIGHT || parsed > MAX_WEIGHT ? `Weight distribution must be between ${MIN_WEIGHT} and ${MAX_WEIGHT}.` : null);
 }
 
 /**
@@ -750,6 +738,38 @@ async function askNumeric(
 }
 
 /**
+ * Shared prompt loop for the typed-input family (multiplier / percentage /
+ * start-price prompts): renders the default suffix, handles ESC and the empty
+ * default, and prints-and-retries on rejection. `parse` maps non-empty input
+ * to `{ value }` or `{ error }` (the message to print before re-prompting).
+ */
+interface AskTypedOptions<T> {
+    promptText: string;
+    defaultValue?: T;
+    onBeforePrompt?: () => void;
+    formatDefault?: (value: T) => string;
+    colorize?: (input: string) => string;
+    parse: (raw: string) => { value: T } | { error: string };
+}
+
+async function askTypedInput<T>(options: AskTypedOptions<T>): Promise<T | '\x1b' | undefined> {
+    options.onBeforePrompt?.();
+    const { promptText, defaultValue } = options;
+    const shown = defaultValue !== undefined && defaultValue !== null
+        ? ` [${options.formatDefault ? options.formatDefault(defaultValue) : String(defaultValue)}]`
+        : '';
+    const raw = (await readInput(`${promptText}${shown}: `, options.colorize ? { colorize: options.colorize } : {})).trim();
+    if (raw === '\x1b') return '\x1b';
+    if (raw === '') return defaultValue;
+    const result = options.parse(raw);
+    if ('error' in result) {
+        console.log(result.error);
+        return askTypedInput(options);
+    }
+    return result.value;
+}
+
+/**
  * Prompts the user for a number within specified bounds.
  * @param {string} promptText - The prompt text to display.
  * @param {number} [defaultValue] - The default value to use if input is empty.
@@ -860,31 +880,25 @@ function validateMultiplierInput(promptText: string, raw: string): { value: stri
  * @returns {Promise<number|string>} The value or '\x1b' if ESC.
  */
 async function askNumberOrMultiplier(promptText: string, defaultValue?: number | string): Promise<number | string | undefined> {
-    // Pre-entry legend for Range bounds (mirrors weight mountain legend)
-    if (/^(minPrice|maxPrice)/i.test(promptText)) printRangeQualityLegend();
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${colorPriceRangeValue(defaultValue)}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `, { colorize: (input) => colorRangeValueByQuality(input) })).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    if (isMultiplierString(raw)) {
-        const result = validateMultiplierInput(promptText, raw);
-        if ('error' in result) {
-            console.log(result.error);
-            return askNumberOrMultiplier(promptText, defaultValue);
-        }
-        return result.value;
-    }
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number or multiplier (e.g. 5x).');
-        return askNumberOrMultiplier(promptText, defaultValue);
-    }
-    // Validate that number is > 0 (for price inputs)
-    if (parsed <= 0) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)`);
-        return askNumberOrMultiplier(promptText, defaultValue);
-    }
-    return parsed;
+    return askTypedInput<number | string>({
+        promptText,
+        defaultValue,
+        // Pre-entry legend for Range bounds (mirrors weight mountain legend)
+        onBeforePrompt: () => { if (/^(minPrice|maxPrice)/i.test(promptText)) printRangeQualityLegend(); },
+        formatDefault: colorPriceRangeValue,
+        colorize: colorRangeValueByQuality,
+        parse: (raw) => {
+            if (isMultiplierString(raw)) {
+                const result = validateMultiplierInput(promptText, raw);
+                return 'error' in result ? result : { value: result.value };
+            }
+            const parsed = Number(raw);
+            if (Number.isNaN(parsed)) return { error: 'Please enter a valid number or multiplier (e.g. 5x).' };
+            // Validate that number is > 0 (for price inputs)
+            if (parsed <= 0) return { error: `Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)` };
+            return { value: parsed };
+        },
+    });
 }
 
 /**
@@ -895,41 +909,34 @@ async function askNumberOrMultiplier(promptText: string, defaultValue?: number |
  * @returns {Promise<number|string>} The value or '\x1b' if ESC.
  */
 async function askMaxPrice(promptText: string, defaultValue?: number | string, minPrice?: number | string): Promise<number | string | undefined> {
-    printRangeQualityLegend();
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${colorPriceRangeValue(defaultValue)}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `, { colorize: (input) => colorRangeValueByQuality(input) })).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    if (isMultiplierString(raw)) {
-        const result = validateMultiplierInput(promptText, raw);
-        if ('error' in result) {
-            console.log(result.error);
-            return askMaxPrice(promptText, defaultValue, minPrice);
-        }
-        return result.value;
-    }
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number or multiplier (e.g. 5x).');
-        return askMaxPrice(promptText, defaultValue, minPrice);
-    }
-    // Validate that number is > 0 (for price inputs)
-    if (parsed <= 0) {
-        console.log(`Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)`);
-        return askMaxPrice(promptText, defaultValue, minPrice);
-    }
-    // Validate that maxPrice > minPrice. Only comparable when minPrice is an
-    // absolute value: a relative min ("2x") needs the grid center to resolve,
-    // so it can't be checked here — the runtime bound validation covers it
-    // (previously parseFloat("2x") == 2 wrongly rejected any absolute price <= 2).
-    if (!isMultiplierString(minPrice)) {
-        const minPriceValue = typeof minPrice === 'string' ? parseFloat(minPrice) : minPrice;
-        if (minPriceValue != null && parsed <= minPriceValue) {
-            console.log(`Invalid ${promptText}: ${parsed}. Must be > minPrice (${minPriceValue})`);
-            return askMaxPrice(promptText, defaultValue, minPrice);
-        }
-    }
-    return parsed;
+    return askTypedInput<number | string>({
+        promptText,
+        defaultValue,
+        onBeforePrompt: printRangeQualityLegend,
+        formatDefault: colorPriceRangeValue,
+        colorize: colorRangeValueByQuality,
+        parse: (raw) => {
+            if (isMultiplierString(raw)) {
+                const result = validateMultiplierInput(promptText, raw);
+                return 'error' in result ? result : { value: result.value };
+            }
+            const parsed = Number(raw);
+            if (Number.isNaN(parsed)) return { error: 'Please enter a valid number or multiplier (e.g. 5x).' };
+            // Validate that number is > 0 (for price inputs)
+            if (parsed <= 0) return { error: `Invalid ${promptText}: ${parsed}. Must be > 0 (positive number)` };
+            // Validate that maxPrice > minPrice. Only comparable when minPrice is an
+            // absolute value: a relative min ("2x") needs the grid center to resolve,
+            // so it can't be checked here — the runtime bound validation covers it
+            // (previously parseFloat("2x") == 2 wrongly rejected any absolute price <= 2).
+            if (!isMultiplierString(minPrice)) {
+                const minPriceValue = typeof minPrice === 'string' ? parseFloat(minPrice) : minPrice;
+                if (minPriceValue != null && parsed <= minPriceValue) {
+                    return { error: `Invalid ${promptText}: ${parsed}. Must be > minPrice (${minPriceValue})` };
+                }
+            }
+            return { value: parsed };
+        },
+    });
 }
 
 /**
@@ -953,18 +960,19 @@ function normalizePercentageInput(value: string): string | null {
  * @returns {Promise<number|string>} The value or '\x1b' if ESC.
  */
 async function askNumberOrPercentage(promptText: string, defaultValue?: number | string): Promise<number | string | undefined> {
-    const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${colorPercentageInput(defaultValue)}]` : '';
-    const raw = (await readInput(`${promptText}${suffix}: `, { colorize: (input) => colorPercentageInput(input) })).trim();
-    if (raw === '\x1b') return '\x1b';
-    if (raw === '') return defaultValue;
-    const percent = normalizePercentageInput(raw);
-    if (percent !== null) return percent;
-    const parsed = Number(raw);
-    if (Number.isNaN(parsed)) {
-        console.log('Please enter a valid number or percentage (e.g. 100, 50%).');
-        return askNumberOrPercentage(promptText, defaultValue);
-    }
-    return parsed;
+    return askTypedInput<number | string>({
+        promptText,
+        defaultValue,
+        formatDefault: colorPercentageInput,
+        colorize: colorPercentageInput,
+        parse: (raw) => {
+            const percent = normalizePercentageInput(raw);
+            if (percent !== null) return { value: percent };
+            const parsed = Number(raw);
+            if (Number.isNaN(parsed)) return { error: 'Please enter a valid number or percentage (e.g. 100, 50%).' };
+            return { value: parsed };
+        },
+    });
 }
 
 /**
@@ -1012,33 +1020,20 @@ async function askBoolean(promptText: string, defaultValue?: boolean): Promise<b
  * @returns {Promise<number|string>} The start price or '\x1b' if ESC.
  */
 async function askStartPrice(promptText: string, defaultValue?: number | string): Promise<number | string | undefined> {
-    while (true) {
-        const suffix = defaultValue !== undefined && defaultValue !== null ? ` [${colorStartPriceValue(defaultValue)}]` : '';
-        const raw = (await readInput(`${promptText}${suffix}: `, {
-            colorize: (input: string) => colorStartPriceValue(input)
-        })).trim();
-
-        if (raw === '\x1b') return '\x1b';
-
-        if (!raw) {
-            if (defaultValue !== undefined && defaultValue !== null) {
-                return defaultValue;
-            }
-            return undefined;
-        }
-
-        const lower = raw.toLowerCase();
-        if (lower === 'pool') return lower;
-        if (lower === 'book') return 'book';
-
-        // Accept numeric values (including decimals)
-        const num = Number(raw);
-        if (!Number.isNaN(num) && Number.isFinite(num)) {
-            return num;
-        }
-
-        console.log('Please enter "pool", "book", or a numeric value.');
-    }
+    return askTypedInput<number | string>({
+        promptText,
+        defaultValue,
+        formatDefault: colorStartPriceValue,
+        colorize: colorStartPriceValue,
+        parse: (raw) => {
+            const lower = raw.toLowerCase();
+            if (lower === 'pool' || lower === 'book') return { value: lower };
+            // Accept numeric values (including decimals)
+            const num = Number(raw);
+            if (!Number.isNaN(num) && Number.isFinite(num)) return { value: num };
+            return { error: 'Please enter "pool", "book", or a numeric value.' };
+        },
+    });
 }
 
 /**

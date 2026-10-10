@@ -42,6 +42,7 @@ const NAMES = {
         'restoreGapEvacStreaks', 'applyPersistedPendingCrawls',
         'resetLastFillPivot', 'restoreLastFillPivot',
         'setLastFillPivot', 'normalizeLastFillPivot',
+        'fireStructuralResync',
     ],
     format: ['formatCurrency', 'formatMetric2', 'isValidNumber', 'toFiniteNumber', 'formatPrice6', 'formatPercent'],
     orderUtils: [

@@ -1,17 +1,5 @@
 /** Startup runtime - bot initialization, grid placement, and startup sequence */
-
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
-/**
- * Build a lazy pass-through to a named export. The require runs on each call
- * (Node caches modules), which keeps heavy or circular targets out of the
- * static import graph without a hand-written wrapper per function. The
- * returned function keeps the previous `(...args: unknown[]) => any` shape.
- */
-function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
-    return (...args: unknown[]) => require(modulePath)[exportName](...args);
-}
+import { lazyShim } from './lazy_shim.js';
 
 import { path } from './path_api.js';
 import * as chainOrders from './chain_orders.js';

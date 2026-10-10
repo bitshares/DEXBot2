@@ -14,7 +14,7 @@ const { readOpenOrdersWithMetaSafe } = chainOrdersModule;
 import { BroadcastUncertainError as BroadcastUncertainErrorBinding } from './dexbot_credential_client.js';
 const BroadcastUncertainError = BroadcastUncertainErrorBinding;
 import * as orderUtils from './order/utils/order.js';
-import { sleep, setLastFillPivot } from './order/utils/system.js';
+import { sleep, setLastFillPivot, fireStructuralResync } from './order/utils/system.js';
 const {
     buildCreateOrderArgs,
     buildCreateOpFingerprint,
@@ -2042,26 +2042,13 @@ function considerGridPriceInvariantEscalation(bot: BotLike, slotId: unknown, pri
         `requesting structural resync to repair the slot`,
         'error'
     );
-    try {
-        const res = bot.manager.requestStructuralGridResync('grid-price-invariant-violation', {
-            slotId: String(slotId),
-            expected: Number.isFinite(expected) ? expected : null,
-            actual: Number.isFinite(actual) ? actual : null,
-            site,
-            streak,
-        });
-        res?.catch?.((err: unknown) => {
-            bot.manager?.logger?.log?.(
-                `[GRID-PRICE-INVARIANT] Structural resync request failed: ${getErrorMessage(err)}`,
-                'error'
-            );
-        });
-    } catch (err) {
-        bot.manager?.logger?.log?.(
-            `[GRID-PRICE-INVARIANT] Structural resync request failed: ${getErrorMessage(err)}`,
-            'error'
-        );
-    }
+    fireStructuralResync(bot, 'grid-price-invariant-violation', {
+        slotId: String(slotId),
+        expected: Number.isFinite(expected) ? expected : null,
+        actual: Number.isFinite(actual) ? actual : null,
+        site,
+        streak,
+    }, '[GRID-PRICE-INVARIANT] Structural resync request failed');
     return streak;
 }
 

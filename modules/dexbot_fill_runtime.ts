@@ -1,17 +1,5 @@
 /** Fill processing runtime - handles order fill events and replay-safe accounting */
-
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
-/**
- * Build a lazy pass-through to a named export. The require runs on each call
- * (Node caches modules), which keeps heavy or circular targets out of the
- * static import graph without a hand-written wrapper per function. The
- * returned function keeps the previous `(...args: unknown[]) => any` shape.
- */
-function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
-    return (...args: unknown[]) => require(modulePath)[exportName](...args);
-}
+import { lazyShim } from './lazy_shim.js';
 
 import * as chainOrders from './chain_orders.js';
 import { PROCESSED_FILL_PERSISTENCE_MODES } from './order/processed_fill_store.js';
@@ -373,7 +361,7 @@ async function applyReplaySafeFillAccounting(bot: BotLike, fill: unknown, fillOp
 }
 
 /** Shared options for the replay-safe accounting wrappers. */
-interface ReplaySafeFillAccountingOptions {
+export interface ReplaySafeFillAccountingOptions {
     context?: string;
     logger?: Partial<ManagerLogger>;
     replayMessage?: ReplayMessageFn;

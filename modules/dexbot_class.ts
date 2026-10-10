@@ -67,16 +67,7 @@
 
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-
-/**
- * Build a lazy pass-through to a named export. The require runs on each call
- * (Node caches modules), which keeps heavy or circular targets out of the
- * static import graph without a hand-written wrapper per function. The
- * returned function keeps the previous `(...args: unknown[]) => any` shape.
- */
-function lazyShim(modulePath: string, exportName: string): (...args: unknown[]) => any {
-    return (...args: unknown[]) => require(modulePath)[exportName](...args);
-}
+import { lazyShim } from './lazy_shim.js';
 
 import * as client from './bitshares_client.js';
 const { BitShares } = client;
@@ -93,18 +84,15 @@ import { path } from './path_api.js';
 import * as Format from './order/format.js';
 import cowRuntime from './dexbot_cow_runtime.js';
 import type { ChainOrderLike, CowResult, OpPhase } from './dexbot_cow_runtime.js';
-import {
-    ProcessedFillStore,
-    PROCESSED_FILL_PERSISTENCE_MODES
-} from './order/processed_fill_store.js';
+import { ProcessedFillStore } from './order/processed_fill_store.js';
 import {
     TIMING,
     DAEMON_CODES,
 } from './constants.js';
 import { normalizeBotEntry } from './bot_settings.js';
-import type { FillOpLike, FillLike, ReplayMessageFn } from './dexbot_fill_runtime.js';
+import type { FillOpLike, FillLike, ReplaySafeFillAccountingOptions } from './dexbot_fill_runtime.js';
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
-import type {BotLike, AssetPair, IncomingFill, ManagerLogger, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken, SpreadCorrectionStall} from './types.js';
+import type {BotLike, AssetPair, IncomingFill, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken, SpreadCorrectionStall} from './types.js';
 
 const waitForConnected = lazyShim('./bitshares_client', 'waitForConnected');
 const getKeyStore = lazyShim('./key_store', 'getKeyStore');
@@ -665,23 +653,8 @@ class DEXBot implements BotLike {
      * @param {string} [options.persistenceMode='batched']
      * @returns {Promise<any>}
      */
-    async _applyReplaySafeTrackedFillAccounting(fill: unknown, fillOp: FillOpLike, {
-        context,
-        logger = this.manager?.logger,
-        replayMessage,
-        persistenceMode = PROCESSED_FILL_PERSISTENCE_MODES.BATCHED
-    }: {
-        context?: string;
-        logger?: Partial<ManagerLogger>;
-        replayMessage?: ReplayMessageFn;
-        persistenceMode?: string;
-    } = {}) {
-        return DexbotFillRuntime.applyReplaySafeTrackedFillAccounting(this, fill, fillOp, {
-            context,
-            logger,
-            replayMessage,
-            persistenceMode
-        });
+    async _applyReplaySafeTrackedFillAccounting(fill: unknown, fillOp: FillOpLike, options: ReplaySafeFillAccountingOptions = {}) {
+        return DexbotFillRuntime.applyReplaySafeTrackedFillAccounting(this, fill, fillOp, options);
     }
 
     /**
@@ -695,23 +668,8 @@ class DEXBot implements BotLike {
      * @param {string} [options.persistenceMode='batched']
      * @returns {Promise<any>}
      */
-    async _applyReplaySafeOrphanFillAccounting(fill: unknown, fillOp: FillOpLike, {
-        context,
-        logger = this.manager?.logger,
-        replayMessage,
-        persistenceMode = PROCESSED_FILL_PERSISTENCE_MODES.BATCHED
-    }: {
-        context?: string;
-        logger?: Partial<ManagerLogger>;
-        replayMessage?: ReplayMessageFn;
-        persistenceMode?: string;
-    } = {}) {
-        return DexbotFillRuntime.applyReplaySafeOrphanFillAccounting(this, fill, fillOp, {
-            context,
-            logger,
-            replayMessage,
-            persistenceMode
-        });
+    async _applyReplaySafeOrphanFillAccounting(fill: unknown, fillOp: FillOpLike, options: ReplaySafeFillAccountingOptions = {}) {
+        return DexbotFillRuntime.applyReplaySafeOrphanFillAccounting(this, fill, fillOp, options);
     }
 
     /**

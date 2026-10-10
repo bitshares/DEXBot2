@@ -2102,6 +2102,27 @@ export function cloneMap<K, V>(map: Map<K, V>): Map<K, V> {
 }
 
 /**
+ * Fire-and-forget structural grid resync. Invokes the manager's handler and
+ * logs both a synchronous throw and an async rejection through the manager
+ * logger, so escalation sites share one error-handling footer. No-op when the
+ * manager has no handler.
+ */
+export function fireStructuralResync(
+    bot: BotLike,
+    reason: string,
+    details: Record<string, unknown>,
+    errorLabel: string,
+    level: string = 'error',
+): void {
+    try {
+        const res = bot.manager?.requestStructuralGridResync?.(reason, details);
+        res?.catch?.((err: unknown) => bot.manager?.logger?.log?.(`${errorLabel}: ${getErrorMessage(err)}`, level));
+    } catch (err) {
+        bot.manager?.logger?.log?.(`${errorLabel}: ${getErrorMessage(err)}`, level);
+    }
+}
+
+/**
  * Parses JSON content that may contain comments (/* or //).
  * Strips block comments then line comments before parsing.
  * @param {string} raw - The raw string content with possible comments.

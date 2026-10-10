@@ -2223,6 +2223,40 @@ class CreditRuntime {
                 ? options.autoRepay
                 : (policyHasAutoRepay ? reborrowPolicy.autoRepay : (dealSummary.autoRepay ?? false))) as boolean;
             const offer = await this._getOfferById(dealSummary.offerId);
+            const selectFallbackReborrow = async (deferReason: string, selectionNote: string): Promise<void> => {
+                const fallback = await this._selectFallbackCreditOffer({
+                    debtAssetId: dealSummary.debtAssetId,
+                    collateralAssetId: effectiveCollateralAssetId,
+                    policy: reborrowPolicy,
+                    borrowAmount: reborrowAmount,
+                    collateralAmount: reborrowCollateralAmount,
+                    autoRepay: autoRepaySetting,
+                    pendingRepayAmount: repayAmount,
+                    pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
+                    availableCollateralAmount: availableReborrowCollateralInt,
+                    excludeOfferId: dealSummary.offerId,
+                });
+                if (fallback) {
+                    this.warn(`credit runtime: fallback reborrow offer ${fallback.offer.id} selected ${selectionNote}`);
+                    operations.push(fallback.op);
+                    inlineReborrowPlanned = true;
+                    return;
+                }
+                deferredReborrowRequest = {
+                    sourceDealId: dealSummary.id,
+                    offerId: dealSummary.offerId,
+                    borrowAmount: reborrowAmount,
+                    collateralAmount: reborrowCollateralAmount,
+                    autoRepay: autoRepaySetting,
+                    specificPolicy: reborrowPolicy,
+                    preRepayDealIds,
+                    availableCollateralAmount: availableReborrowCollateralInt,
+                    pendingRepayAmount: repayAmount,
+                    pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
+                    requestedAt: nowIso(),
+                    reason: deferReason,
+                };
+            };
             if (offer) {
                 try {
                     const acceptOp = await this.buildCreditOfferAcceptOperation({
@@ -2238,72 +2272,16 @@ class CreditRuntime {
                     operations.push(acceptOp);
                     inlineReborrowPlanned = true;
                 } catch (err) {
-                    const fallback = await this._selectFallbackCreditOffer({
-                        debtAssetId: dealSummary.debtAssetId,
-                        collateralAssetId: effectiveCollateralAssetId,
-                        policy: reborrowPolicy,
-                        borrowAmount: reborrowAmount,
-                        collateralAmount: reborrowCollateralAmount,
-                        autoRepay: autoRepaySetting,
-                        pendingRepayAmount: repayAmount,
-                        pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
-                        availableCollateralAmount: availableReborrowCollateralInt,
-                        excludeOfferId: dealSummary.offerId,
-                    });
-                    if (fallback) {
-                        this.warn(`credit runtime: fallback reborrow offer ${fallback.offer.id} selected after original offer ${dealSummary.offerId} failed: ${getErrorMessage(err)}`);
-                        operations.push(fallback.op);
-                        inlineReborrowPlanned = true;
-                    } else {
-                        deferredReborrowRequest = {
-                            sourceDealId: dealSummary.id,
-                            offerId: dealSummary.offerId,
-                            borrowAmount: reborrowAmount,
-                            collateralAmount: reborrowCollateralAmount,
-                            autoRepay: autoRepaySetting,
-                            specificPolicy: reborrowPolicy,
-                            preRepayDealIds,
-                            availableCollateralAmount: availableReborrowCollateralInt,
-                            pendingRepayAmount: repayAmount,
-                            pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
-                            requestedAt: nowIso(),
-                            reason: getErrorMessage(err),
-                        };
-                    }
+                    await selectFallbackReborrow(
+                        getErrorMessage(err),
+                        `after original offer ${dealSummary.offerId} failed: ${getErrorMessage(err)}`,
+                    );
                 }
             } else {
-                const fallback = await this._selectFallbackCreditOffer({
-                    debtAssetId: dealSummary.debtAssetId,
-                    collateralAssetId: effectiveCollateralAssetId,
-                    policy: reborrowPolicy,
-                    borrowAmount: reborrowAmount,
-                    collateralAmount: reborrowCollateralAmount,
-                    autoRepay: autoRepaySetting,
-                    pendingRepayAmount: repayAmount,
-                    pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
-                    availableCollateralAmount: availableReborrowCollateralInt,
-                    excludeOfferId: dealSummary.offerId,
-                });
-                if (fallback) {
-                    this.warn(`credit runtime: fallback reborrow offer ${fallback.offer.id} selected because original offer ${dealSummary.offerId} is unavailable`);
-                    operations.push(fallback.op);
-                    inlineReborrowPlanned = true;
-                } else {
-                    deferredReborrowRequest = {
-                        sourceDealId: dealSummary.id,
-                        offerId: dealSummary.offerId,
-                        borrowAmount: reborrowAmount,
-                        collateralAmount: reborrowCollateralAmount,
-                        autoRepay: autoRepaySetting,
-                        specificPolicy: reborrowPolicy,
-                        preRepayDealIds,
-                        availableCollateralAmount: availableReborrowCollateralInt,
-                        pendingRepayAmount: repayAmount,
-                        pendingReleaseCollateralAmount: options.pendingReleaseCollateralAmount,
-                        requestedAt: nowIso(),
-                        reason: 'offer unavailable',
-                    };
-                }
+                await selectFallbackReborrow(
+                    'offer unavailable',
+                    `because original offer ${dealSummary.offerId} is unavailable`,
+                );
             }
         }
 

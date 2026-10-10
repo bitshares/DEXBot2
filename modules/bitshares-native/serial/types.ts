@@ -101,6 +101,30 @@ function sortOperation(array: unknown[], st_operation?: SerType): unknown[] {
     });
 }
 
+/**
+ * Build a SerType for a bounded integer. `read`/`write` are the codec hooks;
+ * `min`/`max` drive requireRange in every direction. Shared by the
+ * uint8/uint16/uint32/varint32 definitions, which differ only by codec+range.
+ */
+function makeIntType(
+    name: string,
+    min: number,
+    max: number,
+    read: (b: BufReader) => number,
+    write: (b: BufWriter, v: number) => void,
+): SerType {
+    return {
+        fromByteBuffer(b: BufReader): number { return read(b); },
+        appendByteBuffer(b: BufWriter, v: number): void { requireRange(min, max, v, name); write(b, v); },
+        fromObject(v: number): number { requireRange(min, max, v, name); return v; },
+        toObject(v: number, debug?: SerDebug): number {
+            if (debug && debug.use_default && v === undefined) return 0;
+            requireRange(min, max, v, name);
+            return parseInt(String(v), 10);
+        },
+    };
+}
+
 const void_type: SerType = {
     fromByteBuffer(): undefined { return undefined; },
     appendByteBuffer(): void { /* void serializes to zero bytes */ },
@@ -111,55 +135,10 @@ const void_type: SerType = {
     },
 };
 
-const uint8: SerType = {
-    fromByteBuffer(b: BufReader): number { return b.readUint8(); },
-    appendByteBuffer(b: BufWriter, v: number): void { requireRange(0, 0xFF, v, 'uint8'); b.writeUint8(v); },
-    fromObject(v: number): number { requireRange(0, 0xFF, v, 'uint8'); return v; },
-    toObject(v: number, debug?: SerDebug): number {
-        if (debug && debug.use_default && v === undefined) return 0;
-        requireRange(0, 0xFF, v, 'uint8');
-        return parseInt(String(v), 10);
-    },
-};
-
-const uint16: SerType = {
-    fromByteBuffer(b: BufReader): number { return b.readUint16(); },
-    appendByteBuffer(b: BufWriter, v: number): void { requireRange(0, 0xFFFF, v, 'uint16'); b.writeUint16(v); },
-    fromObject(v: number): number { requireRange(0, 0xFFFF, v, 'uint16'); return v; },
-    toObject(v: number, debug?: SerDebug): number {
-        if (debug && debug.use_default && v === undefined) return 0;
-        requireRange(0, 0xFFFF, v, 'uint16');
-        return parseInt(String(v), 10);
-    },
-};
-
-const uint32: SerType = {
-    fromByteBuffer(b: BufReader): number { return b.readUint32(); },
-    appendByteBuffer(b: BufWriter, v: number): void { requireRange(0, 0xFFFFFFFF, v, 'uint32'); b.writeUint32(v); },
-    fromObject(v: number): number { requireRange(0, 0xFFFFFFFF, v, 'uint32'); return v; },
-    toObject(v: number, debug?: SerDebug): number {
-        if (debug && debug.use_default && v === undefined) return 0;
-        requireRange(0, 0xFFFFFFFF, v, 'uint32');
-        return parseInt(String(v), 10);
-    },
-};
-
-const varint32: SerType = {
-    fromByteBuffer(b: BufReader): number { return b.readVarint32(); },
-    appendByteBuffer(b: BufWriter, v: number): void {
-        requireRange(-2147483648, 2147483647, v, 'varint32');
-        b.writeVarint32(v);
-    },
-    fromObject(v: number): number {
-        requireRange(-2147483648, 2147483647, v, 'varint32');
-        return v;
-    },
-    toObject(v: number, debug?: SerDebug): number {
-        if (debug && debug.use_default && v === undefined) return 0;
-        requireRange(-2147483648, 2147483647, v, 'varint32');
-        return parseInt(String(v), 10);
-    },
-};
+const uint8 = makeIntType('uint8', 0, 0xFF, (b) => b.readUint8(), (b, v) => b.writeUint8(v));
+const uint16 = makeIntType('uint16', 0, 0xFFFF, (b) => b.readUint16(), (b, v) => b.writeUint16(v));
+const uint32 = makeIntType('uint32', 0, 0xFFFFFFFF, (b) => b.readUint32(), (b, v) => b.writeUint32(v));
+const varint32 = makeIntType('varint32', -2147483648, 2147483647, (b) => b.readVarint32(), (b, v) => b.writeVarint32(v));
 
 const int64: SerType = {
     fromByteBuffer(b: BufReader): number | string { return b.readInt64(); },

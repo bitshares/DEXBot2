@@ -503,10 +503,10 @@ class OrderManager implements OrderManagerLike {
     _accountingFailureSignal: AccountingFailureSignal | null;
     _recoveryStateValue: { phase: string; attemptCount: number; lastAttemptAt: number; inFlight: boolean; lastFailureAt: number; structuralResyncRequested?: boolean };
     _gridRegenStateValue: { buy: { armed: boolean; lastTriggeredAt: number }; sell: { armed: boolean; lastTriggeredAt: number } };
-    private _ordersByTypeCache: Record<string, Set<string>> | null = null;
-    private _ordersByStateCache: Record<string, Set<string>> | null = null;
-    private _ordersByTypeCacheVersion: number = -1;
-    private _ordersByStateCacheVersion: number = -1;
+    private _orderIdIndexes: Record<'type' | 'state', { cache: Record<string, Set<string>> | null; version: number }> = {
+        type: { cache: null, version: -1 },
+        state: { cache: null, version: -1 },
+    };
 
     /**
      * Lazy-compute order-IDs grouped by type.
@@ -522,23 +522,11 @@ class OrderManager implements OrderManagerLike {
      * next grid-version bump triggers a full rebuild from the real orders.
      */
     get _ordersByType(): Record<string, Set<string>> {
-        if (this._ordersByTypeCache !== null && this._ordersByTypeCacheVersion === this._gridVersion) {
-            return this._ordersByTypeCache;
-        }
-        const byType: Record<string, Set<string>> = {};
-        for (const key of [ORDER_TYPES.BUY, ORDER_TYPES.SELL, ORDER_TYPES.SPREAD]) {
-            byType[key] = new Set();
-        }
-        for (const [id, o] of this.orders) {
-            if (byType[o.type]) byType[o.type].add(id);
-        }
-        this._ordersByTypeCache = byType;
-        this._ordersByTypeCacheVersion = this._gridVersion;
-        return byType;
+        return this._getOrderIdIndex('type', [ORDER_TYPES.BUY, ORDER_TYPES.SELL, ORDER_TYPES.SPREAD]);
     }
     set _ordersByType(val: Record<string, Set<string>>) {
-        this._ordersByTypeCache = val;
-        this._ordersByTypeCacheVersion = this._gridVersion;
+        this._orderIdIndexes.type.cache = val;
+        this._orderIdIndexes.type.version = this._gridVersion;
     }
 
     /**
@@ -546,23 +534,28 @@ class OrderManager implements OrderManagerLike {
      * _ordersByType — see getter doc for details.
      */
     get _ordersByState(): Record<string, Set<string>> {
-        if (this._ordersByStateCache !== null && this._ordersByStateCacheVersion === this._gridVersion) {
-            return this._ordersByStateCache;
-        }
-        const byState: Record<string, Set<string>> = {};
-        for (const key of [ORDER_STATES.VIRTUAL, ORDER_STATES.ACTIVE, ORDER_STATES.PARTIAL]) {
-            byState[key] = new Set();
-        }
-        for (const [id, o] of this.orders) {
-            if (byState[o.state]) byState[o.state].add(id);
-        }
-        this._ordersByStateCache = byState;
-        this._ordersByStateCacheVersion = this._gridVersion;
-        return byState;
+        return this._getOrderIdIndex('state', [ORDER_STATES.VIRTUAL, ORDER_STATES.ACTIVE, ORDER_STATES.PARTIAL]);
     }
     set _ordersByState(val: Record<string, Set<string>>) {
-        this._ordersByStateCache = val;
-        this._ordersByStateCacheVersion = this._gridVersion;
+        this._orderIdIndexes.state.cache = val;
+        this._orderIdIndexes.state.version = this._gridVersion;
+    }
+
+    /** Rebuild an order-id index for `field` over `keys`, memoized per `_gridVersion`. */
+    private _getOrderIdIndex(field: 'type' | 'state', keys: string[]): Record<string, Set<string>> {
+        const slot = this._orderIdIndexes[field];
+        if (slot.cache !== null && slot.version === this._gridVersion) {
+            return slot.cache;
+        }
+        const index: Record<string, Set<string>> = {};
+        for (const key of keys) index[key] = new Set();
+        for (const [id, o] of this.orders) {
+            const key = o[field];
+            if (index[key]) index[key].add(id);
+        }
+        slot.cache = index;
+        slot.version = this._gridVersion;
+        return index;
     }
     initialSpreadCount: number;
     currentSpreadCount: number;

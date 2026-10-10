@@ -180,6 +180,32 @@ function resolvePriceFactors(
 }
 
 /**
+ * Convert a raw amount along the borrow<->collateral price ratio, applying the
+ * price orientation and integer rounding direction. Shared by the two
+ * conversions below so they cannot disagree on which factor applies; the two
+ * directions are reciprocal, so `direction` flips the numerator/denominator.
+ */
+function convertAtPrice(
+    amountInt: unknown,
+    direction: 'debtToCollateral' | 'collateralToDebt',
+    rounding: 'ceil' | 'floor',
+    collateralPrice: OfferPrice | null | undefined,
+    debtAssetId: string | null,
+    collateralAssetId: string | null,
+): number | null {
+    const amount = toFiniteNumber(amountInt, null);
+    const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
+    if (amount === null || amount <= 0 || factors === null) return null;
+    const { baseAmount, quoteAmount, orientation } = factors;
+    const legacyNumerator = direction === 'debtToCollateral' ? baseAmount : quoteAmount;
+    const legacyDenominator = direction === 'debtToCollateral' ? quoteAmount : baseAmount;
+    const numerator = orientation === 'legacy-reversed' ? legacyNumerator : legacyDenominator;
+    const denominator = orientation === 'legacy-reversed' ? legacyDenominator : legacyNumerator;
+    const round = rounding === 'ceil' ? Math.ceil : Math.floor;
+    return round((Number(amountInt) * numerator) / denominator);
+}
+
+/**
  * Minimum raw collateral required to borrow a raw debt amount at a price.
  * Integer ceil so the borrow is never under-collateralized by rounding.
  */
@@ -189,14 +215,7 @@ function requiredCollateralForBorrow(
     debtAssetId: string | null = null,
     collateralAssetId: string | null = null,
 ): number | null {
-    const borrowRaw = toFiniteNumber(borrowAmountInt, null);
-    const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
-    if (borrowRaw === null || borrowRaw <= 0 || factors === null) return null;
-    const { baseAmount, quoteAmount, orientation } = factors;
-    if (orientation === 'legacy-reversed') {
-        return Math.ceil((Number(borrowAmountInt) * baseAmount) / quoteAmount);
-    }
-    return Math.ceil((Number(borrowAmountInt) * quoteAmount) / baseAmount);
+    return convertAtPrice(borrowAmountInt, 'debtToCollateral', 'ceil', collateralPrice, debtAssetId, collateralAssetId);
 }
 
 /**
@@ -209,14 +228,7 @@ function borrowAmountForCollateral(
     debtAssetId: string | null = null,
     collateralAssetId: string | null = null,
 ): number | null {
-    const collRaw = toFiniteNumber(collateralAmountInt, null);
-    const factors = resolvePriceFactors(collateralPrice, debtAssetId, collateralAssetId);
-    if (collRaw === null || collRaw <= 0 || factors === null) return null;
-    const { baseAmount, quoteAmount, orientation } = factors;
-    if (orientation === 'legacy-reversed') {
-        return Math.floor((Number(collateralAmountInt) * quoteAmount) / baseAmount);
-    }
-    return Math.floor((Number(collateralAmountInt) * baseAmount) / quoteAmount);
+    return convertAtPrice(collateralAmountInt, 'collateralToDebt', 'floor', collateralPrice, debtAssetId, collateralAssetId);
 }
 
 /**
