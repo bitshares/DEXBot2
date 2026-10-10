@@ -45,12 +45,11 @@ const __dirname = _esmDirname(__filename);
  * `dexbot help` is the single source of truth (grouped one-liners below;
  * `dexbot --cli-examples` prints curated snippets):
  *
- * Runtime:   dexbot start [bot] | stop | reload | restart | delete | status
- *            dexbot pm2 [stop|delete|restart|reload|claw-only|update|help]
+ * Runtime:   dexbot start [bot] | stop | reload | restart | delete | status | pm2
  * Trading:   dexbot test <bot> | drystart <bot> | reset {all|<bot>}
  * Config:    dexbot bot | key | enable {all|<bot>} | disable {all|<bot>} | default | update
- * Analysis:  dexbot order [<bot>] [--export] | export <bot> | credit [<bot>]
- *            dexbot tv <target> | dw <target> | git
+ * Analysis:  dexbot order [<bot>] | export <bot> | credit [<bot>]
+ *            dexbot tv <target> | dw <target> | pnl <account>
  * Files:     dexbot clear | clear-orders | clear-market-adapter | clear-all
  *
  * NPM SCRIPTS (alternative invocation):
@@ -174,24 +173,18 @@ const COMMAND_ALIASES: Record<string, string> = { orders: 'order', keys: 'key', 
 const CLI_HELP_FLAGS = ['-h', '--help'];
 const CLI_EXAMPLES_FLAG = '--cli-examples';
 const CLI_EXAMPLES = [
-    { title: 'Run a bot from the tracked config', command: 'dexbot test <bot>', notes: 'Runs live; targets the named entry in profiles/bots.json.' },
-    { title: 'Dry-run a bot without broadcasting', command: 'dexbot drystart <bot>', notes: 'Forces the run into dry-run mode even if the stored config was live.' },
-    { title: 'Disable a bot in config', command: 'dexbot disable <bot>', notes: 'Marks the bot inactive in config.' },
-    { title: 'Enable a bot in config', command: 'dexbot enable <bot>', notes: 'Marks the bot active in config.' },
-    { title: 'Reset all active bot grids', command: 'dexbot reset all', notes: 'Triggers full grid regeneration for every active bot.' },
-    { title: 'Reset a bot grid', command: 'dexbot reset <bot>', notes: 'Triggers a full grid regeneration for the named bot.' },
-    { title: 'Manage keys', command: 'dexbot key', notes: 'Runs modules/chain_keys.ts to add or update master passwords.' },
-    { title: 'Edit bot definitions', command: 'dexbot bot', notes: 'Launches the interactive modules/account_bots.ts helper for the JSON config.' },
-    { title: 'Start bots with PM2', command: 'dexbot pm2', notes: 'Generates ecosystem config, authenticates, and starts PM2.' },
-    { title: 'Update DEXBot2', command: 'dexbot update', notes: 'Fetches latest code, updates dependencies, and restarts PM2.' },
-    { title: 'Export bot trades for local analysis', command: 'dexbot export <bot>', notes: 'Exports trading history and settings to CSV/JSON (see analysis/).' },
-    { title: 'Analyze persisted order grids', command: 'dexbot order', notes: 'Runs the order analyzer across the orders directory (<profiles>/orders) and prints spread/increment/funds/distribution metrics. Add a bot key to render only that bot, and --export for an HTML report.' },
-    { title: 'Analyze git history', command: 'dexbot git', notes: 'Runs scripts/analyze-git.ts over the repository git history and writes an added/deleted-lines HTML chart (repo-stats.html) into the analysis charts directory. Source checkouts only.' },
-    { title: 'Show live credit/MPA positions', command: 'dexbot credit', notes: 'Queries get_margin_positions + get_credit_deals_by_borrower per preferredAccount and prints debt/collateral sums plus one Curr. CR line per whitelisted pair (active CR, else borrow-now CR vs funds avail. on the offer) and one Avar. CR line per bot. CR covers only pairs whitelisted in bots.json and listed on the current credit offer. Add a bot key to render only that bot.' },
-    { title: 'TradingView chart for a bot, pool, or pair', command: 'dexbot tv <bot|pool-id|AssetA/AssetB> --month 3', notes: 'Fetches 1h candles for N months (default 3, pool-first with orderbook fallback; --feed charts MPA price-feed history) and writes an auto-named HTML chart.' },
-    { title: 'PnL report for a bot or blockchain account', command: 'dexbot pnl <bot|account|1.2.x> --month 3 [--pair BASE/QUOTE]', notes: 'Resolves a local bot profile first, then the chain account, analyzes its fills for the requested window and writes a self-contained HTML PnL report.' },
-    { title: 'Clear all bot log files', command: 'dexbot clear', notes: 'Runs scripts/clear-logs.sh to remove *.log, rotated *.log.N and *.jsonl* from the logs directory (<profiles>/logs), including the credential audit trail daemon-audit.jsonl and its rotated siblings (named in the preview). Offline only: the scripts warn when a live runtime is detected, but a running bot keeps writing to unlinked files and the space is not freed until it restarts; dexbot clear-orders / clear-market-adapter / clear-all are undone within seconds (grid state is re-persisted, the adapter rewrites its state file and lock). Stop first with dexbot stop / dexbot pm2 stop all.' },
-    { title: 'Reset settings to defaults', command: 'dexbot default', notes: 'Runs scripts/reset-settings.sh to delete general.settings.json, market_profiles.json, and market_adapter_settings.json.' }
+    { title: 'Run a bot live', command: 'dexbot test <bot>', notes: 'Runs the named entry in profiles/bots.json once.' },
+    { title: 'Dry-run a bot', command: 'dexbot drystart <bot>', notes: 'Same as test, but never broadcasts.' },
+    { title: 'Reset every grid', command: 'dexbot reset all', notes: 'Pass a bot name to reset just one.' },
+    { title: 'Manage keys', command: 'dexbot key', notes: 'Set up the master password and keyring.' },
+    { title: 'Edit bot config', command: 'dexbot bot', notes: 'Interactive bots.json editor.' },
+    { title: 'Start bots with PM2', command: 'dexbot pm2', notes: 'Generate the ecosystem config and start PM2.' },
+    { title: 'Update DEXBot2', command: 'dexbot update', notes: 'Pull, install, and restart active bots.' },
+    { title: 'Export bot trades', command: 'dexbot export <bot>', notes: 'Write trades and settings to CSV/JSON.' },
+    { title: 'Analyze order grids', command: 'dexbot order', notes: 'Spread, increment, and funds; --export for HTML.' },
+    { title: 'Show live credit positions', command: 'dexbot credit', notes: 'Summed MPA + borrowed-credit positions per bot.' },
+    { title: 'Chart a bot, pool, or pair', command: 'dexbot tv <bot|pool-id|AssetA/AssetB> --month 3', notes: 'OHLC chart; --feed charts MPA price-feed history.' },
+    { title: 'PnL report', command: 'dexbot pnl <bot|account> --month 3 [--pair BASE/QUOTE]', notes: 'Self-contained HTML PnL report for the resolved bot or chain account.' }
 ];
 
 const STARTUP_COLORS = {
@@ -227,41 +220,40 @@ function printCLIUsage() {
     // and the description column is derived, so alignment never drifts.
     const groups: Array<[string, Array<[string, string]>]> = [
         ['Runtime', [
-            ['start [bot]', 'Start the monolithic runtime (--foreground, --isolated, --dryrun, --headless, claw-only, credit).'],
-            ['stop', 'Stop the monolithic runtime.'],
-            ['reload', 'Reload the monolithic runtime (leaves credential daemon untouched).'],
-            ['restart', 'Restart the monolithic runtime (re-unlocks credential daemon).'],
-            ['delete', 'Stop/delete all runtime processes.'],
-            ['status', 'Show bot runtime status (unlock monolithic/isolated or PM2).'],
-            ['pm2 [<sub>]', 'Start all active bots via PM2; also stop/restart/reload/delete (dexbot pm2 help).'],
+            ['start [bot]', 'Start the bot runtime (flags below).'],
+            ['stop', 'Stop the runtime.'],
+            ['reload', 'Reload the runtime without re-unlocking keys.'],
+            ['restart', 'Restart the runtime and re-unlock keys.'],
+            ['delete', 'Stop and delete all runtime processes.'],
+            ['status', 'Show runtime status.'],
+            ['pm2 [<sub>]', 'Manage PM2 bots (see: dexbot pm2 help).'],
         ]],
         ['Trading', [
-            ['test <bot>', 'Run the named bot live once (not a dry run).'],
-            ['drystart <bot>', 'Same as test but forced dry-run.'],
-            ['reset {all|<bot>}', 'Trigger grid reset(s); auto-reloads if running, else applies on next start.'],
+            ['test <bot>', 'Run a bot live once.'],
+            ['drystart <bot>', 'Run a bot without broadcasting.'],
+            ['reset {all|<bot>}', 'Reset grid state (applies now or on next start).'],
         ]],
         ['Config', [
-            ['bot', 'Interactive bot configurator (bots.json).'],
-            ['key', 'Set up master password and keyring.'],
+            ['bot', 'Interactive bots.json configurator.'],
+            ['key', 'Set up the master password and keyring.'],
             ['enable {all|<bot>}', 'Mark bot(s) active in config.'],
             ['disable {all|<bot>}', 'Mark bot(s) inactive in config.'],
-            ['default', 'Reset settings to defaults (deletes generated settings files).'],
-            ['update', 'Update DEXBot2 from the repository and restart active bots.'],
+            ['default', 'Reset generated settings to defaults.'],
+            ['update', 'Update DEXBot2 and restart active bots.'],
         ]],
         ['Analysis', [
-            ['order [<bot>]', 'Analyze order grids (spread, increment, funds); --export for HTML.'],
-            ['export <bot>', 'Export bot trades/settings to CSV/JSON for local analysis.'],
-            ['credit [<bot>]', 'Live summed MPA + borrowed-credit positions per asset per bot.'],
-            ['tv <target>', 'TradingView chart: 1h candles for <bot|pool-id|AssetA/AssetB> over --month N (default 3).'],
-            ['dw <target>', 'Dynamic-weight research chart: same targets/flags as tv (see analysis/).'],
-            ['pnl <account>', 'PnL HTML report for a bot/account over --month N, optional --pair BASE/QUOTE filter.'],
-            ['git', 'Analyze repository git history and write an added/deleted-lines HTML chart (source checkouts only).'],
+            ['order [<bot>]', 'Analyze persisted order grids; --export for HTML.'],
+            ['export <bot>', 'Export bot trades/settings to CSV/JSON.'],
+            ['credit [<bot>]', 'Show live MPA and borrowed-credit positions.'],
+            ['tv <target>', 'OHLC chart for <bot|pool-id|AssetA/AssetB>; --month N (default 3), --feed for MPA price-feed history.'],
+            ['dw <target>', 'Dynamic-weight research chart; same targets and flags as tv.'],
+            ['pnl <account>', 'HTML PnL report for a bot or account; --month N, optional --pair BASE/QUOTE filter.'],
         ]],
         ['Files', [
-            ['clear', 'Delete <profiles>/logs/*.log, *.log.N and *.jsonl* (audit trail included). Stop the runtime first.'],
-            ['clear-orders', 'Delete persisted grid state in <profiles>/orders (regenerated on next start).'],
-            ['clear-market-adapter', 'Delete market adapter data, state, lock, and adapter logs.'],
-            ['clear-all', 'All of the above, plus claw data. Stop the runtime first.'],
+            ['clear', 'Delete log files. Stop the runtime first.'],
+            ['clear-orders', 'Delete persisted grid state (regenerated on start).'],
+            ['clear-market-adapter', 'Delete market adapter data and state.'],
+            ['clear-all', 'Delete orders, logs, adapter, and claw data.'],
         ]],
     ];
     const width = Math.max(...groups.flatMap(([, entries]) => entries.map(([cmd]) => cmd.length))) + 2;
@@ -272,6 +264,11 @@ function printCLIUsage() {
             console.log(`  ${cmd.padEnd(width)}${desc}`);
         }
     }
+    console.log('Runtime flags (dexbot start):');
+    console.log(`  ${'--foreground'.padEnd(width)}Watch in the terminal (no auto-restart).`);
+    console.log(`  ${'--isolated'.padEnd(width)}One process per bot.`);
+    console.log(`  ${'--dryrun'.padEnd(width)}Run without broadcasting.`);
+    console.log(`  ${'--headless'.padEnd(width)}Non-interactive unlock (--password-file <path> or DEXBOT_MASTER_PASSWORD).`);
     console.log('Help & options:');
     console.log(`  ${'help, -h, --help'.padEnd(width)}Show this help.`);
     console.log(`  ${'--cli-examples'.padEnd(width)}Print curated CLI snippets.`);
