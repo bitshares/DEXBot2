@@ -434,21 +434,19 @@ Shared analyzers and chart renderers for the dynamic-weight signal path. Core en
 | Module | Purpose |
 |--------|---------|
 | `dynamic_weight_chart_generator.ts` | 4-panel uPlot chart with interactive knobs for dynamic weight tuning |
-| `kalman_trend_analyzer.ts` | Kalman filter with tactical (velocity) and modal (displacement) states |
-| `kalman_velocity_smoothing.ts` | Adaptive EMA smoothing for Kalman velocity (kf/kfd/kdt/kfs knobs) |
+| `kalman_trend_analyzer.ts` | Re-export shim → `market_adapter/core/signals/kalman_trend_analyzer.ts` |
+| `kalman_velocity_smoothing.ts` | Re-export shim → `market_adapter/core/signals/kalman_velocity_smoothing.ts` |
 | `kalman_chart_generator.ts` | Kalman signal chart generator |
-| `hurst_analyzer.ts` | Hurst Exponent via R/S analysis (rolling 256-bar window) |
-| `permutation_entropy_analyzer.ts` | Permutation Entropy via ordinal pattern counting (m=5, window=54) |
+| `hurst_analyzer.ts` | Re-export shim → `market_adapter/core/signals/hurst_analyzer.ts` |
+| `permutation_entropy_analyzer.ts` | Re-export shim → `market_adapter/core/signals/permutation_entropy_analyzer.ts` |
 | `volatility_chart_generator.ts` | ATR volatility / symmetric shift chart generator |
 | `regime_chart_generator.ts` | Regime classification chart generator |
 
 </details>
 
-**Tests:**
-
-```bash
-npm run test:legacy
-```
+The four signal analyzers are canonical in `market_adapter/core/signals/`; the
+files here are thin re-export shims so analysis tooling keeps a local import
+path.
 
 **Note:** `trend_detection/` has no external dependencies — runs directly from the compiled build (`node dist/...`).
 

@@ -71,15 +71,6 @@ const targets: Target[] = [
       return JSON.stringify(json, null, 2) + '\n';
     },
   },
-  {
-    file: 'analysis/trend_detection/package.json',
-    update(content, version) {
-      const json = JSON.parse(content);
-      if (json.version === version) return null;
-      json.version = version;
-      return JSON.stringify(json, null, 2) + '\n';
-    },
-  },
 
   // ── Source files (regex replacements) ──────────────────────
   {

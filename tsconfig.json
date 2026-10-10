@@ -35,7 +35,6 @@
     "node_modules",
     "dist",
     "profiles",
-    "tests",
-    "analysis/legacy/tests"
+    "tests"
   ]
 }

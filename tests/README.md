@@ -11,9 +11,6 @@ npm test
 # Run a single test file
 npm run build:tests
 node dist/tests/<file>.js
-
-# Run the archived legacy suites (excluded from `npm test`)
-npm run test:legacy
 ```
 
 ## Directory Layout
