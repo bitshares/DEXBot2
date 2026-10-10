@@ -17,6 +17,7 @@ import { Config } from '../modules/config.js';
  */
 
 import { runOnceForAma } from './market_adapter.js';
+import { walkCliArgs } from './cli_args.js';
 
 interface AmaOverrides {
     deltaThresholdPercent?: number;
@@ -112,60 +113,26 @@ function parseArgs(): CliArgs {
         overrides: {},
     };
 
-    for (let i = 0; i < args.length; i++) {
-        const a = args[i];
-        const v = args[i + 1];
-        switch (a) {
-            case '--bot':
-                out.bot = v;
-                i++;
-                break;
-            case '--deltaPercent':
-                out.overrides.deltaThresholdPercent = Number(v);
-                i++;
-                break;
-            case '--gridResetFactor':
-                throw new Error('--gridResetFactor is no longer supported; use --deltaPercent <percent>');
-            case '--bootstrapHours':
-                out.overrides.bootstrapLookbackHours = Number(v);
-                i++;
-                break;
-            case '--nativeBackfillHours':
-                out.overrides.nativeBackfillHours = Number(v);
-                i++;
-                break;
-            case '--maxStaleHours':
-                out.overrides.maxStaleHours = Number(v);
-                i++;
-                break;
-            case '--sourceRetries':
-                out.overrides.sourceRetries = Number(v);
-                i++;
-                break;
-            case '--retryDelayMs':
-                out.overrides.retryDelayMs = Number(v);
-                i++;
-                break;
-            case '--maxPages':
-                out.overrides.maxPages = Number(v);
-                i++;
-                break;
-            case '--pageLimit':
-                out.overrides.pageLimit = Number(v);
-                i++;
-                break;
-            case '--compact':
-                out.compact = true;
-                break;
-            case '--help':
-            case '-h':
-                printHelp();
-                process.exit(0);
-                break;
-            default:
-                throw new Error(`Unknown argument: ${a}`);
-        }
-    }
+    walkCliArgs(args, {
+        onHelp: () => {
+            printHelp();
+            process.exit(0);
+        },
+        flag: {
+            '--compact': () => { out.compact = true; },
+        },
+        value: {
+            '--bot': (v) => { out.bot = v ?? null; },
+            '--deltaPercent': (v) => { out.overrides.deltaThresholdPercent = Number(v); },
+            '--bootstrapHours': (v) => { out.overrides.bootstrapLookbackHours = Number(v); },
+            '--nativeBackfillHours': (v) => { out.overrides.nativeBackfillHours = Number(v); },
+            '--maxStaleHours': (v) => { out.overrides.maxStaleHours = Number(v); },
+            '--sourceRetries': (v) => { out.overrides.sourceRetries = Number(v); },
+            '--retryDelayMs': (v) => { out.overrides.retryDelayMs = Number(v); },
+            '--maxPages': (v) => { out.overrides.maxPages = Number(v); },
+            '--pageLimit': (v) => { out.overrides.pageLimit = Number(v); },
+        },
+    });
 
     return out;
 }

@@ -1060,16 +1060,14 @@ class MarketAdapterService {
 
         // Per-bar directional offset series — canonical implementation shared
         // with the research chart and test harness (see dynamic_weight_series.ts).
-        const seriesResult = computeDynamicWeightSeries({
+        // The base inputs are identical for the real series and the AMA-only
+        // diagnostic; only the Kalman inputs and clip threshold differ.
+        const seriesBaseInputs = {
             amaValues,
-            kalmanVelocityPct: kalmanSmoothedVelocityPct,
-            kalmanDisplacementPct: kalmanHistory.map((kr) => kr.displacementRawPct),
-            kalmanIsReady: kalmanHistory.map((kr) => kr.isReady),
             regimeMultipliers,
             lookbackBars,
             amaErPeriod: botAma.erPeriod,
             amaClipThreshold,
-            kalClipThreshold,
             neutralZonePct: nz,
             amaMaxSlopePct: amaMaxS,
             kalmanMaxSlopePct: kalMaxS,
@@ -1081,6 +1079,13 @@ class MarketAdapterService {
             minOutputThreshold,
             signalConfirmBars,
             clampFinalOutput: true,
+        };
+        const seriesResult = computeDynamicWeightSeries({
+            ...seriesBaseInputs,
+            kalmanVelocityPct: kalmanSmoothedVelocityPct,
+            kalmanDisplacementPct: kalmanHistory.map((kr) => kr.displacementRawPct),
+            kalmanIsReady: kalmanHistory.map((kr) => kr.isReady),
+            kalClipThreshold,
         });
         const {
             combinedOffSeries,
@@ -1101,32 +1106,52 @@ class MarketAdapterService {
         // alpha*(offset/norm)*gain*regime recomputation diverged from
         // finalOffset whenever gating or signal confirmation was active.)
         const amaOnlySeriesResult = computeDynamicWeightSeries({
-            amaValues,
+            ...seriesBaseInputs,
             kalmanVelocityPct: kalmanSmoothedVelocityPct.map(() => null),
             kalmanDisplacementPct: kalmanHistory.map(() => null),
             kalmanIsReady: kalmanHistory.map(() => false),
-            regimeMultipliers,
-            lookbackBars,
-            amaErPeriod: botAma.erPeriod,
-            amaClipThreshold,
             kalClipThreshold: Infinity,
-            neutralZonePct: nz,
-            amaMaxSlopePct: amaMaxS,
-            kalmanMaxSlopePct: kalMaxS,
-            offsetClamp,
-            dispScaleMinPct,
-            alpha,
-            dw,
-            gain,
-            minOutputThreshold,
-            signalConfirmBars,
-            clampFinalOutput: true,
         });
         const amaSlopeGated = slopeResult.isReady
             ? (useAmaBlend
                 ? (amaOnlySeriesResult.echoedOffSeries[amaOnlySeriesResult.echoedOffSeries.length - 1] ?? 0)
                 : 0)
             : 0;
+
+        // Shared report fragments so the diagnostic `amaSlope` snapshot, the
+        // persisted `weights.meta` and `dynamicWeightsPayload` cannot drift
+        // apart. Kept as separate pieces so each object keeps its original
+        // key order.
+        const blendReport = {
+            alpha,
+            dw,
+            gain,
+            atrPeriod,
+            maxSlopeOffset: mo,
+        };
+        const slopeConfigReport = {
+            amaSlope: {
+                maxSlopePct: amaMaxS,
+            },
+            kalmanSlope: {
+                maxSlopePct: kalMaxS,
+            },
+        };
+        const volatilityReport = {
+            clipPercentile,
+            neutralZonePct: nz,
+            volatilityThreshold,
+            volatilityExponent,
+            volatilityScaleX,
+        };
+        const kalmanReport = {
+            maxVolatilityOffset: volatilityClamp,
+            kalmanSmoothPct,
+            kalmanDispScaleMult,
+            kalmanDispThresholdMult,
+            kalmanSmoothSpanPct,
+            signalConfirmBars,
+        };
 
         const amaSlope = {
             trend:          slopeResult.trend,
@@ -1140,23 +1165,9 @@ class MarketAdapterService {
             weightVariance,
             isReady:        slopeResult.isReady,
             kalmanReady:    kalmanResult?.isReady ?? false,
-            alpha,
-            dw,
-            gain,
-            atrPeriod:      atrPeriod,
-            maxSlopeOffset: mo,
-            amaSlope: {
-                maxSlopePct: amaMaxS,
-            },
-            kalmanSlope: {
-                maxSlopePct: kalMaxS,
-            },
-            maxVolatilityOffset: volatilityClamp,
-            kalmanSmoothPct,
-            kalmanDispScaleMult,
-            kalmanDispThresholdMult,
-            kalmanSmoothSpanPct,
-            signalConfirmBars,
+            ...blendReport,
+            ...slopeConfigReport,
+            ...kalmanReport,
         };
 
         const staticSell = bot.weightDistribution?.sell ?? 0;
@@ -1193,34 +1204,16 @@ class MarketAdapterService {
                 regimeSensitivity,
                 absoluteThreshold,
                 volatilityPenalty:       volPenalty,
-                alpha,
-                dw,
-                gain,
-                atrPeriod:      atrPeriod,
-                maxSlopeOffset: mo,
+                ...blendReport,
                 maxAsymmetryFactor:  (cfg.asymmetricBounds?.maxAsymmetryFactor != null)
                     ? cfg.asymmetricBounds.maxAsymmetryFactor
                     : null,
                 minScaleSlots: (cfg.asymmetricBounds?.minScaleSlots != null)
                     ? cfg.asymmetricBounds.minScaleSlots
                     : null,
-                clipPercentile,
-                neutralZonePct: nz,
-                volatilityThreshold,
-                volatilityExponent,
-                volatilityScaleX,
-                amaSlope: {
-                    maxSlopePct: amaMaxS,
-                },
-                kalmanSlope: {
-                    maxSlopePct: kalMaxS,
-                },
-                maxVolatilityOffset: volatilityClamp,
-                kalmanSmoothPct,
-                kalmanDispScaleMult,
-                kalmanDispThresholdMult,
-                kalmanSmoothSpanPct,
-                signalConfirmBars,
+                ...volatilityReport,
+                ...slopeConfigReport,
+                ...kalmanReport,
                 amaChannelContribution: amaSlopeGated,
                 rawFinalOffset:          rawFinalOff,
                 trendOffset:             trendOff,
@@ -1241,28 +1234,10 @@ class MarketAdapterService {
             amaSlopeGated,
             volatilityPenalty: volPenalty,
             finalOffset:      finalOff,
-            alpha,
-            dw,
-            gain,
-            atrPeriod:      atrPeriod,
-            maxSlopeOffset: mo,
-            amaSlope: {
-                maxSlopePct: amaMaxS,
-            },
-            kalmanSlope: {
-                maxSlopePct: kalMaxS,
-            },
-            clipPercentile,
-            neutralZonePct: nz,
-            volatilityThreshold,
-            volatilityExponent,
-            volatilityScaleX,
-            maxVolatilityOffset: volatilityClamp,
-            kalmanSmoothPct,
-            kalmanDispScaleMult,
-            kalmanDispThresholdMult,
-            kalmanSmoothSpanPct,
-            signalConfirmBars,
+            ...blendReport,
+            ...slopeConfigReport,
+            ...volatilityReport,
+            ...kalmanReport,
             rawFinalOffset:      rawFinalOff,
             maxAsymmetryFactor:  (cfg.asymmetricBounds?.maxAsymmetryFactor != null)
                 ? cfg.asymmetricBounds.maxAsymmetryFactor
@@ -1694,6 +1669,27 @@ class MarketAdapterService {
                 const bucketMs = Number(Number(cfg.intervalSeconds)) * 1000;
                 const nowMs = this.getNowMs();
 
+                // Native order-book history fetch shared by the bootstrap
+                // fallback and the incremental path. Returns [] on failure
+                // (after the same warn the inline blocks used to emit).
+                const fetchNativeHistory = async (startMs: number, failureLabel: string): Promise<number[][]> => {
+                    try {
+                        if (typeof deps.fetchNativeMarketHistorySince === 'function') {
+                            return await deps.withRetries(() => deps.fetchNativeMarketHistorySince(
+                                ctx.assetA,
+                                ctx.assetB,
+                                startMs,
+                                nowMs,
+                                Number(cfg.intervalSeconds),
+                                { fillCandleGaps: deps.fillCandleGaps }
+                            ), cfg.sourceRetries, cfg.retryDelayMs, failureLabel);
+                        }
+                    } catch (_) {
+                        if (typeof deps.logger?.warn === 'function') deps.logger.warn(`[market_adapter] ${ctx.botKey}: ${failureLabel}`);
+                    }
+                    return [];
+                };
+
                 if (needBootstrap) {
                     // Bootstrap: Kibana first (deep history), native as fallback
                     const kibanaLookbackHours = this.bootstrapKibanaLookbackHours(cfg, rawKeepCount);
@@ -1720,21 +1716,7 @@ class MarketAdapterService {
                             (analysisKeepCount * Math.max(Number(Number(cfg.intervalSeconds)) || 3600, 3600)) / 3600
                         );
                         const nativeStartMs = Math.max(0, nowMs - (nativeLookbackHours * 3600 * 1000));
-                        let nativeCandles: number[][] = [];
-                        try {
-                            if (typeof deps.fetchNativeMarketHistorySince === 'function') {
-                                nativeCandles = await deps.withRetries(() => deps.fetchNativeMarketHistorySince(
-                                    ctx.assetA,
-                                    ctx.assetB,
-                                    nativeStartMs,
-                                    nowMs,
-                                    Number(cfg.intervalSeconds),
-                                    { fillCandleGaps: deps.fillCandleGaps }
-                                ), cfg.sourceRetries, cfg.retryDelayMs, 'native market history bootstrap failed');
-                            }
-                        } catch (_) {
-                            if (typeof deps.logger?.warn === 'function') deps.logger.warn(`[market_adapter] ${ctx.botKey}: native market history bootstrap failed`);
-                        }
+                        const nativeCandles = await fetchNativeHistory(nativeStartMs, 'native market history bootstrap failed');
 
                         if (Array.isArray(nativeCandles) && nativeCandles.length > 0) {
                             nextCandles = nativeCandles;
@@ -1747,21 +1729,7 @@ class MarketAdapterService {
                     // Incremental: native fetch
                     const lastTs = nextCandles[nextCandles.length - 1]?.[0] || 0;
                     const nativeStartMs = Math.max(0, lastTs - bucketMs);
-                    let nativeCandles: number[][] = [];
-                    try {
-                        if (typeof deps.fetchNativeMarketHistorySince === 'function') {
-                            nativeCandles = await deps.withRetries(() => deps.fetchNativeMarketHistorySince(
-                                ctx.assetA,
-                                ctx.assetB,
-                                nativeStartMs,
-                                nowMs,
-                                Number(cfg.intervalSeconds),
-                                { fillCandleGaps: deps.fillCandleGaps }
-                            ), cfg.sourceRetries, cfg.retryDelayMs, 'native market history fetch failed');
-                        }
-                    } catch (_) {
-                        if (typeof deps.logger?.warn === 'function') deps.logger.warn(`[market_adapter] ${ctx.botKey}: native market history fetch failed`);
-                    }
+                    const nativeCandles = await fetchNativeHistory(nativeStartMs, 'native market history fetch failed');
 
                     if (Array.isArray(nativeCandles) && nativeCandles.length > 0) {
                         nextCandles = deps.mergeCandles(nextCandles, nativeCandles);
@@ -2266,6 +2234,27 @@ class MarketAdapterService {
             : null;
         hasNewClosedCandle = lastClosedCandleTs !== null && lastClosedCandleTs > previousClosedCandleTs;
 
+        // Fields shared by the persisted bot state and the cycle result.
+        // Built on demand so `consumedClosedCandleTs` is read after the
+        // retry-baseline adjustment below, rather than frozen early.
+        const buildCandleCycleFields = () => ({
+            candleCount: nextCandles.length,
+            analysisCandleCount: closedCandles.length,
+            rawKeepCount,
+            analysisKeepCount,
+            amaWarmupBars,
+            kibanaGapRepairCount,
+            kibanaBackfillCount,
+            unresolvedGapCount,
+            nativeRecentTradeSequences,
+            nativeLastTradeTs,
+            nativeOverlapCount,
+            nativePagesFetched,
+            lastCandleTs: rawLastCandleTs,
+            rawLastCandleTs,
+            lastClosedCandleTs: consumedClosedCandleTs,
+        });
+
         const candlePayload = {
             meta: {
                 updatedAt: nowIso,
@@ -2316,21 +2305,7 @@ class MarketAdapterService {
                 poolId: ctx.poolId,
                 marketSource,
                 candleFile: deps.path.relative(deps.root, filePath),
-                candleCount: nextCandles.length,
-                analysisCandleCount: closedCandles.length,
-                rawKeepCount,
-                analysisKeepCount,
-                amaWarmupBars,
-                kibanaGapRepairCount,
-                kibanaBackfillCount,
-                unresolvedGapCount,
-                nativeRecentTradeSequences,
-                nativeLastTradeTs,
-                nativeOverlapCount,
-                nativePagesFetched,
-                lastCandleTs: rawLastCandleTs,
-                rawLastCandleTs,
-                lastClosedCandleTs: consumedClosedCandleTs,
+                ...buildCandleCycleFields(),
                 lastCycleSource: sourceLabel,
                 lastCycleAt: nowIso,
                 staleData,
@@ -2342,27 +2317,13 @@ class MarketAdapterService {
                 dryRunMessages,
                 source: sourceLabel,
                 marketSource,
-                candleCount: nextCandles.length,
-                analysisCandleCount: closedCandles.length,
-                rawKeepCount,
-                analysisKeepCount,
-                amaWarmupBars,
-                kibanaGapRepairCount,
-                kibanaBackfillCount,
-                unresolvedGapCount,
-                nativeRecentTradeSequences,
-                nativeLastTradeTs,
-                nativeOverlapCount,
-                nativePagesFetched,
+                ...buildCandleCycleFields(),
                 thresholdPercent: botThreshold,
                 staleData,
                 staleAgeHours,
                 triggerSuppressedReason,
                 poolId: ctx.poolId,
                 candleFile: deps.path.relative(deps.root, filePath),
-                lastCandleTs: rawLastCandleTs,
-                rawLastCandleTs,
-                lastClosedCandleTs: consumedClosedCandleTs,
                 amaConfig: {
                     erPeriod: botAma.erPeriod,
                     fastPeriod: botAma.fastPeriod,
@@ -2816,21 +2777,7 @@ class MarketAdapterService {
             poolId: ctx.poolId,
             marketSource,
             candleFile: deps.path.relative(deps.root, filePath),
-            candleCount: nextCandles.length,
-            analysisCandleCount: analysisCandles.length,
-            rawKeepCount,
-            analysisKeepCount,
-            amaWarmupBars,
-            kibanaGapRepairCount,
-            kibanaBackfillCount,
-            unresolvedGapCount,
-            nativeRecentTradeSequences,
-            nativeLastTradeTs,
-            nativeOverlapCount,
-            nativePagesFetched,
-            lastCandleTs: rawLastCandleTs,
-            rawLastCandleTs,
-            lastClosedCandleTs: consumedClosedCandleTs,
+            ...buildCandleCycleFields(),
             lastAmaPrice: amaPrice,
             amaCenterPrice: Number(botState.amaCenterPrice || 0) > 0
                 ? Number(botState.amaCenterPrice)
@@ -2886,18 +2833,7 @@ class MarketAdapterService {
             source: sourceLabel,
             marketSource,
             intervalSeconds: Number(cfg.intervalSeconds),
-            candleCount: nextCandles.length,
-            analysisCandleCount: analysisCandles.length,
-            rawKeepCount,
-            analysisKeepCount,
-            amaWarmupBars,
-            kibanaGapRepairCount,
-            kibanaBackfillCount,
-            unresolvedGapCount,
-            nativeRecentTradeSequences,
-            nativeLastTradeTs,
-            nativeOverlapCount,
-            nativePagesFetched,
+            ...buildCandleCycleFields(),
             amaPrice,
             previousCenterPrice,
             deltaPercent,
@@ -2925,9 +2861,6 @@ class MarketAdapterService {
             hasExplicitBaseWeights,
             poolId: ctx.poolId,
             candleFile: deps.path.relative(deps.root, filePath),
-            lastCandleTs: rawLastCandleTs,
-            rawLastCandleTs,
-            lastClosedCandleTs: consumedClosedCandleTs,
             lastClosedCandleClose: Number(latestClosedCandle?.[4]),
             centerPrice,
             amaConfig: {

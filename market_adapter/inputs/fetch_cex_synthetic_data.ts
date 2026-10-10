@@ -27,7 +27,7 @@ const {
     DEFAULTS: MARKET_ADAPTER_DEFAULTS,
     resolveAmaForBot,
     resolveBotCfg,
-} = require('../market_adapter/market_adapter');
+} = require('../market_adapter');
 
 const DEFAULT_INTERVAL = '1h';
 const DEFAULT_LIMIT = 1000;
@@ -355,6 +355,63 @@ function extractMarketsFromList(list: unknown, mapper: (row: unknown) => MarketR
     return rows.map(mapper).filter((row): row is MarketRow => Boolean(row && row.id && row.base && row.quote));
 }
 
+// Interval → venue-specific unit tables. Most CEX APIs share one of a few
+// shapes; keep one table per shape and compose where a venue overrides a
+// single unit (Kraken day/week, MEXC's case-sensitive `1W`).
+const INTERVAL_MINUTES: Record<string, string> = {
+    '1m': '1',
+    '5m': '5',
+    '15m': '15',
+    '30m': '30',
+    '1h': '60',
+    '4h': '240',
+    '6h': '360',
+    '12h': '720',
+    '1d': 'D',
+    '1w': 'W',
+};
+const INTERVAL_KRAKEN: Record<string, string> = {
+    ...INTERVAL_MINUTES,
+    '1d': '1440',
+    '1w': '10080',
+};
+const INTERVAL_DURATION: Record<string, string> = {
+    '1m': '1min',
+    '5m': '5min',
+    '15m': '15min',
+    '30m': '30min',
+    '1h': '1hour',
+    '4h': '4hour',
+    '6h': '6hour',
+    '12h': '12hour',
+    '1d': '1day',
+    '1w': '1week',
+};
+const INTERVAL_HTX: Record<string, string> = {
+    ...INTERVAL_DURATION,
+    '1h': '60min',
+};
+const INTERVAL_BITGET: Record<string, string> = {
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '30m': '30m',
+    '1h': '1h',
+    '4h': '4h',
+    '6h': '6h',
+    '12h': '12h',
+    '1d': '1d',
+    '1w': '1w',
+};
+const INTERVAL_MEXC: Record<string, string> = {
+    ...INTERVAL_BITGET,
+    '1h': '60m',
+    // MEXC interval enums are case-sensitive
+    '1w': '1W',
+};
+
+const intervalFormatter = (map: Record<string, string>) => (interval: string) => map[lower(interval)] || interval;
+
 const EXCHANGES: Record<string, ExchangeAdapter> = {
     binance: {
         name: 'Binance',
@@ -377,21 +434,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
     },
     bybit: {
         name: 'Bybit',
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1',
-                '5m': '5',
-                '15m': '15',
-                '30m': '30',
-                '1h': '60',
-                '4h': '240',
-                '6h': '360',
-                '12h': '720',
-                '1d': 'D',
-                '1w': 'W',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_MINUTES),
         marketsUrl: 'https://api.bybit.com/v5/market/instruments-info?category=spot&limit=1000',
         candlesUrl: ({ id, interval, limit, sinceMs, untilMs }: CandlesUrlOpts) => {
             const url = new URL('https://api.bybit.com/v5/market/kline');
@@ -430,21 +473,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
     },
     bitget: {
         name: 'Bitget',
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1m',
-                '5m': '5m',
-                '15m': '15m',
-                '30m': '30m',
-                '1h': '1h',
-                '4h': '4h',
-                '6h': '6h',
-                '12h': '12h',
-                '1d': '1d',
-                '1w': '1w',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_BITGET),
         marketsUrl: 'https://api.bitget.com/api/v2/spot/public/symbols',
         candlesUrl: ({ id, interval, limit, sinceMs, untilMs }: CandlesUrlOpts) => {
             const url = new URL('https://api.bitget.com/api/v2/spot/market/candles');
@@ -463,21 +492,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
     },
     kucoin: {
         name: 'KuCoin',
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1min',
-                '5m': '5min',
-                '15m': '15min',
-                '30m': '30min',
-                '1h': '1hour',
-                '4h': '4hour',
-                '6h': '6hour',
-                '12h': '12hour',
-                '1d': '1day',
-                '1w': '1week',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_DURATION),
         marketsUrl: 'https://api.kucoin.com/api/v2/symbols',
         candlesUrl: ({ id, interval, sinceMs, untilMs }: CandlesUrlOpts) => {
             const url = new URL('https://api.kucoin.com/api/v1/market/candles');
@@ -495,21 +510,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
     },
     htx: {
         name: 'HTX',
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1min',
-                '5m': '5min',
-                '15m': '15min',
-                '30m': '30min',
-                '1h': '60min',
-                '4h': '4hour',
-                '6h': '6hour',
-                '12h': '12hour',
-                '1d': '1day',
-                '1w': '1week',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_HTX),
         marketsUrl: 'https://api.htx.com/v1/common/symbols',
         candlesUrl: ({ id, interval, limit, sinceMs, untilMs }: CandlesUrlOpts) => {
             // Official Huobi/HTX spot historical kline endpoint is /market/history/kline
@@ -539,21 +540,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
     },
     kraken: {
         name: 'Kraken',
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1',
-                '5m': '5',
-                '15m': '15',
-                '30m': '30',
-                '1h': '60',
-                '4h': '240',
-                '6h': '360',
-                '12h': '720',
-                '1d': '1440',
-                '1w': '10080',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_KRAKEN),
         marketsUrl: 'https://api.kraken.com/0/public/AssetPairs',
         candlesUrl: ({ id, interval, intervalSeconds, limit, sinceMs }: CandlesUrlOpts) => {
             const url = new URL('https://api.kraken.com/0/public/OHLC');
@@ -586,21 +573,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
         name: 'OKX',
         // /api/v5/market/candles caps limit at CEX_PAGE_LIMIT_CAPS.okx per request
         maxLimit: MARKET_ADAPTER.CEX_PAGE_LIMIT_CAPS.okx,
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1',
-                '5m': '5',
-                '15m': '15',
-                '30m': '30',
-                '1h': '60',
-                '4h': '240',
-                '6h': '360',
-                '12h': '720',
-                '1d': 'D',
-                '1w': 'W',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_MINUTES),
         marketsUrl: 'https://www.okx.com/api/v5/public/instruments?instType=SPOT',
         candlesUrl: ({ id, interval, limit, sinceMs, untilMs }: CandlesUrlOpts) => {
             const url = new URL('https://www.okx.com/api/v5/market/candles');
@@ -621,22 +594,7 @@ const EXCHANGES: Record<string, ExchangeAdapter> = {
         name: 'MEXC',
         // /api/v3/klines caps limit at CEX_PAGE_LIMIT_CAPS.mexc per request
         maxLimit: MARKET_ADAPTER.CEX_PAGE_LIMIT_CAPS.mexc,
-        formatInterval: (interval: string) => {
-            const map: Record<string, string> = {
-                '1m': '1m',
-                '5m': '5m',
-                '15m': '15m',
-                '30m': '30m',
-                '1h': '60m',
-                '4h': '4h',
-                '6h': '6h',
-                '12h': '12h',
-                '1d': '1d',
-                // MEXC interval enums are case-sensitive
-                '1w': '1W',
-            };
-            return map[lower(interval)] || interval;
-        },
+        formatInterval: intervalFormatter(INTERVAL_MEXC),
         marketsUrl: 'https://api.mexc.com/api/v3/exchangeInfo',
         candlesUrl: ({ id, interval, limit, sinceMs, untilMs }: CandlesUrlOpts) => {
             const url = new URL('https://api.mexc.com/api/v3/klines');

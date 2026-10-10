@@ -56,6 +56,7 @@ import {
     buildAsymmetricBoundsLog,
     buildStartupDefaultsLog,
 } from './log_format.js';
+import { walkCliArgs } from './cli_args.js';
 
 /**
  * PRICE ADAPTER — standalone or auto-launched by dexbot runtime.
@@ -720,73 +721,33 @@ function parseArgs() {
         deltaThresholdPercent: false,
     };
 
-    for (let i = 0; i < args.length; i++) {
-        const a = args[i];
-        const v = args[i + 1];
-        switch (a) {
-            case '--once':
-                cfg.once = true;
-                break;
-            case '--pollSeconds':
-                cfg.pollSeconds = Number(v);
-                i++;
-                break;
-            case '--deltaPercent':
+    walkCliArgs(args, {
+        onHelp: () => {
+            printHelp();
+            process.exit(0);
+        },
+        flag: {
+            '--once': () => { cfg.once = true; },
+            '--metricsJson': () => { cfg.metricsJson = true; },
+            '--quiet': () => { cfg.quiet = true; },
+            '--dryRun': () => { cfg.dryRun = true; },
+            '--whitelist-all': () => { cfg.whitelistAll = true; },
+        },
+        value: {
+            '--pollSeconds': (v) => { cfg.pollSeconds = Number(v); },
+            '--deltaPercent': (v) => {
                 cfg.deltaThresholdPercent = Number(v);
                 provided.deltaThresholdPercent = true;
-                i++;
-                break;
-            case '--gridResetFactor':
-                throw new Error('--gridResetFactor is no longer supported; use --deltaPercent <percent>');
-            case '--bootstrapHours':
-                cfg.bootstrapLookbackHours = Number(v);
-                i++;
-                break;
-            case '--nativeBackfillHours':
-                cfg.nativeBackfillHours = Number(v);
-                i++;
-                break;
-            case '--maxStaleHours':
-                cfg.maxStaleHours = Number(v);
-                i++;
-                break;
-            case '--sourceRetries':
-                cfg.sourceRetries = Number(v);
-                i++;
-                break;
-            case '--retryDelayMs':
-                cfg.retryDelayMs = Number(v);
-                i++;
-                break;
-            case '--metricsJson':
-                cfg.metricsJson = true;
-                break;
-            case '--quiet':
-                cfg.quiet = true;
-                break;
-            case '--dryRun':
-                cfg.dryRun = true;
-                break;
-            case '--whitelist-all':
-                cfg.whitelistAll = true;
-                break;
-            case '--maxPages':
-                cfg.maxPages = Number(v);
-                i++;
-                break;
-            case '--pageLimit':
-                cfg.pageLimit = Number(v);
-                i++;
-                break;
-            case '--help':
-            case '-h':
-                printHelp();
-                process.exit(0);
-                break;
-            default:
-                throw new Error(`Unknown argument: ${a}`);
-        }
-    }
+            },
+            '--bootstrapHours': (v) => { cfg.bootstrapLookbackHours = Number(v); },
+            '--nativeBackfillHours': (v) => { cfg.nativeBackfillHours = Number(v); },
+            '--maxStaleHours': (v) => { cfg.maxStaleHours = Number(v); },
+            '--sourceRetries': (v) => { cfg.sourceRetries = Number(v); },
+            '--retryDelayMs': (v) => { cfg.retryDelayMs = Number(v); },
+            '--maxPages': (v) => { cfg.maxPages = Number(v); },
+            '--pageLimit': (v) => { cfg.pageLimit = Number(v); },
+        },
+    });
 
     const merged = applyRuntimeDefaultsFromGeneralSettings(cfg, provided);
     return validateConfig(merged);
