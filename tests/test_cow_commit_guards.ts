@@ -1187,8 +1187,10 @@ async function testGapBandPlacementShadowIsObservabilityOnly() {
     const originalBuildCreate = chainOrders.buildCreateOrderOp;
     chainOrders.batchReadOrders = async () => [];
     // Force the CREATE build to bail without a real op; the assertion is on the
-    // pre-broadcast shadow counter, not on the broadcast.
-    chainOrders.buildCreateOrderOp = async () => { throw new Error('not configured'); };
+    // pre-broadcast shadow counter, not on the broadcast. Counting the call
+    // proves the shadow did NOT refuse the batch before op-building.
+    let buildCreateCalls = 0;
+    chainOrders.buildCreateOrderOp = async () => { buildCreateCalls += 1; throw new Error('not configured'); };
 
     const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
     try {
@@ -1204,6 +1206,7 @@ async function testGapBandPlacementShadowIsObservabilityOnly() {
             }]
         });
         assert.notStrictEqual(result.reason, 'GAP_BAND_PLACEMENT', 'shadow check must never abort the batch');
+        assert.strictEqual(buildCreateCalls, 1, 'shadow is observability-only: the batch must still reach op-building');
         assert.strictEqual(
             Number(bot._metrics.gapBandPlacementShadowCount) || 0,
             before + 1,

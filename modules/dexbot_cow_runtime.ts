@@ -2075,7 +2075,7 @@ function logGridPriceInvariantSummary(bot: BotLike, stats: GridPriceInvariantSta
  * the last filled BUY pivot.
  *
  * This is the "re-stamp a just-filled BUY above the anchor" shape the
- * LAST-FILL-GUARD exists to block (`BUY < pivot*(1-half)`), so a counted
+ * LAST-FILL-GUARD exists to block (`BUY > pivot*(1-half)`), so a counted
  * emission means the guard was bypassed (spread correction / stamped gap
  * evacuation) or the pivot was unjudgeable and the probe failed open. The
  * counter makes a bypass leak visible without changing placement policy —
@@ -2135,6 +2135,12 @@ function recordRestampBuyAboveAnchor(bot: BotLike, price: unknown, type: unknown
  */
 function collectGapBandPlacementShadowSlots(actions: CowAction[] | null | undefined, boundary: unknown, gapSlots: unknown): string[] {
     try {
+        // Explicit null/empty guard BEFORE Number(): Number(null) === 0 and
+        // Number('') === 0 would otherwise read an unknown boundary as slot 0
+        // and select a real gap band around it (same trap that
+        // buildCowResultFromPlan guards for workingBoundary).
+        if (boundary === null || boundary === undefined || boundary === '') return [];
+        if (gapSlots === null || gapSlots === undefined || gapSlots === '') return [];
         const b = Number(boundary);
         const g = Number(gapSlots);
         if (!Number.isFinite(b) || !Number.isFinite(g) || !Array.isArray(actions)) return [];
@@ -3541,7 +3547,12 @@ async function runPreBroadcastGuards(bot: BotLike, cowResult: CowResult): Promis
         const planBoundaryRaw = (planBoundaryValue === null || planBoundaryValue === undefined || planBoundaryValue === '')
             ? NaN
             : Number(planBoundaryValue);
-        const shadowBoundary = Number.isFinite(planBoundaryRaw) ? planBoundaryRaw : Number(bot.manager?.boundaryIdx);
+        // Fall back to the committed boundary only when it is itself known:
+        // Number(null) === 0 must not silently become slot 0 (see the helper).
+        const managerBoundaryRaw = bot.manager?.boundaryIdx;
+        const shadowBoundary = Number.isFinite(planBoundaryRaw)
+            ? planBoundaryRaw
+            : (managerBoundaryRaw != null ? Number(managerBoundaryRaw) : NaN);
         const shadowGapSlots = Number(bot.manager?._gapSlots);
         const shadowSlots = collectGapBandPlacementShadowSlots(actions, shadowBoundary, shadowGapSlots);
         if (shadowSlots.length > 0) {

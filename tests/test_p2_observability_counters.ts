@@ -24,7 +24,7 @@
 const assert = require('assert');
 const { recordRestampBuyAboveAnchor, collectGapBandPlacementShadowSlots } = require('../modules/dexbot_cow_runtime');
 const { getSellStartIdx } = require('../modules/order/utils/math');
-const { ORDER_TYPES, ORDER_STATES, COW_ACTIONS } = require('../modules/constants');
+const { ORDER_TYPES, ORDER_STATES, COW_ACTIONS, COW_ORIGINS } = require('../modules/constants');
 
 function makeBot(opts: any = {}) {
     const logs: Array<{ msg: string; level?: string }> = [];
@@ -133,13 +133,13 @@ function testGapBandShadowCollectsOnlySuspiciousRailPlacements() {
     );
     // Spread correction legitimately places into the band -> exempt.
     assert.deepStrictEqual(
-        collectGapBandPlacementShadowSlots([create('slot-6', { origin: 'spread-correction' })], boundary, gapSlots),
+        collectGapBandPlacementShadowSlots([create('slot-6', { origin: COW_ORIGINS.SPREAD_CORRECTION })], boundary, gapSlots),
         [],
         'spread-correction in-band placement is expected and exempt'
     );
     // Gap evacuation's destination is out-of-band; exempt regardless.
     assert.deepStrictEqual(
-        collectGapBandPlacementShadowSlots([rotation('slot-6', 'slot-7', { origin: 'gap-evacuation' })], boundary, gapSlots),
+        collectGapBandPlacementShadowSlots([rotation('slot-6', 'slot-7', { origin: COW_ORIGINS.GAP_EVACUATION })], boundary, gapSlots),
         [],
         'gap-evacuation is exempt'
     );
@@ -153,6 +153,13 @@ function testGapBandShadowCollectsOnlySuspiciousRailPlacements() {
     assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-6')], null, gapSlots), [], 'null boundary -> empty');
     assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-6')], boundary, undefined), [], 'undefined gap -> empty');
     assert.deepStrictEqual(collectGapBandPlacementShadowSlots(null, boundary, gapSlots), [], 'null actions -> empty');
+    // Explicit null/'' must NOT be read as boundary 0: a low index would
+    // otherwise land in a real band around slot 0 (Number(null) === 0 trap).
+    assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-1')], null, gapSlots), [], 'null boundary is not slot 0');
+    assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-1')], '', gapSlots), [], 'empty-string boundary is not slot 0');
+    assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-1')], 0, null), [], 'null gap -> empty');
+    // A genuine boundary 0 is still valid and yields its band.
+    assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('slot-1')], 0, gapSlots), ['slot-1'], 'boundary 0 remains a usable boundary');
     // Unparseable slot id -> excluded.
     assert.deepStrictEqual(collectGapBandPlacementShadowSlots([create('deep-1')], boundary, gapSlots), [], 'unparseable id -> empty');
 
@@ -231,8 +238,8 @@ function testBoundaryDriftExceedsWindowCounter() {
         currentBoundaryIdx: null,
     });
 
-    assert.ok(manager._metrics.boundaryDriftExceedsWindowCount >= 1,
-        `expected drift counter to fire, got ${manager._metrics.boundaryDriftExceedsWindowCount}`);
+    assert.strictEqual(manager._metrics.boundaryDriftExceedsWindowCount, 1,
+        `expected exactly one drift count per plan, got ${manager._metrics.boundaryDriftExceedsWindowCount}`);
 
     console.log('  PASS');
 }
