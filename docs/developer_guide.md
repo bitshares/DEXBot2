@@ -779,12 +779,12 @@ createOrderGrid(config)
 // Initialize with blockchain balances
 initializeGrid(manager)
 
-// Detect divergence and trigger updates
+// Complete fund trigger: available-funds ratio + over-allocation + the
+// on-chain committed-drift leg (closes the virtual-reservation blind spot)
 checkAndUpdateGridIfNeeded(manager)
 
-// Close the virtual-reservation blind spot: flag a side whose on-chain orders
-// lag the geometric ideal even after the ratio numerator (chainFree - virtual)
-// was masked by the fill/rotation reservation
+// Drift-only async accessor (refreshes funds first); its core is folded into
+// checkAndUpdateGridIfNeeded above
 checkCommittedSizeDrift(manager)
 
 // Compare ideal vs. persisted grid

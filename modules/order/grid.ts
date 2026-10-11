@@ -35,10 +35,10 @@
  *   7. recalculateGrid(manager, opts) - Recalculate grid based on current state
  *
  * GRID STATE CHECKING (2 functions)
- *   8. checkAndUpdateGridIfNeeded(manager) - Check if grid needs update
- *   8b. checkCommittedSizeDrift(manager) - Flag a side whose on-chain orders
- *       lag the geometric ideal (closes the fund-trigger blind spot left by
- *       VIRTUAL reservations absorbing deposits/withdrawals)
+ *   8. checkAndUpdateGridIfNeeded(manager) - Complete fund trigger: available-
+ *       funds ratio + over-allocation + on-chain committed-drift legs
+ *   8b. checkCommittedSizeDrift(manager) - Async committed-drift-only accessor
+ *       (the drift core is folded into checkAndUpdateGridIfNeeded)
  *
  * BLOCKCHAIN SYNCHRONIZATION (2 functions - async)
  *   9. _recalculateGridOrderSizesFromBlockchain(manager, orderType, options) - Recalculate sizes from blockchain
@@ -372,13 +372,8 @@ export function clearGridBloatFlag(manager: OrderManagerLike): void {
      * @returns {Promise<any|null>}
      * @private
      */
-export async function _getSizingContext(manager: OrderManagerLike, side: string, { skipRecalc = false }: { skipRecalc?: boolean } = {}): Promise<{ budget: number; precision: number; config: GridConfig } | null> {
+function _computeSizingContextSync(manager: OrderManagerLike, side: string): { budget: number; precision: number; config: GridConfig } | null {
         if (!manager || !manager.assets) return null;
-
-        // 1. Ensure fund state is fresh before sizing
-        if (!skipRecalc) {
-            await manager.recalculateFunds();
-        }
 
         const snap = manager.getChainFundsSnapshot ? manager.getChainFundsSnapshot() : ({} as unknown as ChainFundsSnapshot);
         const isBuy = side === 'buy';
@@ -429,6 +424,19 @@ export async function _getSizingContext(manager: OrderManagerLike, side: string,
             precision: getPrecisionByOrderType(manager.assets, type),
             config: manager.config
         };
+    }
+
+    /**
+     * Async sizing-context accessor. Refreshes funds unless `skipRecalc`, then
+     * delegates to the sync core. Both divergence legs (ratio and committed
+     * drift) size through the sync core so they read one fund snapshot.
+     */
+export async function _getSizingContext(manager: OrderManagerLike, side: string, { skipRecalc = false }: { skipRecalc?: boolean } = {}): Promise<{ budget: number; precision: number; config: GridConfig } | null> {
+        if (!manager || !manager.assets) return null;
+        if (!skipRecalc) {
+            await manager.recalculateFunds();
+        }
+        return _computeSizingContextSync(manager, side);
     }
 
     /**
@@ -1772,8 +1780,11 @@ export function checkAndUpdateGridIfNeeded(manager: OrderManagerLike): { buyUpda
             // chain-total drops: a normal fill moves value across sides (pays one
             // asset, receives the other), so one side's total routinely drops >=3%
             // on ordinary fills — and the fill pipeline already re-sizes from the
-            // post-fill budget. External removal is caught here because the
-            // committed/planned grid stays put while the allocation sinks.
+            // post-fill budget. External removal is caught here only while the plan
+            // still carries the old budget; once the fill pipeline re-derives
+            // VIRTUAL downward the overAlloc gap closes (grid == allocated), and the
+            // committed-drift leg folded in below is what catches it. The two
+            // together cover the pre- and post-pipeline phases.
             // NOTE: with an explicit 0 allocation the shared fallback denominator
             // yields overAlloc ≈ +100%, i.e. a 0%-funded side holding size always
             // triggers — which is the desired unwind (zero budget sizes everything
@@ -1801,6 +1812,19 @@ export function checkAndUpdateGridIfNeeded(manager: OrderManagerLike): { buyUpda
                 }
             }
         }
+
+        // Fold the committed-drift legs into this single entry so the trigger is
+        // complete on its own. Both numerators above track `virtual` (the grow
+        // denominator via `availableFunds`, the shrink base via `total.grid`), so
+        // an external deposit/withdrawal already folded into the plan by the
+        // fill pipeline is invisible to them. The on-chain committed delta closes
+        // that gap in both directions. Callers must refresh funds first
+        // (monitorDivergence does; direct callers own that responsibility).
+        const driftResult = _computeCommittedSizeDriftSync(manager);
+        result.buyUpdated = result.buyUpdated || driftResult.buyUpdated;
+        result.sellUpdated = result.sellUpdated || driftResult.sellUpdated;
+        result.buyShrink = result.buyShrink || driftResult.buyShrink;
+        result.sellShrink = result.sellShrink || driftResult.sellShrink;
         return result;
     }
 
@@ -1832,9 +1856,9 @@ export function checkAndUpdateGridIfNeeded(manager: OrderManagerLike): { buyUpda
      * geometric pass; same gate as _recalculateGridOrderSizesFromBlockchain).
      *
      * @param {import('./types').OrderManager} manager - Manager instance with order state
-     * @returns {Promise<unknown>} Update status per side (grow/shrink flags)
+     * @returns {{ buyUpdated: boolean; sellUpdated: boolean; buyShrink: boolean; sellShrink: boolean }}
      */
-export async function checkCommittedSizeDrift(manager: OrderManagerLike): Promise<{ buyUpdated: boolean; sellUpdated: boolean; buyShrink: boolean; sellShrink: boolean }> {
+function _computeCommittedSizeDriftSync(manager: OrderManagerLike): { buyUpdated: boolean; sellUpdated: boolean; buyShrink: boolean; sellShrink: boolean } {
         const result = { buyUpdated: false, sellUpdated: false, buyShrink: false, sellShrink: false };
         if (!manager || !manager.assets || !manager.orders) return result;
 
@@ -1845,18 +1869,15 @@ export async function checkCommittedSizeDrift(manager: OrderManagerLike): Promis
             ? Number(rawThreshold)
             : GRID_LIMITS.GRID_REGENERATION_PERCENTAGE;
 
-        // Refresh totals once so both sides size from one fund snapshot (mirrors
-        // compareGrids) — the caller's tick already recalced, this is idempotent.
-        if (typeof manager.recalculateFunds === 'function') {
-            await manager.recalculateFunds();
-        }
         const sides = [
             { name: 'buy', orderType: ORDER_TYPES.BUY },
             { name: 'sell', orderType: ORDER_TYPES.SELL }
         ];
 
         for (const s of sides) {
-            const ctx = await _getSizingContext(manager, s.name, { skipRecalc: true });
+            // Sync core: checkAndUpdateGridIfNeeded is sync and expects funds to
+            // already be fresh (monitorDivergence / checkCommittedSizeDrift recalc).
+            const ctx = _computeSizingContextSync(manager, s.name);
             if (!ctx || !(ctx.budget > 0)) continue;
 
             // Must match _recalculateGridOrderSizesFromBlockchain exactly: same
@@ -1955,6 +1976,20 @@ export async function checkCommittedSizeDrift(manager: OrderManagerLike): Promis
             }
         }
         return result;
+    }
+
+    /**
+     * Async committed-drift accessor: refresh funds, then run the sync core.
+     * Public for callers/tests that want the drift-only result; the complete
+     * trigger is checkAndUpdateGridIfNeeded, which folds this core in.
+     * Naming mirrors the sizing pair: _computeCommittedSizeDriftSync is the
+     * private computation, checkCommittedSizeDrift the public accessor.
+     */
+export async function checkCommittedSizeDrift(manager: OrderManagerLike): Promise<{ buyUpdated: boolean; sellUpdated: boolean; buyShrink: boolean; sellShrink: boolean }> {
+        if (manager && typeof manager.recalculateFunds === 'function') {
+            await manager.recalculateFunds();
+        }
+        return _computeCommittedSizeDriftSync(manager);
     }
 
     /**
@@ -2434,19 +2469,20 @@ export async function compareGrids(calculatedGrid: unknown[], persistedGrid: unk
      * @returns {Promise<any>}
      */
 export async function monitorDivergence(manager: OrderManagerLike, calculatedGrid: unknown[], persistedGrid: unknown[]): Promise<{ needsUpdate: boolean; buy: { updated: boolean; ratio: boolean; rms: boolean; metric: number; shrink: boolean }; sell: { updated: boolean; ratio: boolean; rms: boolean; metric: number; shrink: boolean }; orderType?: string | null; thresholdPct?: number }> {
-        // 1. Check ratio-based divergence (available funds vs allocated)
+        // Refresh once so every leg sizes from one snapshot. The trigger itself
+        // is sync and already folds the committed-drift legs in (see
+        // checkAndUpdateGridIfNeeded), so there is no separate drift call here.
+        if (manager && typeof manager.recalculateFunds === 'function') {
+            await manager.recalculateFunds();
+        }
+        // 1. Ratio + committed-drift divergence (available funds /
+        //    over-allocation / on-chain committed delta).
         const ratioResult = checkAndUpdateGridIfNeeded(manager);
-        // 1b. Committed-size drift: the same 3% leg, but measured on the
-        // on-chain orders. Closes the blind spot where a deposit/withdrawal has
-        // already been folded into the VIRTUAL reservation, so
-        // `chainFree - virtual` no longer reflects it while the ACTIVE orders
-        // stay un-resized.
-        const driftResult = await checkCommittedSizeDrift(manager);
 
-        const ratioBuy = ratioResult.buyUpdated || driftResult.buyUpdated;
-        const ratioSell = ratioResult.sellUpdated || driftResult.sellUpdated;
-        const buyShrink = ratioResult.buyShrink === true || driftResult.buyShrink === true;
-        const sellShrink = ratioResult.sellShrink === true || driftResult.sellShrink === true;
+        const ratioBuy = ratioResult.buyUpdated;
+        const ratioSell = ratioResult.sellUpdated;
+        const buyShrink = ratioResult.buyShrink === true;
+        const sellShrink = ratioResult.sellShrink === true;
 
         if (ratioBuy || ratioSell) {
             return {

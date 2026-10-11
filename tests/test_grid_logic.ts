@@ -475,24 +475,32 @@ async function runTests() {
         const underAllocatedPct = (committedIdealSum * 0.05 / BUDGET) * 100;
         assert(underAllocatedPct < 3, 'precondition: committed gap is below 3% of the whole allocation');
 
-        // Steady state: committed equals ideal -> the ratio leg is blind AND the
-        // committed-drift leg must stay silent (no churn).
+        // The absorbed-deposit state is what blinds the ratio numerator:
+        // available = sellFree - virtual is ~0.5% of allocated, far below the
+        // configured 3%. Assert the inputs rather than a ratio-only return, since
+        // the public trigger is now unified (checkAndUpdateGridIfNeeded folds the
+        // committed-drift legs in; there is no separately reachable blind leg).
+        const blindAvailable = 900 - 895;
+        assert((blindAvailable / BUDGET) * 100 < 3, 'precondition: availableFunds is below threshold in the absorbed state');
+
+        // Steady state: committed equals ideal -> no leg triggers (no churn).
         const settledManager = buildManager(1);
-        const settledRatio = checkAndUpdateGridIfNeeded(settledManager);
-        assert.strictEqual(settledRatio.sellUpdated, false, 'settled ratio leg must stay silent');
+        const settledResult = checkAndUpdateGridIfNeeded(settledManager);
+        assert.strictEqual(settledResult.sellUpdated, false, 'settled grid must not trigger');
         const settledDrift = await checkCommittedSizeDrift(settledManager);
         assert.strictEqual(settledDrift.sellUpdated, false, 'settled committed grid must not drift-trigger');
         assert.strictEqual(settledDrift.sellShrink, false, 'settled committed grid must not shrink-trigger');
 
-        // Deposit folded into virtual (committed window 5% under ideal): the ratio
-        // leg is blind, the committed-drift leg must fire.
+        // Deposit folded into virtual (committed window 5% under ideal): the
+        // ratio numerator is blind, so the unified trigger must fire via the
+        // committed-drift leg.
         const depositedManager = buildManager(0.95);
-        const depositedRatio = checkAndUpdateGridIfNeeded(depositedManager);
-        assert.strictEqual(depositedRatio.sellUpdated, false, 'precondition: ratio leg is blind to the absorbed deposit');
+        const depositedTrigger = checkAndUpdateGridIfNeeded(depositedManager);
+        assert.strictEqual(depositedTrigger.sellUpdated, true, 'unified trigger must fire on the absorbed deposit');
+        assert.ok(depositedManager._gridSidesUpdated.has(ORDER_TYPES.SELL), 'sell side must be flagged for the full-side resize');
         const depositedDrift = await checkCommittedSizeDrift(depositedManager);
         assert.strictEqual(depositedDrift.sellUpdated, true, 'under-sized committed sell orders must drift-trigger grow');
         assert.strictEqual(depositedDrift.sellShrink, false, 'grow direction must not be flagged as shrink');
-        assert.ok(depositedManager._gridSidesUpdated.has(ORDER_TYPES.SELL), 'sell side must be flagged for the full-side resize');
 
         // monitorDivergence must surface the drift as a ratio-leg update so the
         // maintenance runtime routes it to the COW resize (not an RMS resync).
@@ -502,8 +510,13 @@ async function runTests() {
         assert.strictEqual(deposited.sell.ratio, true, 'committed drift must travel the ratio leg');
         assert.strictEqual(deposited.sell.rms, false, 'committed drift must not be reported as RMS');
 
-        // External withdrawal: committed exceeds ideal -> shrink leg.
+        // External withdrawal: committed exceeds ideal -> shrink leg, reached
+        // through the same unified entry (overAlloc is blind once the pipeline
+        // re-derived VIRTUAL downward).
         const withdrewManager = buildManager(1.05);
+        const withdrewTrigger = checkAndUpdateGridIfNeeded(withdrewManager);
+        assert.strictEqual(withdrewTrigger.sellUpdated, true, 'unified trigger must fire on the absorbed withdrawal');
+        assert.strictEqual(withdrewTrigger.sellShrink, true, 'withdrawal must be flagged as shrink');
         const withdrewDrift = await checkCommittedSizeDrift(withdrewManager);
         assert.strictEqual(withdrewDrift.sellUpdated, true, 'over-sized committed sell orders must drift-trigger');
         assert.strictEqual(withdrewDrift.sellShrink, true, 'withdrawal direction must be flagged as shrink');
