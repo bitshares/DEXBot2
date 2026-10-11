@@ -295,7 +295,7 @@ Debug line: `[BOUNDARY] boundary=123 sellStart=128 spread=4 anchorProjected=138 
 **#7 Sync-lock/maintenance observability — LANDED.**
 Throttle `Structural resync defer` to first/last per cap window (was 120/30s); log/retry `[MAINT] n/m failed` with orderId/reason.
 
-**Mode C hardening — OPEN.** (a) COW pre-broadcast gap-band reject; (b) order-existence check off slot→orderId map. Note: the GAP-P1 same-batch cancel that covered commit-time in-gap placement was reverted `e2898e51`; **P3 gate removed `e7231534`** — commit-time in-gap placement is currently covered by `LAST-FILL-GUARD` + adoption (no chain-evidence veto).
+**Mode C hardening — PARTIAL (2026-10-11).** (b) **LANDED** pre-broadcast UPDATE-target existence check off the slot→orderId map: `runPreBroadcastGuards` re-reads every UPDATE action's `orderId` via `chainOrders.batchReadOrders` and refuses the whole batch (`UPDATE_TARGET_MISSING`) + requests a structural resync when a tracked target is gone on chain, instead of letting a `limit_order_update` abort the chunk mid-broadcast. Fails open on a non-Map/errored read (chain rejection remains the backstop), and re-verifies each candidate missing id with a single `readSingleOrder` before declaring it gone so a node lagging behind a just-created order does not false-refuse. **Residual risk (accepted, safe direction):** if that second read also lags/returns null, the batch is refused — a skipped cycle + structural resync, never a half-applied grid. Unexplained `UPDATE_TARGET_MISSING` churn on a slow node is this mechanism. (No dedicated counter on this path, consistent with the other uncounted pre-broadcast refusals; it shows up in error logs.) (a) **SHADOW ONLY** gap-band placement check: non-spread-correction CREATE/UPDATE destinations inside the plan's gap band are counted (`_metrics.gapBandPlacementShadowCount`) and warned, never blocked — enforcement is deliberately withheld because spread correction legitimately places INTO the band and a hard reject would re-open the reverted P1/e2898e51 regression class. Note: the GAP-P1 same-batch cancel that covered commit-time in-gap placement was reverted `e2898e51`; **P3 gate removed `e7231534`** — commit-time in-gap placement is currently covered by `LAST-FILL-GUARD` + adoption (no chain-evidence veto).
 
 #### 2.7 Relation to PRICE_FIRST draft
 
@@ -355,7 +355,15 @@ order of escalation forever — HOLD-010) and **not** from
 `_lastUnmatchedChainOrdersAt` — the latter refreshes on every observing sync
 and would make an age gate unfirable (HOLD-007).
 
-Still open: drift logging/alert >active window, re-stamp BUY above anchor metric, refused-commit and orphan-fill counters. Deferred-hold observability is no longer open — the `[HOLD]` summary now names side/price/size/reason/off-grid distance and slow-re-warns on an unchanged hold (`modules/dexbot_maintenance_runtime.ts`, `docs/GRID_PRICE_INVARIANT.md`).
+Still open: none of the listed counters — all four landed 2026-10-11 (see below). Deferred-hold observability is no longer open — the `[HOLD]` summary now names side/price/size/reason/off-grid distance and slow-re-warns on an unchanged hold (`modules/dexbot_maintenance_runtime.ts`, `docs/GRID_PRICE_INVARIANT.md`).
+
+P2 additions (2026-10-11, counter-only — none gated behavior):
+- `refusedCommitCount` — incremented once in `recoverRefusedCommit` (the single funnel for all refused/uncertain commit paths), and only for genuine refusals: the poll-confirmed **success** path also routes through this funnel (adoption + fee deduction) and passes `refusedCommit: false`, so it is not counted.
+- `orphanFillCreditedCount` — incremented in `applyReplaySafeOrphanFillAccounting` on an `applied` result (a real proceeds credit; not `duplicate`/`error`/`missing_key`).
+- `restampBuyAboveAnchorCount` — `recordRestampBuyAboveAnchor` counts a BUY emitted at/above the last filled BUY pivot (guard bypass or unjudgeable pivot), warned once per batch; it never blocks.
+- `boundaryDriftExceedsWindowCount` — `calculateTargetGrid` counts a derived boundary that jumps more than the active window in one plan (the detached-boundary signal the removed ANCHOR-DIVERGENCE telemetry used to carry), rate-limited warn.
+- `gapBandPlacementShadowCount` — the Mode C(a) shadow above.
+All five surface through `getMetrics()`; four via the existing `...bot._metrics` spread, and `boundaryDriftExceedsWindowCount` via an explicit overlay of `manager._metrics` (`getMetrics()`), because `calculateTargetGrid` writes it on the manager's metrics object and has no bot reference.
 
 #### 3.4 Key code references (from source table)
 

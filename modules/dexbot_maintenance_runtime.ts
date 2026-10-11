@@ -3450,6 +3450,12 @@ function getMetrics(bot: BotLike) {
     const heldUnmatched = unmatched.filter((u) => isNonBlockingUnmatchedOrder(u));
     return {
         ...bot._metrics,
+        // The boundary-drift counter is written by the strategy engine on the
+        // MANAGER's metrics object (calculateTargetGrid has no bot reference),
+        // so overlay it here — otherwise the P2 signal is counted but never
+        // surfaced by getMetrics().
+        boundaryDriftExceedsWindowCount:
+            bot.manager?._metrics?.boundaryDriftExceedsWindowCount ?? bot._metrics.boundaryDriftExceedsWindowCount,
         queueDepth: bot._incomingFillQueue.length,
         fillProcessingLockActive: bot.manager?._fillProcessingLock?.isLocked() || false,
         divergenceLockActive: bot.manager?._divergenceLock?.isLocked() || false,

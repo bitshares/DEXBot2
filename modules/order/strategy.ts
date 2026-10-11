@@ -325,6 +325,39 @@ class StrategyEngine {
             return { targetGrid: new Map(), boundaryIdx: null };
         }
 
+        // P2 observability: a market/fill-derived boundary that jumps more than
+        // the active window in ONE plan is the "boundary detached from the
+        // market anchor" signal (the ANCHOR-DIVERGENCE condition, which lost its
+        // telemetry when the price projection was removed). A normal crawl is
+        // budget-bounded to at most half the active window, so this can only fire
+        // on an absolute recovery anchor or a geometry fault. Counted and
+        // rate-limited; never gates the plan.
+        try {
+            const activeWindow = Math.max(
+                1,
+                Number(config?.activeOrders?.buy) || 1,
+                Number(config?.activeOrders?.sell) || 1
+            );
+            const driftSlots = Math.abs(Number(newBoundaryIdx) - Number(currentBoundaryIdx));
+            if (Number.isFinite(driftSlots) && driftSlots > activeWindow) {
+                const metrics = this.manager._metrics;
+                if (metrics) {
+                    metrics.boundaryDriftExceedsWindowCount = (metrics.boundaryDriftExceedsWindowCount || 0) + 1;
+                }
+                const now = Date.now();
+                const lastWarn = Number(this.manager._lastBoundaryDriftWarnAt) || 0;
+                if (now - lastWarn >= 5 * 60 * 1000) {
+                    this.manager._lastBoundaryDriftWarnAt = now;
+                    this.manager.logger.log(
+                        `[BOUNDARY-DRIFT] committed boundary ${currentBoundaryIdx} -> planned ${newBoundaryIdx} ` +
+                        `(drift ${driftSlots} slots) exceeds active window ${activeWindow}; ` +
+                        `boundary is detached from the market anchor (observability only)`,
+                        'warn'
+                    );
+                }
+            }
+        } catch { /* observability only */ }
+
         // 2. Assign Roles (Buy/Sell/Spread)
         const updatedSlots = assignGridRoles(allSlots, newBoundaryIdx, gapSlots, ORDER_TYPES, ORDER_STATES, { assignOnChain: true });
 

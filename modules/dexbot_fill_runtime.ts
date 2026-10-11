@@ -421,7 +421,7 @@ async function applyReplaySafeTrackedFillAccounting(bot: BotLike, fill: unknown,
  */
 async function applyReplaySafeOrphanFillAccounting(bot: BotLike, fill: unknown, fillOp: FillOpLike, options: ReplaySafeFillAccountingOptions = {}) {
     const { context, logger, replayMessage, persistenceMode } = resolveReplaySafeFillOptions(bot, options);
-    return applyReplaySafeFillAccounting(bot, fill, fillOp, {
+    const result = await applyReplaySafeFillAccounting(bot, fill, fillOp, {
         logger,
         missingKeyMessage: (op: FillOpLike) => `[${context}] Missing fill history id and orphan fallback key for ${op.order_id}; deferring to open-orders sync`,
         fallbackKeyMessage: (op: FillOpLike) => `[${context}] Missing fill history id for orphan fill ${op.order_id}; using degraded orphan replay key for proceeds-only accounting`,
@@ -430,6 +430,16 @@ async function applyReplaySafeOrphanFillAccounting(bot: BotLike, fill: unknown, 
         persistenceMode,
         allowOrphanFallbackKey: true
     });
+    // P2 observability: this wrapper is orphan-fill-only (processSweepOrphanFill),
+    // so an `applied` result is exactly one set of proceeds credited outside
+    // slot accounting. `duplicate`/`error`/`missing_key` are not credits and
+    // would make the metric useless as a "funds left the grid" signal.
+    try {
+        if (result?.status === 'applied' && bot?._metrics) {
+            bot._metrics.orphanFillCreditedCount = (bot._metrics.orphanFillCreditedCount || 0) + 1;
+        }
+    } catch { /* metrics are best-effort */ }
+    return result;
 }
 
 /**

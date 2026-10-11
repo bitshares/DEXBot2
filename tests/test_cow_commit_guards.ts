@@ -378,7 +378,7 @@ async function testRejectsCreateOnOccupiedSlotBeforeBroadcast() {
     const cowResult = {
         workingGrid,
         workingIndexes: workingGrid.getIndexes(),
-        workingBoundary: manager.boundaryIdx,
+        workingBoundary: (manager as any).boundaryIdx,
         actions: [{
             type: COW_ACTIONS.CREATE,
             id: 'slot-1',
@@ -1014,7 +1014,7 @@ async function testSeamPollIntervalDoesNotLeakOnGuardRefusal() {
     const cowResult = {
         workingGrid,
         workingIndexes: workingGrid.getIndexes(),
-        workingBoundary: manager.boundaryIdx,
+        workingBoundary: (manager as any).boundaryIdx,
         actions: [{
             type: COW_ACTIONS.CREATE,
             id: 'slot-1',
@@ -1090,6 +1090,176 @@ async function testSeamPollIntervalDoesNotLeakOnGuardRefusal() {
     console.log('✓ COW-COMMIT-012 passed');
 }
 
+async function testRejectsMissingUpdateTargetBeforeBroadcast() {
+    console.log('\n[COW-COMMIT-013] missing UPDATE target aborts pre-broadcast + requests resync...');
+
+    const masterOrders = new Map([
+        ['slot-1', createOrder('slot-1', { type: ORDER_TYPES.BUY, price: 1.0 })]
+    ]);
+    const { bot, manager } = createCowExecutionFixture(masterOrders);
+    (manager as any)._gapSlots = 2;
+    let resyncRequests = 0;
+    (manager as any).requestStructuralGridResync = async () => { resyncRequests += 1; return { scheduled: true }; };
+
+    const originalBatchRead = chainOrders.batchReadOrders;
+    const originalExecuteBatch = chainOrders.executeBatch;
+    // Authoritative Map with NO entry -> every UPDATE target is gone on chain.
+    chainOrders.batchReadOrders = async (_ids: string[]) => new Map();
+    let executeCalls = 0;
+    chainOrders.executeBatch = async () => { executeCalls += 1; return { success: true, operation_results: [] }; };
+
+    const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
+    try {
+        const result: any = await bot._updateOrdersOnChainBatchCOW({
+            workingGrid,
+            workingIndexes: workingGrid.getIndexes(),
+            workingBoundary: (manager as any).boundaryIdx,
+            actions: [{
+                type: COW_ACTIONS.UPDATE,
+                id: 'slot-1',
+                orderId: '1.7.gone',
+                order: { id: 'slot-1', type: ORDER_TYPES.BUY, price: 1.0, size: 100, state: ORDER_STATES.ACTIVE, orderId: '1.7.gone' }
+            }]
+        });
+        assert.strictEqual(result.aborted, true, 'missing UPDATE target must abort the batch');
+        assert.strictEqual(result.reason, 'UPDATE_TARGET_MISSING', 'abort reason must identify the missing target');
+        assert.deepStrictEqual(result.missingUpdateOrderIds, ['1.7.gone'], 'missing id must be reported');
+        assert.strictEqual(executeCalls, 0, 'no blockchain broadcast may be attempted');
+        assert.strictEqual(resyncRequests, 1, 'structural resync must be requested');
+    } finally {
+        chainOrders.batchReadOrders = originalBatchRead;
+        chainOrders.executeBatch = originalExecuteBatch;
+    }
+
+    console.log('✓ COW-COMMIT-013 passed');
+}
+
+async function testAllowsPresentUpdateTargetThroughGuard() {
+    console.log('\n[COW-COMMIT-014] present UPDATE target passes the existence guard (fail-open on non-Map)...');
+
+    const masterOrders = new Map([
+        ['slot-1', createOrder('slot-1', { type: ORDER_TYPES.BUY, price: 1.0 })]
+    ]);
+    const { bot, manager } = createCowExecutionFixture(masterOrders);
+    (manager as any)._gapSlots = 2;
+    let resyncRequests = 0;
+    (manager as any).requestStructuralGridResync = async () => { resyncRequests += 1; return { scheduled: true }; };
+
+    const originalBatchRead = chainOrders.batchReadOrders;
+    let batchReadCalls = 0;
+    chainOrders.batchReadOrders = async (ids: string[]) => {
+        batchReadCalls += 1;
+        return new Map([['1.7.present', { for_sale: 100 }]]);
+    };
+
+    const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
+    try {
+        const result: any = await bot._updateOrdersOnChainBatchCOW({
+            workingGrid,
+            workingIndexes: workingGrid.getIndexes(),
+            workingBoundary: (manager as any).boundaryIdx,
+            actions: [{
+                type: COW_ACTIONS.UPDATE,
+                id: 'slot-1',
+                orderId: '1.7.present',
+                order: { id: 'slot-1', type: ORDER_TYPES.BUY, price: 1.0, size: 100, state: ORDER_STATES.ACTIVE, orderId: '1.7.present' }
+            }]
+        });
+        assert.strictEqual(batchReadCalls, 1, 'existence read must run for UPDATE batches');
+        assert.notStrictEqual(result.reason, 'UPDATE_TARGET_MISSING', 'a present target must not be rejected');
+        assert.strictEqual(resyncRequests, 0, 'no resync for a present target');
+    } finally {
+        chainOrders.batchReadOrders = originalBatchRead;
+    }
+
+    console.log('✓ COW-COMMIT-014 passed');
+}
+
+async function testGapBandPlacementShadowIsObservabilityOnly() {
+    console.log('\n[COW-COMMIT-015] gap-band placement is counted (shadow) and never blocks...');
+
+    const { bot, manager } = createCowExecutionFixture(new Map());
+    // boundary 5, gap 2 -> gap band slots 6-7.
+    (manager as any).boundaryIdx = 5;
+    (manager as any)._gapSlots = 2;
+
+    const originalBatchRead = chainOrders.batchReadOrders;
+    const originalBuildCreate = chainOrders.buildCreateOrderOp;
+    chainOrders.batchReadOrders = async () => [];
+    // Force the CREATE build to bail without a real op; the assertion is on the
+    // pre-broadcast shadow counter, not on the broadcast.
+    chainOrders.buildCreateOrderOp = async () => { throw new Error('not configured'); };
+
+    const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
+    try {
+        const before = Number(bot._metrics.gapBandPlacementShadowCount) || 0;
+        const result: any = await bot._updateOrdersOnChainBatchCOW({
+            workingGrid,
+            workingIndexes: workingGrid.getIndexes(),
+            workingBoundary: 5,
+            actions: [{
+                type: COW_ACTIONS.CREATE,
+                id: 'slot-6',
+                order: { id: 'slot-6', type: ORDER_TYPES.BUY, price: 1.05, size: 10, state: ORDER_STATES.VIRTUAL, orderId: null }
+            }]
+        });
+        assert.notStrictEqual(result.reason, 'GAP_BAND_PLACEMENT', 'shadow check must never abort the batch');
+        assert.strictEqual(
+            Number(bot._metrics.gapBandPlacementShadowCount) || 0,
+            before + 1,
+            'in-band non-spread-correction CREATE must increment the shadow counter'
+        );
+    } finally {
+        chainOrders.batchReadOrders = originalBatchRead;
+        chainOrders.buildCreateOrderOp = originalBuildCreate;
+    }
+
+    console.log('✓ COW-COMMIT-015 passed');
+}
+
+async function testLaggingBatchReadIsRescuedBySingleRead() {
+    console.log('\n[COW-COMMIT-016] a lagging batch read is rescued by a single read before refusing...');
+
+    const masterOrders = new Map([
+        ['slot-1', createOrder('slot-1', { type: ORDER_TYPES.BUY, price: 1.0 })]
+    ]);
+    const { bot, manager } = createCowExecutionFixture(masterOrders);
+    (manager as any)._gapSlots = 2;
+    let resyncRequests = 0;
+    (manager as any).requestStructuralGridResync = async () => { resyncRequests += 1; return { scheduled: true }; };
+
+    const originalBatchRead = chainOrders.batchReadOrders;
+    const originalSingleRead = chainOrders.readSingleOrder;
+    let singleReadCalls = 0;
+    // The batch read lags (returns nothing) but the single re-read finds the
+    // order, so it must NOT be declared missing.
+    chainOrders.batchReadOrders = async () => new Map();
+    chainOrders.readSingleOrder = async (id: string) => { singleReadCalls += 1; return { id }; };
+
+    const workingGrid = new WorkingGrid(manager.orders, { baseVersion: 0 });
+    try {
+        const result: any = await bot._updateOrdersOnChainBatchCOW({
+            workingGrid,
+            workingIndexes: workingGrid.getIndexes(),
+            workingBoundary: (manager as any).boundaryIdx,
+            actions: [{
+                type: COW_ACTIONS.UPDATE,
+                id: 'slot-1',
+                orderId: '1.7.lagging',
+                order: { id: 'slot-1', type: ORDER_TYPES.BUY, price: 1.0, size: 100, state: ORDER_STATES.ACTIVE, orderId: '1.7.lagging' }
+            }]
+        });
+        assert.strictEqual(singleReadCalls, 1, 'candidate missing id must be re-verified with a single read');
+        assert.notStrictEqual(result.reason, 'UPDATE_TARGET_MISSING', 'a found target must rescue the batch');
+        assert.strictEqual(resyncRequests, 0, 'no resync when the re-read finds the order');
+    } finally {
+        chainOrders.batchReadOrders = originalBatchRead;
+        chainOrders.readSingleOrder = originalSingleRead;
+    }
+
+    console.log('✓ COW-COMMIT-016 passed');
+}
+
 async function run() {
     console.log('Running COW commit guard regression tests...');
     await testRejectsVersionMismatchWithoutCommit();
@@ -1104,6 +1274,10 @@ async function run() {
     await testCredentialDaemonPreflightBlocksBroadcast();
     await testToleranceViolationFiltersCreatesOnly();
     await testSeamPollIntervalDoesNotLeakOnGuardRefusal();
+    await testRejectsMissingUpdateTargetBeforeBroadcast();
+    await testAllowsPresentUpdateTargetThroughGuard();
+    await testLaggingBatchReadIsRescuedBySingleRead();
+    await testGapBandPlacementShadowIsObservabilityOnly();
     console.log('\n✓ All COW commit guard regression tests passed');
 }
 

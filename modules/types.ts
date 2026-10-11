@@ -531,6 +531,16 @@ export interface BotMetrics extends UnknownRecord {
   maxQueueDepth: number;
   gridLockContention: number;
   fundRecalcCount: number;
+  /** Genuine post-broadcast commit refusals (working grid rejected). Excludes a poll-confirmed success that merely reuses the recovery funnel for adoption. */
+  refusedCommitCount: number;
+  /** Orphan fills whose proceeds were credited outside slot accounting. */
+  orphanFillCreditedCount: number;
+  /** BUY emissions at/above the last filled BUY pivot (guard bypass / leak). */
+  restampBuyAboveAnchorCount: number;
+  /** Derived boundary moved more than the active window in one plan. */
+  boundaryDriftExceedsWindowCount: number;
+  /** Non-spread-correction CREATE/UPDATE destinations inside the gap band (shadow). */
+  gapBandPlacementShadowCount: number;
 }
 
 /** An unmatched chain order surfaced by a sync pass. */
@@ -999,6 +1009,8 @@ export interface OrderManagerLike {
   _gapEvacCancelQueued?: Set<string>;
   _genesis?: { startPrice?: number; incrementPercent?: number; gapSlots?: number; priceLevels?: readonly unknown[]; priceLevelsHash?: string; createdAt?: number } | null;
   _missingGenesis?: unknown;
+  _metrics?: BotMetrics;
+  _lastBoundaryDriftWarnAt?: number;
   _genesisInvariantViolations?: number;
   _genesisInvariantLoggedAt?: number;
   _fundDriftLedger?: { side: string; direction: string; count: number; firstAt: number; lastAt: number } | null;

@@ -2071,6 +2071,90 @@ function logGridPriceInvariantSummary(bot: BotLike, stats: GridPriceInvariantSta
 }
 
 /**
+ * P2 observability (advisory, never blocks): count a BUY emitted at or above
+ * the last filled BUY pivot.
+ *
+ * This is the "re-stamp a just-filled BUY above the anchor" shape the
+ * LAST-FILL-GUARD exists to block (`BUY < pivot*(1-half)`), so a counted
+ * emission means the guard was bypassed (spread correction / stamped gap
+ * evacuation) or the pivot was unjudgeable and the probe failed open. The
+ * counter makes a bypass leak visible without changing placement policy —
+ * the guard already owns enforcement, and turning this into a second gate
+ * would re-introduce the reverted placement-guard class.
+ *
+ * Warns at most once per batch (keyed on `_currentCycleId`). Never throws.
+ *
+ * @returns {boolean} true when the emission was counted
+ */
+function recordRestampBuyAboveAnchor(bot: BotLike, price: unknown, type: unknown): boolean {
+    try {
+        if (type !== ORDER_TYPES.BUY) return false;
+        if (bot?.manager?._lastFilledType !== ORDER_TYPES.BUY) return false;
+        const pivot = Number(bot?.manager?._lastFilledPrice);
+        const p = Number(price);
+        if (!Number.isFinite(pivot) || pivot <= 0 || !Number.isFinite(p) || p <= 0) return false;
+        // At or above the pivot is the re-stamp shape; a lower BUY is the
+        // legitimate rotation target (I3) and is not counted.
+        if (p < pivot) return false;
+        if (bot._metrics) bot._metrics.restampBuyAboveAnchorCount = (bot._metrics.restampBuyAboveAnchorCount || 0) + 1;
+        // Warn at most once per batch. Stored as a single scalar (not a
+        // per-cycle map key) so the flag cannot accumulate unbounded keys on
+        // the bot across cycles.
+        const cycleId = bot?._currentCycleId ?? 'na';
+        const botRecord = bot as unknown as Record<string, unknown>;
+        if (botRecord._lastRestampWarnCycleId !== cycleId) {
+            botRecord._lastRestampWarnCycleId = cycleId;
+            bot?.manager?.logger?.log?.(
+                `[RESTAMP-BUY] BUY emitted at ${Format.formatPrice6(p)} at/above the last filled BUY ` +
+                `${Format.formatPrice6(pivot)} (guard bypass or unjudgeable pivot); counted, not blocked. ` +
+                `(reported once per batch)`,
+                'warn'
+            );
+        }
+        return true;
+    } catch { return false; }
+}
+
+/**
+ * Collect non-spread-correction CREATE/UPDATE destinations that sit inside
+ * the plan's gap band.
+ *
+ * Mode C(a) SHADOW: the gap band is not unconditionally illegal — spread
+ * correction legitimately places INTO it (the LAST-FILL-GUARD bypass exists
+ * for exactly that) and gap evacuation moves an order OUT of it. Excluding
+ * those origins leaves the genuinely suspicious set: a rail placement whose
+ * destination geometry IS the spread. The result is counted/warned, never
+ * blocked (see the guard call site for the revert-history rationale).
+ *
+ * Pure and never throws. A non-finite boundary/gap selects the empty set.
+ *
+ * @param {Array<Object>|null} actions - COW actions
+ * @param {unknown} boundary - The PLAN's boundary (workingBoundary), not the committed one
+ * @param {unknown} gapSlots - Gap slot count
+ * @returns {string[]} destinations inside the gap band
+ */
+function collectGapBandPlacementShadowSlots(actions: CowAction[] | null | undefined, boundary: unknown, gapSlots: unknown): string[] {
+    try {
+        const b = Number(boundary);
+        const g = Number(gapSlots);
+        if (!Number.isFinite(b) || !Number.isFinite(g) || !Array.isArray(actions)) return [];
+        const out: string[] = [];
+        for (const action of actions) {
+            if (action?.type !== COW_ACTIONS.CREATE && action?.type !== COW_ACTIONS.UPDATE) continue;
+            const origin = action?.origin;
+            if (origin === COW_ORIGINS.SPREAD_CORRECTION || origin === COW_ORIGINS.GAP_EVACUATION) continue;
+            const destId = String(action?.newGridId || action?.id || action?.order?.id || '');
+            if (!destId) continue;
+            const idx = parseSlotIndex(destId);
+            if (idx === null || idx === undefined) continue;
+            if (!isSlotIndexInGapBand(idx, b, g)) continue;
+            out.push(destId);
+        }
+        return out;
+    } catch { return []; }
+}
+
+/**
  * LAST-FILL-GUARD helper — pivot ± halfIncrement (replaces price-tolerance).
  *  last fill @x with increment i: BUY < x*(1 - i/2/100), SELL > x*(1 + i/2/100)
  *  e.g. x=1000, i=0.5% => BUY < 997.5, SELL > 1002.5
@@ -3368,6 +3452,113 @@ async function runPreBroadcastGuards(bot: BotLike, cowResult: CowResult): Promis
         };
     }
 
+    // MODE C(b) — pre-broadcast UPDATE-target existence check off the
+    // slot->orderId map. A tracked order that is already gone on chain makes a
+    // limit_order_update abort the broadcast chunk ("Order does not exist …
+    // cannot update") and leaves a partially-applied grid. Re-reading the
+    // referenced ids right before broadcast turns that into a clean
+    // pre-broadcast refusal + structural resync, so nothing is half-applied.
+    const updateTargetIds = new Set<string>();
+    for (const action of actions) {
+        if (action?.type === COW_ACTIONS.UPDATE && action.orderId) updateTargetIds.add(String(action.orderId));
+    }
+    if (updateTargetIds.size > 0 && typeof chainOrders.batchReadOrders === 'function') {
+        try {
+            const readResult = await chainOrders.batchReadOrders([...updateTargetIds], 3000) as unknown;
+            const readMap = readResult as { get?: (id: string) => unknown } | null | undefined;
+            // Fail OPEN on a non-Map result (tests/other accessors): only an
+            // authoritative map can prove an order gone.
+            if (readMap && typeof readMap.get === 'function') {
+                const missing: string[] = [];
+                for (const id of updateTargetIds) {
+                    if (!readMap.get(id)) missing.push(id);
+                }
+                if (missing.length > 0 && typeof chainOrders.readSingleOrder === 'function') {
+                    // Second, independent read before an absence decision: a
+                    // node that has not yet seen a freshly created order can
+                    // return null from the batch read. Re-reading each candidate
+                    // individually cancels the absence when the order is found;
+                    // a failed re-read must not manufacture an absence (fail
+                    // open), so only a read that returns an explicit null is
+                    // treated as confirming the gap.
+                    const stillMissing: string[] = [];
+                    for (const id of missing) {
+                        let present = true;
+                        try {
+                            present = Boolean(await chainOrders.readSingleOrder(id, 3000));
+                        } catch { /* failed re-verify must not manufacture an absence */ }
+                        if (!present) stillMissing.push(id);
+                    }
+                    missing.length = 0;
+                    missing.push(...stillMissing);
+                }
+                if (missing.length > 0) {
+                    bot.manager.logger.log(
+                        `[COW] Rejecting UPDATE batch pre-broadcast: ${missing.length} target(s) missing on chain ` +
+                        `(${missing.slice(0, 8).join(', ')}${missing.length > 8 ? ', …' : ''}); ` +
+                        `grid/chain existence divergence — structural resync required`,
+                        'error'
+                    );
+                    popPushedWorkingGrid(bot, cowResult);
+                    await requestStructuralResync(
+                        bot,
+                        'pre-broadcast update target missing on chain',
+                        { missingUpdateOrderIds: missing }
+                    );
+                    return {
+                        proceed: false,
+                        result: {
+                            executed: false,
+                            aborted: true,
+                            reason: 'UPDATE_TARGET_MISSING',
+                            missingUpdateOrderIds: missing,
+                            hadRotation: false
+                        }
+                    };
+                }
+            }
+        } catch (existenceErr) {
+            // A failed/foreign read must never block a legitimate broadcast;
+            // the chain's own rejection remains the backstop.
+            bot.manager.logger.log(
+                `[COW] Pre-broadcast UPDATE existence check failed (${getErrorMessage(existenceErr)}); ` +
+                `proceeding (chain rejection remains the backstop)`,
+                'debug'
+            );
+        }
+    }
+
+    // MODE C(a) — gap-band placement SHADOW check (observability + summary,
+    // no placement change). A non-spread-correction CREATE/UPDATE whose
+    // destination sits inside the plan's gap band is the Mode-C geometry that
+    // the reverted P1/P2 cancellation nets used to mop up; enforcement is
+    // deliberately NOT done here because spread correction legitimately places
+    // INTO the band (the LAST-FILL-GUARD bypass exists for exactly that) and a
+    // hard reject would re-open the P1-e2898e51 regression class. Count + warn
+    // so the leak is measurable before any policy change.
+    try {
+        const planBoundaryValue = (cowResult as JsonObj)?.workingBoundary;
+        const planBoundaryRaw = (planBoundaryValue === null || planBoundaryValue === undefined || planBoundaryValue === '')
+            ? NaN
+            : Number(planBoundaryValue);
+        const shadowBoundary = Number.isFinite(planBoundaryRaw) ? planBoundaryRaw : Number(bot.manager?.boundaryIdx);
+        const shadowGapSlots = Number(bot.manager?._gapSlots);
+        const shadowSlots = collectGapBandPlacementShadowSlots(actions, shadowBoundary, shadowGapSlots);
+        if (shadowSlots.length > 0) {
+            if (bot._metrics) {
+                bot._metrics.gapBandPlacementShadowCount =
+                    (bot._metrics.gapBandPlacementShadowCount || 0) + shadowSlots.length;
+            }
+            bot.manager.logger.log(
+                `[COW-GAP-BAND] shadow: ${shadowSlots.length} non-spread-correction placement(s) ` +
+                `inside the plan's gap band (boundary ${shadowBoundary}, gap ${shadowGapSlots}): ` +
+                `${shadowSlots.slice(0, 8).join(', ')}${shadowSlots.length > 8 ? ', …' : ''} ` +
+                `— counted for observability, NOT blocked`,
+                'warn'
+            );
+        }
+    } catch { /* shadow check must never break a batch */ }
+
     // Crossing-check candidate set (master + pending-broadcast + unmatched
     // chain orders). Built after the batch-level pending/unmatched guards so
     // it reflects any sync they triggered.
@@ -3798,6 +3989,7 @@ async function updateOrdersOnChainBatchCOWBody(
                         if (order.id) skippedCreateSlotIds.add(order.id);
                         continue;
                     }
+                    recordRestampBuyAboveAnchor(bot, createPrice, order.type);
                     const buildResult = await chainOrders.buildCreateOrderOp(
                         bot.account,
                         args.amountToSell,
@@ -4106,6 +4298,7 @@ async function updateOrdersOnChainBatchCOWBody(
                             if (action.newGridId) skippedUpdateSlotIds.add(action.newGridId);
                             continue;
                         }
+                        recordRestampBuyAboveAnchor(bot, newPrice, orderType);
 
                         const buildResult = await chainOrders.buildUpdateOrderOp(
                             bot.account,
@@ -4279,6 +4472,7 @@ async function updateOrdersOnChainBatchCOWBody(
                                 if (!recordGridPriceInvariantCheck(bot, targetSlotId, fbPrice, gridPriceInvariantStats, 'CREATE-FALLBACK')) {
                                     continue;
                                 }
+                                recordRestampBuyAboveAnchor(bot, fbPrice, fbType);
                                 const fbResult = await chainOrders.buildCreateOrderOp(
                                     bot.account,
                                     fbArgs.amountToSell,
@@ -4931,6 +5125,10 @@ async function updateOrdersOnChainBatchCOWBody(
                         { placedContexts: opContexts, polledCreateIds: confirmation.confirmedChainIds },
                         opContexts, effectiveBoundary,
                         {
+                            // Poll-confirmed SUCCESS: the commit was accepted;
+                            // this funnel is only reused for chain adoption +
+                            // fee deduction, so it must not count as a refusal.
+                            refusedCommit: false,
                             extraReturn: { commitRefused: false },
                             successReturn: { executed: true, hadRotation: false, uncertainResolved: true },
                             failureResyncReason: 'poll-confirmed commit (chain adoption unavailable)',
@@ -5254,6 +5452,17 @@ async function persistGridAndClearPendingBroadcasts(bot: BotLike, logPrefix: str
  * @returns {Promise<Object>} The commit-refused return object
  */
 async function recoverRefusedCommit(bot: BotLike, chainOrders: typeof chainOrdersModule, logPrefix: string, adoptOpts: JsonObj, contexts: OpPhase[], workingBoundary: number, opts: JsonObj = {}): Promise<JsonObj> {
+    // P2 observability: count genuine commit refusals at this single funnel (so
+    // the three call sites cannot double-count). This function is ALSO the
+    // shared funnel for the poll-confirmed SUCCESS path (chain adoption + fee
+    // deduction), which passes `refusedCommit: false` because the commit was
+    // accepted — counting it would overstate the refusal signal. Never gates
+    // behavior.
+    try {
+        if (opts.refusedCommit !== false && bot._metrics) {
+            bot._metrics.refusedCommitCount = (bot._metrics.refusedCommitCount || 0) + 1;
+        }
+    } catch { /* metrics are best-effort */ }
     const extraReturn = (opts.extraReturn ?? {}) as JsonObj;
     const successReturn = opts.successReturn as JsonObj | null | undefined;
     const failureResyncReason = (opts.failureResyncReason ?? 'commit refused after broadcast (chain adoption unavailable)') as string;
@@ -6012,7 +6221,7 @@ async function processBatchResults(bot: BotLike, result: JsonObj, opContexts: Op
         updateOperationCount
     };
 }
-export { isSpreadCorrectionBypassAllowed, isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
+export { isSpreadCorrectionBypassAllowed, isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, recordRestampBuyAboveAnchor, collectGapBandPlacementShadowSlots, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
 // Exported for regression tests (issue #23 sibling): the uncertain-broadcast
 // discard path must never drop a placement silently when master lost the slot.
 export { restoreDiscardedCreates };

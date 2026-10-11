@@ -798,7 +798,12 @@ class OrderManager implements OrderManagerLike {
             gridLockContention: 0,
             spreadRoleConversionBlocked: 0,
             lastSyncDurationMs: 0,
-            metricsStartTime: Date.now()
+            metricsStartTime: Date.now(),
+            refusedCommitCount: 0,
+            orphanFillCreditedCount: 0,
+            restampBuyAboveAnchorCount: 0,
+            boundaryDriftExceedsWindowCount: 0,
+            gapBandPlacementShadowCount: 0
         };
 
         this._bootstrapping = 1;

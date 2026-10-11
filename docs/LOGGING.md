@@ -255,6 +255,9 @@ Prefix tags used in log messages to help operators identify event types. To find
 | `[GAP-EVAC]` | `order/utils/validate.ts`, `order/manager.ts`, `dexbot_startup_runtime.ts`, `dexbot_state_recovery.ts` | Stuck in-band (gap-band) order streak warnings, cancel-only evacuation teeth, persisted-streak restore counts |
 | `[GRID-TYPE-CORRECT]` | `order/grid.ts` | One-time backfill retype of legacy empty slots to rail-typed holes on load |
 | `[LAST-FILL-GUARD]` | `dexbot_cow_runtime.ts` | Last-fill-guard blocks plus gap-evacuation bypass allows/stale-stamp downgrades |
+| `[RESTAMP-BUY]` | `dexbot_cow_runtime.ts` | BUY emitted at/above the last filled BUY pivot (guard bypass / unjudgeable pivot), counted not blocked (P2) |
+| `[COW-GAP-BAND]` | `dexbot_cow_runtime.ts` | SHADOW: non-spread-correction placement inside the plan gap band, counted not blocked (Mode C(a)) |
+| `[BOUNDARY-DRIFT]` | `order/strategy.ts` | Derived boundary jumped more than the active window in one plan (P2) |
 | `[TRANSPORT]` | `bitshares-native/transport.ts` | WebSocket keep-alive and reconnect |
 
 ## 1.4.8 Markers
@@ -280,6 +283,17 @@ New/updated operator-visible messages added by the uncertain-broadcast and COW h
 | `Fill channel for <account> did NOT recover after N forced reconnects … fills may be missed … restart the bot` | **Operator action required.** Automatic recovery ran its full escalation and the channel is still dead — the log line that makes a failed recovery visible instead of a silent reconnect loop |
 | `⚠ <node>… FAILED attempt N/3 (fill channel unrecoverable for <account>: …)` | **Node strike recorded.** Emitted only after N forced reconnects failed to clear the channel, i.e. the node itself is suspect. A forced reconnect on its own never costs a node a strike — a session-level wedge that clears on the first cycle leaves the strike ledger untouched. Three of these blacklist the node for 24h |
 | `Forcing reconnect on <node> (<reason>)` | Transport-level forced reconnect (stale api_id escalation or fill-channel watchdog); the node is reported failed so the reconnect prefers another node |
+
+### P2 observability + Mode C (2026-10-11)
+
+Counter-only signals (none gate placement) surfaced through `getMetrics()`: `refusedCommitCount`, `orphanFillCreditedCount`, `restampBuyAboveAnchorCount`, `boundaryDriftExceedsWindowCount`, `gapBandPlacementShadowCount`.
+
+| Message | Meaning |
+|---------|---------|
+| `[COW] Rejecting UPDATE batch pre-broadcast: N target(s) missing on chain (...); grid/chain existence divergence — structural resync required` | Mode C(b): a tracked UPDATE target is gone on chain; the batch aborts cleanly (`UPDATE_TARGET_MISSING`) instead of letting `limit_order_update` abort a chunk mid-broadcast. Followed by a structural resync request |
+| `[RESTAMP-BUY] BUY emitted at ... at/above the last filled BUY ...` | A BUY at/above the last filled BUY pivot got past the LAST-FILL-GUARD (bypass or unjudgeable pivot). Counted, not blocked; warned once per batch |
+| `[COW-GAP-BAND] shadow: N non-spread-correction placement(s) inside the plan's gap band (...)` | Mode C(a) shadow: an in-gap rail placement that is not spread correction / gap evacuation. Counted, never blocked; warned once per batch |
+| `[BOUNDARY-DRIFT] committed boundary X -> planned Y (drift N slots) exceeds active window W; boundary is detached from the market anchor (observability only)` | A single plan moved the boundary more than the active window (absolute recovery anchor or geometry fault). Counted; rate-limited warn |
 
 ---
 

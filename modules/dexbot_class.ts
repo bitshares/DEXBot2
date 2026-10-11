@@ -286,7 +286,12 @@ class DEXBot implements BotLike {
             lockContentionEvents: 0,
             gridLockContention: 0,
             fundRecalcCount: 0,
-            maxQueueDepth: 0
+            maxQueueDepth: 0,
+            refusedCommitCount: 0,
+            orphanFillCreditedCount: 0,
+            restampBuyAboveAnchorCount: 0,
+            boundaryDriftExceedsWindowCount: 0,
+            gapBandPlacementShadowCount: 0
         };
 
         // Shutdown state
