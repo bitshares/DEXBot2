@@ -52,7 +52,7 @@ const require = createRequire(import.meta.url);
 import { path } from '../../path_api.js';
 import { getStorage } from '../../storage/index.js';
 const storage = getStorage();
-import { API_LIMITS, ORDER_TYPES, COW_ACTIONS, FEE_PARAMETERS, BTS_PRECISION, PIPELINE_TIMING, NATIVE_CLIENT, GRID_LIMITS } from '../../constants.js';
+import { API_LIMITS, ORDER_TYPES, COW_ACTIONS, FEE_PARAMETERS, BTS_PRECISION, PIPELINE_TIMING, NATIVE_CLIENT, GRID_LIMITS, TIMING } from '../../constants.js';
 import { PATHS } from '../../paths.js';
 import { toFiniteNumber, isValidNumber } from '../format.js';
 import * as MathUtils from './math.js';
@@ -1171,9 +1171,245 @@ function buildLastMarketFillPayload(manager: OrderManagerLike): { price: number;
     return { price, type, fillsAt };
 }
 
+/** Why spread correction is degraded or refused for a cycle. */
+export type SpreadCorrectionRefusalReason = 'cold-book' | 'stale-snapshot' | 'unmatched-orders';
+
+export interface SpreadCorrectionReadiness {
+    /** False => hard refusal (cold book): the planner must not act this cycle. */
+    ok: boolean;
+    /** Degraded cause ('stale-snapshot'/'unmatched-orders') or hard cause ('cold-book'). */
+    reason: SpreadCorrectionRefusalReason | null;
+    /**
+     * Crossing floor for the planner's filter: the freshest live market read
+     * when available, else the fill-derived reference. null => no floor
+     * (fail-open). Not a refusal premise.
+     */
+    marketRef: number | null;
+    /** Fill-derived reference only (live pivot or persisted row); gates the COW bypass. */
+    fillMarketRef: number | null;
+    /** False => the local snapshot cannot license the LAST-FILL-GUARD bypass. */
+    snapshotTrusted: boolean;
+    /** Known-unmatched chain orders from the last sync (price-level collision filter input). */
+    unmatched: UnmatchedChainOrderLike[];
+}
+
+/** Narrowed read-only view of an unmatched chain order used by the readiness gate. */
+export interface UnmatchedChainOrderLike extends Record<string, unknown> {
+    price?: number;
+    orderId?: string;
+    chainOrderId?: string;
+}
+
 /**
- * Resolve the last real market price spread correction must not trade
- * through. Returns null (fail-open) when no real fill is known.
+ * The single freshness window shared by the spread-correction trust decisions
+ * that are time-based: snapshot staleness (and therefore the COW bypass) and
+ * the live-market-price refresh pacing. Resolved once so a per-bot
+ * `config.timing` override cannot make one check trust what another rejects.
+ * The crossing floor itself does NOT use a time window — it picks the newer
+ * of the live read and the fill.
+ *
+ * 0 (constant unset) => no time bound: staleness never triggers and the
+ * live-price refresh is never forced, so the crossing floor stays on the fill
+ * anchor. Fail-open, matching the never-synced first-tick behavior.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @returns {number} Freshness window in ms (0 => no bound => fail-open)
+ */
+export function resolveSpreadFreshnessMs(manager: OrderManagerLike): number {
+    const configured = Number((manager?.config as { timing?: Record<string, unknown> } | undefined)?.timing?.SPREAD_CORRECTION_SYNC_FRESH_MS);
+    if (configured > 0) return configured;
+    const fallback = Number(TIMING?.SPREAD_CORRECTION_SYNC_FRESH_MS);
+    return fallback > 0 ? fallback : 0;
+}
+
+/**
+ * Resolve the crossing floor spread correction must not trade through.
+ *
+ * Two pieces of real market evidence can supply the floor: an externally
+ * observed live price (order book/ticker) and the fill-derived reference
+ * (last account trade). Neither is judged by a threshold — the NEWER one wins.
+ * A live read older than the last fill loses to the fill (an executed trade is
+ * fresher market truth); a live read at least as new wins; with no live read
+ * at all the fill is used; with neither the floor is null (fail-open).
+ *
+ * This is what lets us drop the arbitrary "how far is too far" distance cap:
+ * we keep the floor fresh and compare evidence by recency, rather than guessing
+ * when an old floor went stale.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @returns {number|null} Crossing floor or null (fail-open)
+ */
+export function resolveSpreadCrossingFloor(manager: OrderManagerLike): number | null {
+    const fill = resolveSpreadMarketReference(manager);
+    const live = Number(manager?._liveMarketPrice);
+    const liveAt = Number(manager?._liveMarketPriceAt);
+    const liveValid = Number.isFinite(live) && live > 0 && Number.isFinite(liveAt) && liveAt > 0;
+    if (!liveValid) return fill;
+    const fillAt = Math.max(Number(manager?._lastFilledAt) || 0, Number(manager?._lastMarketFillAt) || 0);
+    if (fill == null || fillAt <= 0 || liveAt >= fillAt) return live;
+    return fill;
+}
+
+/**
+ * Refresh the cached live market price from the order book/ticker.
+ * Best-effort; caches only a finite positive price. Returns the new price or
+ * null. Call through maybeRefreshLiveMarketPrice to respect the pacing bound.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @param {unknown} BitShares - BitShares client
+ * @returns {Promise<number|null>} New price or null
+ */
+export async function refreshLiveMarketPrice(manager: OrderManagerLike, BitShares: unknown): Promise<number | null> {
+    try {
+        const symA = (manager?.assets as { assetA?: { symbol?: string } } | undefined)?.assetA?.symbol;
+        const symB = (manager?.assets as { assetB?: { symbol?: string } } | undefined)?.assetB?.symbol;
+        // Require a real client surface: tests and dry paths pass `{}` and must
+        // not trigger (or await) a pointless lookup.
+        const client = BitShares as { db?: unknown } | null | undefined;
+        if (!symA || !symB || !client || !client.db) return null;
+        const raw = await deriveMarketPrice(client as BitSharesClient, symA, symB);
+        const price = Number(raw);
+        if (Number.isFinite(price) && price > 0) {
+            manager._liveMarketPrice = price;
+            manager._liveMarketPriceAt = Date.now();
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] Live market price refreshed ${price} (${symA}/${symB})`,
+                'debug'
+            );
+            return price;
+        }
+    } catch { /* best-effort: fall back to the fill anchor */ }
+    return null;
+}
+
+/**
+ * Refresh the live market price if none is fresh, pacing attempts to one per
+ * freshness window so a chain that keeps failing cannot turn the spread check
+ * into an RPC loop. The spread path stays RPC-free while the cache is fresh.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @param {unknown} BitShares - BitShares client
+ * @param {Object} [options]
+ * @param {number} [options.now] - Injectable clock (tests)
+ * @returns {Promise<number|null>} Cached/new price or null
+ */
+export async function maybeRefreshLiveMarketPrice(manager: OrderManagerLike, BitShares: unknown, options: { now?: number } = {}): Promise<number | null> {
+    const now = Number.isFinite(options?.now) ? Number(options.now) : Date.now();
+    const freshMs = resolveSpreadFreshnessMs(manager);
+    if (freshMs <= 0) return Number(manager?._liveMarketPrice) || null; // no bound => never force a read
+    const liveAt = Number(manager?._liveMarketPriceAt);
+    if (Number.isFinite(liveAt) && liveAt > 0 && (now - liveAt) <= freshMs) {
+        return Number(manager?._liveMarketPrice) || null;
+    }
+    const attemptedAt = Number(manager?._liveMarketPriceAttemptedAt);
+    if (Number.isFinite(attemptedAt) && attemptedAt > 0 && (now - attemptedAt) <= freshMs) {
+        return null; // attempted recently; do not storm the chain
+    }
+    // No usable client surface: leave the floor on the fill anchor. Debug only
+    // (expected for tests/dry paths) and paced like a real attempt so it cannot
+    // fire on every tick.
+    const client = BitShares as { db?: unknown } | null | undefined;
+    if (!client || !client.db) {
+        manager._liveMarketPriceAttemptedAt = now;
+        manager.logger?.log?.(
+            '[SPREAD-CORRECTION] Live market price refresh skipped: no order-book client; crossing floor stays on the fill anchor',
+            'debug'
+        );
+        return null;
+    }
+    manager._liveMarketPriceAttemptedAt = now;
+    const refreshed = await refreshLiveMarketPrice(manager, BitShares);
+    if (refreshed == null) {
+        // One warn per pacing window: a persistently failing order-book/ticker
+        // read silently degrades the floor to the fill anchor otherwise.
+        manager.logger?.log?.(
+            '[SPREAD-CORRECTION] Live market price refresh failed; crossing floor stays on the fill anchor until the next attempt',
+            'warn'
+        );
+    }
+    return refreshed;
+}
+
+/**
+ * Evaluate whether spread correction may act on the current local snapshot,
+ * in ONE place. Pure: reads manager state, returns a verdict, no side effects;
+ * the caller maps the reason to a stall and the existing wiring arms the
+ * targeted sync.
+ *
+ * Premises:
+ *  - P-A cold book (no live order on either side): `ok=false` — hard refusal,
+ *    there is no realized spread to repair and only the reconcile path owns
+ *    the first window. Requires `options.onChainOrders`; skipped otherwise.
+ *  - P-B stale snapshot (a completed sync is older than the freshness window):
+ *    degraded-ok — the planner may still act, but `snapshotTrusted=false` so
+ *    the LAST-FILL-GUARD bypass is withheld. Never-synced is treated as fresh
+ *    (historical fail-open for the first tick).
+ *  - P-C known-unmatched chain orders: degraded-ok — plan, but the collision
+ *    filter drops their price levels and `snapshotTrusted=false`.
+ *
+ * The market anchor is deliberately NOT a refusal premise — it is returned for
+ * the crossing filter, and a real fill denies the bypass via `fillMarketRef`.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @param {Object} [options]
+ * @param {number} [options.now] - Injectable clock (tests)
+ * @param {Object|null} [options.onChainOrders] - Live local window view; enables P-A
+ * @returns {SpreadCorrectionReadiness} Readiness verdict
+ */
+export function evaluateSpreadCorrectionReadiness(
+    manager: OrderManagerLike,
+    options: { now?: number; onChainOrders?: { buys: unknown[]; sells: unknown[] } | null } = {}
+): SpreadCorrectionReadiness {
+    // The gate must never throw into the planner or the bypass check: a failure
+    // is caught and turned into a refusal (correct-by-refusal), not a plan with
+    // no floor. Callers surface it as the 'readiness-gate' stall.
+    try {
+        const now = Number.isFinite(options?.now) ? Number(options.now) : Date.now();
+        const freshMs = resolveSpreadFreshnessMs(manager);
+        const marketRef = resolveSpreadCrossingFloor(manager);
+        const fillMarketRef = resolveSpreadMarketReference(manager);
+        const unmatched: UnmatchedChainOrderLike[] = Array.isArray(manager?._lastUnmatchedChainOrders)
+            ? (manager!._lastUnmatchedChainOrders as UnmatchedChainOrderLike[])
+            : [];
+        const synced = Number.isFinite(Number(manager?._lastSyncAt)) && Number(manager?._lastSyncAt) > 0;
+        // Never-synced, or no usable window => fresh (fail-open for the first tick).
+        const stale = synced && freshMs > 0 && (now - Number(manager?._lastSyncAt) > freshMs);
+
+        const cold = !!options?.onChainOrders
+            && options.onChainOrders.buys.length === 0
+            && options.onChainOrders.sells.length === 0;
+        const unmatchedPresent = unmatched.length > 0;
+
+        let reason: SpreadCorrectionRefusalReason | null = null;
+        if (cold) reason = 'cold-book';
+        else if (stale) reason = 'stale-snapshot';
+        else if (unmatchedPresent) reason = 'unmatched-orders';
+
+        return {
+            ok: !cold,
+            reason,
+            marketRef,
+            fillMarketRef,
+            snapshotTrusted: !stale && !unmatchedPresent,
+            unmatched,
+        };
+    } catch (err) {
+        // Correct-by-refusal: a gate that cannot read state refuses the cycle.
+        // reason stays null (the cause is not a real premise, it is a fault);
+        // callers map null to the 'readiness-gate' stall so the targeted sync
+        // arms and triage logs name the fault. Detail-only log: the caller owns
+        // the operator warning, so a gate-failure cycle is reported once.
+        manager.logger?.log?.(
+            `[SPREAD-CORRECTION] Readiness gate failed (${getErrorMessage(err)}); refusing the cycle`,
+            'debug'
+        );
+        return { ok: false, reason: null, marketRef: null, fillMarketRef: null, snapshotTrusted: false, unmatched: [] };
+    }
+}
+
+/**
+ * Resolve the last real FILL price — the fill-derived market reference.
+ * Returns null (fail-open) when no real fill is known.
  *
  * The bot's grid anchor (AMA/startPrice) and its own book mid are NOT market
  * references — they are grid geometry or the bot's own quotes — so they are
@@ -1181,9 +1417,8 @@ function buildLastMarketFillPayload(manager: OrderManagerLike): { price: number;
  * LAST-FILL-GUARD pivot when it is fill-provenanced, else the bot-scoped
  * persisted reference that survives grid regeneration.
  *
- * SINGLE SOURCE of "is there a real market reference": the planner's
- * crossing filter and the COW bypass gate both resolve through here, so they
- * can never disagree about whether a real fill is known.
+ * Feeds the COW bypass gate (via the readiness verdict's `fillMarketRef`) and
+ * is the fallback crossing floor when no fresh live market read exists.
  *
  * @param {Object} manager - OrderManager instance
  * @returns {number|null} Reference price or null

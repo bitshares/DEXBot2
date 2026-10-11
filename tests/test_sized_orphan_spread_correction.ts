@@ -52,6 +52,9 @@ async function testSizedOrphanSpreadCorrection() {
     await mgr._updateOrder({ id: 'sell-orphan-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 1.00, size: 0.5 });
     await mgr._updateOrder({ id: 'sell-orphan-2', type: ORDER_TYPES.SELL, state: ORDER_STATES.VIRTUAL, price: 1.02, size: 0.5 });
     await mgr._updateOrder({ id: 'sell-1', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 1.10, size: 10, orderId: '1.7.104' });
+    // Live grid-slot order so the shared readiness gate does not classify this
+    // book as cold (the gate's live view is slot-N gated, matching production).
+    await mgr._updateOrder({ id: 'slot-9', type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, price: 1.20, size: 10, orderId: '1.7.9002' });
 
     mgr.boundaryIdx = 2;
     mgr._gapSlots = 1;

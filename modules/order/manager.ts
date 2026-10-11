@@ -621,6 +621,14 @@ class OrderManager implements OrderManagerLike {
     _lastMarketFillPrice: number | null;
     _lastMarketFillType: string | null;
     _lastMarketFillAt: number;
+    // Externally-observed live market price (B/A), refreshed from the order
+    // book/ticker at a bounded cadence. The spread-correction crossing floor is
+    // the NEWER of this read and the fill anchor (an executed trade can be
+    // fresher market truth), so the floor tracks current market instead of a
+    // possibly days-old fill.
+    _liveMarketPrice: number | null;
+    _liveMarketPriceAt: number;
+    _liveMarketPriceAttemptedAt: number;
     _lastSyncAt: number;
     _deferredRebalanceAt: number;
     _lastHeldPlanSignature: { boundaryIdx: number | null; pivot: number | null; fillsAt: number | null } | null;
@@ -766,6 +774,9 @@ class OrderManager implements OrderManagerLike {
         this._lastMarketFillPrice = null;
         this._lastMarketFillType = null;
         this._lastMarketFillAt = 0;
+        this._liveMarketPrice = null;
+        this._liveMarketPriceAt = 0;
+        this._liveMarketPriceAttemptedAt = 0;
         this._lastSyncAt = 0;
         this._deferredRebalanceAt = 0;
         this._lastHeldPlanSignature = null;

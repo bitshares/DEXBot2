@@ -18,8 +18,11 @@ async function testScaledSpreadCorrection() {
     };
     mgr.btsBalance = { free: 1000, total: 1000, locked: 0 };
 
-    // 1. Setup a grid slot
+    // 1. Setup a grid slot + one live opposite-side order so the shared
+    //    readiness gate does not classify the book as cold (the gate's live
+    //    view is slot-N gated, matching production).
     await mgr._updateOrder({ id: 'slot-1', price: 0.9, type: ORDER_TYPES.SPREAD, state: ORDER_STATES.VIRTUAL, size: 0 });
+    await mgr._updateOrder({ id: 'slot-2', price: 1.0, type: ORDER_TYPES.SELL, state: ORDER_STATES.ACTIVE, size: 10, orderId: '1.7.9001' });
     
     // 2. Scenario A: Funds sufficient for IDEAL size
     console.log('  Scenario A: Sufficient funds');

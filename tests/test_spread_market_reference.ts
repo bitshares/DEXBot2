@@ -1,5 +1,5 @@
 /**
- * Spread-correction market-reference & cold-book suite (SMR-1..6).
+ * Spread-correction market-reference & readiness suite (SMR-1..10).
  *
  * Covers the robustness fixes for the "spread correction sells at/below the
  * market on a cold grid" incident (issue #31):
@@ -14,6 +14,14 @@
  *  - SMR-5: rejectCorruptedGridSnapshot keeps a pre-reject snapshot copy.
  *  - SMR-6: the LAST-FILL-GUARD bypass gate shares the market-reference
  *           predicate (live fill pivot OR restored market row both deny it).
+ *  - SMR-7: the pure readiness gate: cold=refuse, stale/unmatched=degraded-ok,
+ *           never-synced/fresh=trusted.
+ *  - SMR-8: unmatched collision filter skips the covered price level but keeps
+ *           planning the rest (P-C as a filter, never a deadlock).
+ *  - SMR-9: the crossing floor is the fresh live market read when available and
+ *           falls back to the fill anchor otherwise (no distance heuristic).
+ *  - SMR-10: a stale + unmatched cycle still runs the collision filter (data-,
+ *           not reason-keyed) and names the collision stall.
  *
  * Synthetic geometry only (start ~670, 0.3% increments) — no real accounts,
  * pairs, or live identifiers.
@@ -27,7 +35,7 @@ const { OrderManager } = require('../modules/order/manager');
 const { grid: Grid } = require('../modules/order').default;
 const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
 const { AccountOrders } = require('../modules/account_orders');
-const { persistGridSnapshot, restoreLastMarketFill } = require('../modules/order/utils/system');
+const { persistGridSnapshot, restoreLastMarketFill, evaluateSpreadCorrectionReadiness } = require('../modules/order/utils/system');
 const { rejectCorruptedGridSnapshot } = require('../modules/dexbot_state_recovery');
 const { isSpreadCorrectionBypassAllowed } = require('../modules/dexbot_cow_runtime');
 
@@ -84,10 +92,10 @@ async function testSmr1ColdBookSkipsCorrection() {
     const result = await manager.checkSpreadCondition({}, async () => { batchCalls++; return { executed: true }; });
 
     assert.strictEqual(result.ordersPlaced, 0, 'cold book must place nothing');
-    assert.strictEqual(result.stall, 'no-candidates',
-        `cold book must report a structural stall (arms the targeted sync), got ${JSON.stringify(result.stall)}`);
+    assert.strictEqual(result.stall, 'cold-book',
+        `cold book must report the named structural stall (arms the targeted sync), got ${JSON.stringify(result.stall)}`);
     assert.strictEqual(batchCalls, 0, 'no correction batch may be planned on a cold book');
-    console.log('  ✓ cold book places nothing and reports no-candidates');
+    console.log('  ✓ cold book places nothing and reports cold-book');
 }
 
 // --- SMR-2: planner must not place through the last real fill --------------
@@ -267,6 +275,156 @@ async function testSmr6BypassGate() {
     console.log('  \u2713 bypass withheld for any real market reference / stale snapshots, kept for fresh heuristics');
 }
 
+// --- SMR-7: pure readiness gate ---------------------------------------------
+async function testSmr7ReadinessGate() {
+    console.log('Running test: evaluateSpreadCorrectionReadiness verdicts');
+    const noChain = { buys: [], sells: [] };
+    const someChain = { buys: [{}], sells: [{}] };
+
+    // Cold: hard refusal.
+    const coldR = evaluateSpreadCorrectionReadiness(makeManager(), { onChainOrders: noChain });
+    assert.strictEqual(coldR.ok, false, 'cold book is a hard refusal');
+    assert.strictEqual(coldR.reason, 'cold-book', 'cold reason named');
+
+    // Never synced: degraded but trusted (historical fail-open).
+    const neverR = evaluateSpreadCorrectionReadiness(makeManager(), { onChainOrders: someChain });
+    assert.strictEqual(neverR.ok, true, 'never-synced still plans');
+    assert.strictEqual(neverR.snapshotTrusted, true, 'never-synced is treated as fresh (fail-open)');
+    assert.strictEqual(neverR.reason, null, 'no degraded reason when fresh');
+
+    // Stale sync: degraded-ok, untrusted.
+    const stale = makeManager();
+    stale._lastSyncAt = NOW - 60 * 60 * 1000;
+    const staleR = evaluateSpreadCorrectionReadiness(stale, { onChainOrders: someChain, now: NOW });
+    assert.strictEqual(staleR.ok, true, 'stale snapshot still plans (degraded-ok)');
+    assert.strictEqual(staleR.snapshotTrusted, false, 'stale snapshot withholds the bypass');
+    assert.strictEqual(staleR.reason, 'stale-snapshot', 'stale reason named');
+
+    // Unmatched: degraded-ok, untrusted.
+    const unmatched = makeManager();
+    unmatched._lastSyncAt = NOW;
+    unmatched._lastUnmatchedChainOrders = [{ price: 1, orderId: '1.7.9' }];
+    const unR = evaluateSpreadCorrectionReadiness(unmatched, { onChainOrders: someChain, now: NOW });
+    assert.strictEqual(unR.ok, true, 'unmatched snapshot still plans (degraded-ok)');
+    assert.strictEqual(unR.snapshotTrusted, false, 'unmatched snapshot withholds the bypass');
+    assert.strictEqual(unR.reason, 'unmatched-orders', 'unmatched reason named');
+
+    // Fresh: fully ready.
+    const fresh = makeManager();
+    fresh._lastSyncAt = NOW;
+    const freshR = evaluateSpreadCorrectionReadiness(fresh, { onChainOrders: someChain, now: NOW });
+    assert.strictEqual(freshR.ok, true, 'fresh book plans');
+    assert.strictEqual(freshR.snapshotTrusted, true, 'fresh book trusted');
+    assert.strictEqual(freshR.reason, null, 'fresh book has no reason');
+
+    // A gate failure refuses the cycle (correct-by-refusal); it must not plan
+    // with no floor. Force a throw via a poisoned config getter.
+    const broken: any = makeManager();
+    Object.defineProperty(broken, 'config', { get() { throw new Error('boom'); }, configurable: true });
+    const brokenR = evaluateSpreadCorrectionReadiness(broken, { onChainOrders: someChain });
+    assert.strictEqual(brokenR.ok, false, 'gate failure refuses the cycle (correct-by-refusal)');
+    assert.strictEqual(brokenR.reason, null, 'gate failure has no premise reason');
+
+    // The planner maps a gate failure to its own stall (not 'no-candidates'),
+    // so the targeted-sync reason names the fault. Poison only config.timing so
+    // the gate throws while the rest of the planner can still run.
+    const brokenPlanner: any = makeManager();
+    await buildGeometry(brokenPlanner, [0, -1], [160, 175]);
+    Object.defineProperty(brokenPlanner.config, 'timing', { get() { throw new Error('boom'); }, configurable: true });
+    const brokenCorrection = await Grid.prepareSpreadCorrectionOrders(brokenPlanner, ORDER_TYPES.SELL, 1);
+    assert.strictEqual(brokenCorrection.stallHint, 'readiness-gate',
+        `gate failure must map to 'readiness-gate', got ${brokenCorrection.stallHint}`);
+    console.log('  ✓ cold=refuse; stale/unmatched=degraded-ok; never-synced/fresh=trusted; gate-error=refuse+readiness-gate');
+}
+
+// --- SMR-8: unmatched collision filter (P-C) --------------------------------
+async function testSmr8UnmatchedCollisionFilter() {
+    console.log('Running test: unmatched collision filter skips covered price levels');
+    const manager = makeManager();
+    await buildGeometry(manager, [0, -1], [160, 175]);
+    manager._lastSyncAt = NOW;
+    manager._lastUnmatchedChainOrders = [{ price: price(156), orderId: '1.7.u1' }];
+
+    const correction = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 5);
+    const placed = correction.ordersToPlace.map((o: any) => o.id);
+    assert(!placed.includes('slot-156'), `colliding slot-156 must be skipped, got ${JSON.stringify(placed)}`);
+    assert(placed.length > 0, `other sells must still be planned, got ${JSON.stringify(placed)}`);
+    console.log(`  ✓ skipped colliding slot-156, planned ${JSON.stringify(placed)}`);
+}
+
+// --- SMR-9: live market price is the crossing floor -------------------------
+async function testSmr9LiveMarketPricePreferred() {
+    console.log('Running test: live market price is the crossing floor');
+    const manager = makeManager();
+    await buildGeometry(manager, [0, -1], [160, 175]);
+
+    // A stale fill anchor sits far above the window (price 200); a fresh live
+    // read sits just above the empty sell band (price 157). The floor must be
+    // the CURRENT read: it admits the market-safe sells above 157 instead of
+    // walling the side off against the old anchor — no distance heuristic.
+    manager._lastMarketFillPrice = price(200);
+    manager._lastMarketFillType = ORDER_TYPES.SELL;
+    manager._lastMarketFillAt = NOW;
+    manager._liveMarketPrice = price(157);
+    manager._liveMarketPriceAt = NOW;
+
+    const correction = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 5);
+    const placed = correction.ordersToPlace.map((o: any) => o.id);
+    assert(placed.length > 0, `fresh live floor must admit market-safe sells, got ${JSON.stringify(placed)}`);
+    for (const id of placed) {
+        const idx = Number(String(id).replace('slot-', ''));
+        assert(price(idx) > price(157),
+            `${id} must sit above the live market read ${price(157).toFixed(2)}, got ${price(idx).toFixed(2)}`);
+    }
+
+    // Remove the live read: the fill anchor is the fallback floor and blocks
+    // the whole side (no distance cap relaxes it).
+    manager._liveMarketPrice = null;
+    manager._liveMarketPriceAt = 0;
+    const fallbackCorrection = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 5);
+    assert.strictEqual(fallbackCorrection.ordersToPlace.length, 0,
+        'without a live read the fill anchor is the floor (fallback)');
+    console.log(`  ✓ fresh live market price preferred (${JSON.stringify(placed)}); fill anchor is the fallback`);
+}
+
+// --- SMR-10: stale + unmatched co-occurrence --------------------------------
+// `reason` is priority-ranked (cold > stale > unmatched), so a stale+unmatched
+// cycle reports 'stale-snapshot' while `unmatched` is fully populated. The
+// collision filter must key off the DATA, or P4 protection silently expires at
+// the freshness boundary while the chain orders are still resting.
+async function testSmr10StaleUnmatchedCombined() {
+    console.log('Running test: stale + unmatched still filters collisions');
+
+    // Part A: one colliding level among several candidates is still skipped.
+    const manager = makeManager();
+    await buildGeometry(manager, [0, -1], [160, 175]);
+    manager._lastSyncAt = NOW - 60 * 60 * 1000; // stale
+    manager._lastUnmatchedChainOrders = [{ price: price(159), orderId: '1.7.u2' }];
+
+    const readiness = evaluateSpreadCorrectionReadiness(manager, {
+        onChainOrders: { buys: [], sells: [{}] }, now: NOW
+    });
+    assert.strictEqual(readiness.reason, 'stale-snapshot', 'stale ranks above unmatched');
+    assert.strictEqual(readiness.unmatched.length, 1, 'unmatched data is still present');
+
+    const correction = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 5);
+    const placed = correction.ordersToPlace.map((o: any) => o.id);
+    assert(!placed.includes('slot-159'), `colliding slot-159 must be skipped even when stale, got ${JSON.stringify(placed)}`);
+    assert(placed.length > 0, `other sells must still be planned, got ${JSON.stringify(placed)}`);
+
+    // Part B: when every candidate level collides, the stall names the collision.
+    const all = makeManager();
+    await buildGeometry(all, [0, -1], [160, 175]);
+    all._lastSyncAt = NOW - 60 * 60 * 1000; // stale mask
+    all._lastUnmatchedChainOrders = [];
+    for (let i = 150; i <= 159; i++) all._lastUnmatchedChainOrders.push({ price: price(i), orderId: `1.7.u${i}` });
+    const allCorrection = await Grid.prepareSpreadCorrectionOrders(all, ORDER_TYPES.SELL, 5);
+    assert.strictEqual(allCorrection.ordersToPlace.length, 0, 'every candidate collides => place nothing');
+    assert.strictEqual(allCorrection.stallHint, 'unmatched-orders',
+        `stall must name the collision cause, got ${allCorrection.stallHint}`);
+    console.log(`  ✓ stale+unmatched: slot-159 skipped (${JSON.stringify(placed)}); all-collide => unmatched-orders`);
+}
+
 // --- SMR-5: reject backstop keeps a pre-reject snapshot copy ----------------
 async function testSmr5RejectBackupCopy() {
     console.log('Running test: rejectCorruptedGridSnapshot backs up before clear');
@@ -316,6 +474,10 @@ async function testSmr5RejectBackupCopy() {
     await testSmr4RestoreGates();
     await testSmr6BypassGate();
     await testSmr5RejectBackupCopy();
+    await testSmr7ReadinessGate();
+    await testSmr8UnmatchedCollisionFilter();
+    await testSmr9LiveMarketPricePreferred();
+    await testSmr10StaleUnmatchedCombined();
     console.log('PASS test_spread_market_reference');
 })().catch((err) => {
     console.error(err);

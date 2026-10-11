@@ -29,10 +29,22 @@ export type OrderState = 'virtual' | 'active' | 'partial';
  *                       behind it). Only a chain sync can tell the two apart,
  *                       so it arms the refresh too; the out-of-spread staleness
  *                       watchdog remains the backstop if the sync heals nothing.
+ *   cold-book         — no live order on either side (readiness P-A): there is
+ *                       no realized spread to repair. The reconcile path owns
+ *                       the first window; a targeted sync is armed.
+ *   unmatched-orders  — readiness P-C: the only tightening candidates collided
+ *                       with known-unmatched chain orders, so planning skipped
+ *                       them and let the sync adopt them first.
+ *   readiness-gate    — the readiness gate itself failed (threw), so the cycle
+ *                       was refused correct-by-refusal. A fault to triage, not
+ *                       a structural candidate condition.
  *   batch-not-executed— a plan was prepared but the COW batch did not run.
  *   apply-error       — the broadcast threw.
+ *
+ * ('stale-snapshot' is degraded-ok, not a stall: the planner still acts, it
+ *  only withholds the LAST-FILL-GUARD bypass.)
  */
-export type SpreadCorrectionStall = 'no-free-funds' | 'unfunded' | 'no-candidates' | 'batch-not-executed' | 'apply-error';
+export type SpreadCorrectionStall = 'no-free-funds' | 'unfunded' | 'no-candidates' | 'cold-book' | 'unmatched-orders' | 'readiness-gate' | 'batch-not-executed' | 'apply-error';
 
 // ============================================================
 // SHARED PRIMITIVES (replacements for explicit `any`)
@@ -656,6 +668,16 @@ interface TimingConfig extends UnknownRecord {
   BLOCKCHAIN_FETCH_INTERVAL_MIN?: number;
   BOTS_CONFIG_POLL_INTERVAL_MS?: number;
   BTS_ACQUIRE_COOLDOWN_MIN?: number;
+  /**
+   * Spread-correction trust window (ms). How old the last completed
+   * open-orders sync may be before the local snapshot is treated as stale
+   * (the planner still acts but loses the LAST-FILL-GUARD bypass), and how
+   * often the live market price is re-read for the crossing floor. Defaults to
+   * `TIMING.SPREAD_CORRECTION_SYNC_FRESH_MS` (10 min); a non-positive value
+   * disables the time bound entirely (snapshot is never stale and the live
+   * price is never force-refreshed, so the floor stays on the fill anchor).
+   */
+  SPREAD_CORRECTION_SYNC_FRESH_MS?: number;
 }
 
 /** `config.fillProcessing` knobs read by the fill consumer. */
@@ -990,6 +1012,10 @@ export interface OrderManagerLike {
   _lastMarketFillPrice?: number | null;
   _lastMarketFillType?: string | null;
   _lastMarketFillAt?: number | null;
+  // Externally-observed live market price (B/A) and its read/attempt clocks.
+  _liveMarketPrice?: number | null;
+  _liveMarketPriceAt?: number | null;
+  _liveMarketPriceAttemptedAt?: number | null;
   _lastSyncAt?: number;
 
   // --- internals the runtime wires in or the engine reads defensively ---

@@ -14,7 +14,7 @@ const { readOpenOrdersWithMetaSafe } = chainOrdersModule;
 import { BroadcastUncertainError as BroadcastUncertainErrorBinding } from './dexbot_credential_client.js';
 const BroadcastUncertainError = BroadcastUncertainErrorBinding;
 import * as orderUtils from './order/utils/order.js';
-import { sleep, setLastFillPivot, fireStructuralResync, resolveSpreadMarketReference } from './order/utils/system.js';
+import { sleep, setLastFillPivot, fireStructuralResync, evaluateSpreadCorrectionReadiness } from './order/utils/system.js';
 const {
     buildCreateOrderArgs,
     buildCreateOpFingerprint,
@@ -76,7 +76,6 @@ const {
     ORDER_STATES,
     ORDER_TYPES,
     REBALANCE_STATES,
-    TIMING,
 } = constantsModule;
 import { acquireIfNotHeld } from './order/async_lock.js';
 import * as FormatModule from './order/format.js';
@@ -2132,22 +2131,20 @@ function isLastFillGuardBlocked(price: number, _size: number, type: unknown, las
  */
 function isSpreadCorrectionBypassAllowed(bot: BotLike): boolean {
     const mgr = bot?.manager;
-    // (1) A real market reference is known (live fill pivot or the bot-scoped
-    //     persisted reference): never bypass. Shares ONE predicate with the
-    //     planner's crossing filter (resolveSpreadMarketReference), so the two
-    //     can never disagree about whether a real fill is known.
-    if (mgr && resolveSpreadMarketReference(mgr) != null) return false;
-    // (2) Heuristic/cold reference: preserve the historical fail-open bypass,
-    //     but only while the LOCAL snapshot is fresh. A stale snapshot (known
-    //     unmatched chain orders, or an old sync) can hide the real window
-    //     edge, so the bypass is withheld and the guard applies.
-    const unmatched = Array.isArray(mgr?._lastUnmatchedChainOrders) ? mgr._lastUnmatchedChainOrders.length : 0;
-    if (unmatched > 0) return false;
-    const lastSyncAt = Number(mgr?._lastSyncAt);
-    if (!Number.isFinite(lastSyncAt) || lastSyncAt <= 0) return true; // unknown ⇒ fail-open
-    const freshMs = Number(TIMING?.SPREAD_CORRECTION_SYNC_FRESH_MS);
-    if (!Number.isFinite(freshMs) || freshMs <= 0) return true; // constant absent ⇒ fail-open
-    return Date.now() - lastSyncAt <= freshMs;
+    if (!mgr) return true; // no manager state ⇒ nothing for the guard to protect
+    // ONE verdict with the planner (evaluateSpreadCorrectionReadiness): the
+    // bypass is licensed only when the snapshot is trusted AND no real FILL
+    // reference exists. The LAST-FILL-GUARD is fill-based, so a live market
+    // price (which only strengthens the planner's crossing floor) must not
+    // change this decision. A real fill denies it; a stale or known-unmatched
+    // snapshot denies it too (the guard applies instead). Fail-closed (deny
+    // bypass) if the gate throws — never less safe than applying the guard.
+    try {
+        const readiness = evaluateSpreadCorrectionReadiness(mgr);
+        return readiness.snapshotTrusted && readiness.fillMarketRef == null;
+    } catch {
+        return false;
+    }
 }
 
 /**

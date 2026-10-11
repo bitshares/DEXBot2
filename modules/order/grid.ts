@@ -121,7 +121,7 @@ interface SpreadCorrection {
     // budget is a FUND condition ('unfunded'), not a structural one, so the
     // caller must not misclassify it as 'no-candidates' and suppress a refresh
     // that could actually repair a stale-balance read.
-    stallHint?: 'unfunded' | 'no-candidates';
+    stallHint?: SpreadCorrectionStall;
     boundaryIdx?: number;
     origin?: string;
     [key: string]: unknown;
@@ -136,13 +136,21 @@ interface PrioritizedTarget {
 /**
  * Fold a prepared correction (or the absence of one) into the stall cause the
  * caller reports. A plan that existed but funded nothing ('unfunded'), or a
- * zero sizing budget ('stallHint: unfunded'), is a FUND condition; anything
- * else is a structural 'no-candidates'. The two sides are merged with this so
- * an unfunded plan on one side is never masked by an empty plan on the other
- * (e.g. chosen side planned 1 / placed 0, opposite side planned 0).
+ * zero sizing budget ('stallHint: unfunded'), is a FUND condition. The named
+ * structural causes ('cold-book', 'unmatched-orders', 'readiness-gate') are
+ * preserved verbatim; anything else is 'no-candidates'. The two sides are
+ * merged with this so an unfunded plan on one side is never masked by an empty
+ * plan on the other (e.g. chosen side planned 1 / placed 0, opposite 0).
  */
-function classifySpreadStall(c: SpreadCorrection | null | undefined): 'unfunded' | 'no-candidates' {
-    if (Number(c?.plannedCount || 0) > 0 || c?.stallHint === 'unfunded') return 'unfunded';
+function classifySpreadStall(c: SpreadCorrection | null | undefined): SpreadCorrectionStall {
+    const hint = c?.stallHint;
+    // A plan that existed but funded nothing is a FUND condition and must win
+    // over any structural hint (those are only set on empty returns today, but
+    // the precedence is explicit so a future hint can never mask 'unfunded').
+    if (Number(c?.plannedCount || 0) > 0 || hint === 'unfunded') return 'unfunded';
+    // Preserve the readiness-gate causes verbatim; they are operationally
+    // distinct and the targeted-sync reason states them literally.
+    if (hint === 'cold-book' || hint === 'unmatched-orders' || hint === 'readiness-gate') return hint;
     return 'no-candidates';
 }
 
@@ -243,7 +251,7 @@ import {
     liveWindowIdSet,
     getOrderTypeFromUpdatedFlags
 } from './utils/order.js';
-import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot, resolveSpreadMarketReference } from './utils/system.js';
+import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot, evaluateSpreadCorrectionReadiness, maybeRefreshLiveMarketPrice } from './utils/system.js';
 import * as MathUtils from './utils/math.js';
 import { derivePriceWithPoolRef, resolveStartPriceMode } from './utils/withPoolRef.js';
 import { getWhitelistFlags } from '../market_adapter_whitelist.js';
@@ -2384,6 +2392,13 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
             ? (bestBuy + bestSell) / 2
             : Number(manager.config.startPrice) || 0;
 
+        // Keep the crossing floor current: refresh the cached live market price
+        // when it is stale, paced to one read per freshness window. The planner
+        // then uses current market truth instead of a possibly days-old fill,
+        // which is what removes the need for a distance heuristic. Best-effort;
+        // on failure the fill anchor remains the fallback.
+        await maybeRefreshLiveMarketPrice(manager, _BitShares);
+
         // Lock guard is handled at function entry — if _gridLock is absent we return early.
         let fundSnapshot: FundStateSnapshot | null = null;
 
@@ -2418,24 +2433,35 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
             manager.outOfSpread = shouldFlagOutOfSpread(currentSpread, nominalSpread, toleranceSteps, buyCount, sellCount, manager.config.incrementPercent);
             if (manager.outOfSpread === 0) return false;
 
-            // COLD BOOK: with no live order on EITHER side there is no realized
-            // spread to repair — the "spread" is synthetic (an empty side plus
-            // the startPrice fallback). A correction here can only guess a
-            // side and place through an unseen market (issue #31: fresh sells
-            // at/below the flat market after a cold regeneration). Spread
-            // correction is a REPAIR mechanism; the first window belongs to
-            // the reconcile/initial-placement path. Report a structural stall
-            // so the maintenance mirror arms the targeted chain sync — a
-            // local-only cold book (orders filled while offline, or live chain
-            // orders left unmatched) heals on the next sync, after which the
-            // correction has a real anchor.
-            if (onChainBuys.length === 0 && onChainSells.length === 0) {
+            // P-A cold book: the orchestration short-circuit, evaluated in the
+            // shared readiness gate so the planner, the crossing filter and the
+            // COW bypass all reason from one verdict. This early return keeps
+            // the cold classification ahead of the one-sided boundary branch.
+            // The planner re-evaluates the gate per call (including the re-plan
+            // path, which deliberately re-reads fresh state), so this is not a
+            // duplicated verdict but the same rule at two points in the cycle.
+            //
+            // A cold book has no realized spread to repair — the "spread" is
+            // synthetic (an empty side plus the startPrice fallback) and a
+            // correction here can only guess a side and place through an unseen
+            // market (issue #31). The reconcile path owns the first window;
+            // 'cold-book' is a structural stall that arms the targeted sync.
+            // Degraded causes (stale/unmatched) keep ok=true. A null reason is
+            // a gate failure (correct-by-refusal) and stalls as 'readiness-gate'.
+            const readiness = evaluateSpreadCorrectionReadiness(manager, {
+                onChainOrders: { buys: onChainBuys, sells: onChainSells }
+            });
+            if (!readiness.ok) {
+                const cold = readiness.reason === 'cold-book';
                 manager.logger?.log?.(
-                    `[SPREAD] Book is cold (no live BUY or SELL on chain); skipping spread correction — ` +
-                    `the reconcile path owns the first window. Requesting a targeted chain sync.`,
+                    (cold
+                        ? `[SPREAD] Book is cold (no live BUY or SELL on chain); skipping spread correction — ` +
+                          `the reconcile path owns the first window.`
+                        : `[SPREAD] Spread-correction readiness gate failed; skipping this cycle.`) +
+                    ` Requesting a targeted chain sync.`,
                     'warn'
                 );
-                stall = 'no-candidates';
+                stall = cold ? 'cold-book' : 'readiness-gate';
                 return false;
             }
 
@@ -3040,6 +3066,35 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         }
 
         const ordersToPlace: ManagedOrder[] = [];
+        // SHARED READINESS GATE (P-A/P-B/P-C): one verdict for the planner, the
+        // crossing filter and the COW bypass. Hard refusal (cold book) returns
+        // before any planning; degraded causes (stale/unmatched) keep planning
+        // but withhold the bypass and drive the collision filter below.
+        const onChainView = _getOnChainOrders(manager);
+        const readiness = evaluateSpreadCorrectionReadiness(manager, {
+            onChainOrders: { buys: onChainView.onChainBuys, sells: onChainView.onChainSells }
+        });
+        if (!readiness.ok) {
+            // Only 'cold-book' is a named hard-refusal premise; a null reason is
+            // a gate failure and gets its own stall so triage logs are precise.
+            // Either way the targeted sync arms via the stall.
+            const hardRefusalStall: SpreadCorrectionStall = readiness.reason === 'cold-book'
+                ? 'cold-book'
+                : 'readiness-gate';
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] Refusing cycle: ${readiness.reason ?? 'readiness-gate-error'} — a targeted sync will re-evaluate`,
+                'warn'
+            );
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: hardRefusalStall, origin: COW_ORIGINS.SPREAD_CORRECTION };
+        }
+        // Empty-candidate stall cause: name the collision case when unmatched
+        // orders are present, so the targeted-sync reason states the truth.
+        // Keyed off the DATA, not `reason`: reason is priority-ranked (cold >
+        // stale > unmatched), so a stale+unmatched cycle reports 'stale-snapshot'
+        // and would otherwise mask the collision cause.
+        const refusalStallHint: SpreadCorrectionStall = readiness.unmatched.length > 0
+            ? 'unmatched-orders'
+            : 'no-candidates';
         const railType = preferredSide;
         const sideName = railType === ORDER_TYPES.BUY ? 'buy' : 'sell';
         const configuredMissingSlots = Number(outOfSpread || 0);
@@ -3124,7 +3179,9 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // market-nearest comparator that replaced it fixed that case but sorts
         // the FAR end first when the empties sit BELOW the window (the normal
         // post-fill state), which is the same class of bug mirrored.
-        const { onChainBuys, onChainSells } = _getOnChainOrders(manager);
+        // Reuse the gate's view: one slot-gated scan per planner call feeds both
+        // the readiness verdict and the live window edges below.
+        const { onChainBuys, onChainSells } = onChainView;
         const railBestIsMax = railType === ORDER_TYPES.BUY;
         const bestLiveOnRail = railBestIsMax
             ? (onChainBuys.length ? Math.max(...onChainBuys.map((o) => o.price)) : null)
@@ -3190,11 +3247,41 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // #31). Fail-open when no real fill is known — never guess from grid
         // geometry. This complements tightensSpread (which is anchor-relative)
         // with an absolute, market-relative floor.
-        const marketRef = resolveSpreadMarketReference(manager);
+        // Crossing floor from the shared readiness verdict: a fresh live market
+        // read when available, else the fill-derived reference. No distance
+        // heuristic — the floor is kept current rather than judged stale.
+        const marketRef = readiness.marketRef;
         const doesNotCrossMarket = (c: ManagedOrder): boolean => {
             if (marketRef == null || c?.price == null || !Number.isFinite(c.price)) return true;
             return railBestIsMax ? c.price < marketRef : c.price > marketRef;
         };
+        // P-C COLLISION FILTER: when the gate saw fresh unmatched chain orders,
+        // drop candidates whose price level they already occupy — placing
+        // another order at the same level would duplicate a live order the
+        // grid has not adopted yet. Price-level only: the unmatched row carries
+        // no side, and a duplicate at a level is a duplicate regardless.
+        //
+        // Keyed off the DATA, not `reason`: reason is priority-ranked (cold >
+        // stale > unmatched), so a stale+unmatched cycle reports
+        // 'stale-snapshot' while the unmatched list is fully populated. The
+        // P4 protection must not expire with snapshot staleness — those chain
+        // orders only clear on the next sync.
+        const unmatchedPrices = readiness.unmatched.length > 0
+            ? readiness.unmatched.map((u) => Number(u?.price)).filter((p) => Number.isFinite(p) && p > 0)
+            : [];
+        const doesNotCollideUnmatched = (c: ManagedOrder): boolean => {
+            if (unmatchedPrices.length === 0 || c?.price == null || !Number.isFinite(c.price)) return true;
+            const precision = railType === ORDER_TYPES.SELL ? manager.assets.assetA.precision : manager.assets.assetB.precision;
+            return !unmatchedPrices.some((p) => {
+                try { return priceSlotEqual(p, c.price, precision); } catch { return Math.abs(p - c.price) / c.price <= ((manager.config.incrementPercent ?? 0) / 100); }
+            });
+        };
+        if (unmatchedPrices.length > 0) {
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] ${unmatchedPrices.length} known-unmatched chain price level(s) excluded from ${sideName} candidates — sync will adopt them first`,
+                'warn'
+            );
+        }
         const typedSpreadCandidates = allOrders
             .filter((o) =>
                 o.type === ORDER_TYPES.SPREAD
@@ -3203,6 +3290,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             )
             .filter(tightensSpread)
             .filter(doesNotCrossMarket)
+            .filter(doesNotCollideUnmatched)
             .sort(sortCandidates)
             .slice(0, missingSlots);
 
@@ -3249,6 +3337,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             )
             .filter(tightensSpread)
             .filter(doesNotCrossMarket)
+            .filter(doesNotCollideUnmatched)
             .sort(sortCandidates)
             .slice(0, missingSlots);
 
@@ -3308,11 +3397,19 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             const crossingPromoted = marketRef == null
                 ? []
                 : promotedCandidates.filter((c) => !doesNotCrossMarket(c));
+            const collidingPromoted = promotedCandidates.filter((c) => !doesNotCollideUnmatched(c));
             if (marketRef != null && crossingPromoted.length > 0) {
                 manager.logger?.log?.(
                     `[SPREAD-CORRECTION] Refusing boundary promotion on ${sideName}: ` +
                     `${crossingPromoted.length} slot(s) would cross the last market fill ` +
                     `${Format.formatPrice6(marketRef)}`,
+                    'warn'
+                );
+                promotedCandidates.length = 0;
+            } else if (collidingPromoted.length > 0) {
+                manager.logger?.log?.(
+                    `[SPREAD-CORRECTION] Refusing boundary promotion on ${sideName}: ` +
+                    `${collidingPromoted.length} slot(s) collide with known-unmatched chain orders`,
                     'warn'
                 );
                 promotedCandidates.length = 0;
@@ -3409,7 +3506,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                     : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
                 'warn'
             );
-            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: COW_ORIGINS.SPREAD_CORRECTION };
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: refusalStallHint, origin: COW_ORIGINS.SPREAD_CORRECTION };
         }
 
         const orphanedIds = new Set(orphanedVirtualCandidates.map((o) => o.id));
