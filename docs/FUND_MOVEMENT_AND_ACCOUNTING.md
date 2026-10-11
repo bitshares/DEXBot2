@@ -156,6 +156,8 @@ SHRINK: overAlloc = (gridTracked - allocatedCapital) / allocatedCapital * 100
 
 Deliberately no per-side chain-total-drop leg: a normal fill moves value across sides (pays one asset, receives the other — see `processFillAccounting`), so one side's total routinely drops ≥3% on ordinary fills, and the fill pipeline already re-sizes from the post-fill budget.
 
+**Committed-Size Drift leg**: the available-funds ratio above is measured as `chainFree − virtual`. The fill/rotation sizing pipeline re-derives VIRTUAL slot sizes from the live budget, so an external deposit (or withdrawal) is folded into the virtual reservation on the first rotation after it lands — `chainFree` and `virtual` move together, the ratio stays pinned at the unallocated remainder, and the on-chain (ACTIVE/PARTIAL) orders can stay at their pre-deposit sizes with no trigger. `checkCommittedSizeDrift` closes that gap: it computes the geometric ideal for each side from the current budget and compares it against the sizes actually committed on-chain (replaying the resize path's free-balance growth cap). A side whose committed orders would change by ≥ `GRID_REGENERATION_PERCENTAGE` of its **committed size** is flagged on the same ratio leg, so the full side is resized rather than only the fill-generated replacement orders. The denominator is the committed total, not the whole allocation: the on-chain window is a small slice of the plan (the far rail holds most of it), so an allocation-relative fraction would understate a genuine full-side undersize.
+
 **How It Works (grow)**:
 1. Fill occurs → proceeds added to `chainFree`
 2. `calculateAvailableFundsValue()` computes true spending power (chainFree minus reservations)

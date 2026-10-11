@@ -782,6 +782,11 @@ initializeGrid(manager)
 // Detect divergence and trigger updates
 checkAndUpdateGridIfNeeded(manager)
 
+// Close the virtual-reservation blind spot: flag a side whose on-chain orders
+// lag the geometric ideal even after the ratio numerator (chainFree - virtual)
+// was masked by the fill/rotation reservation
+checkCommittedSizeDrift(manager)
+
 // Compare ideal vs. persisted grid
 compareGrids(calculatedGrid, persistedGrid, manager)
 ```

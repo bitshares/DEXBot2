@@ -10,10 +10,10 @@ const assert = require('assert');
 const { PATHS } = require('../modules/paths');;
 const fs = require('fs');
 const path = require('path');
-const { calculateGapSlots, _getSizingContext, createOrderGrid, initializeGrid, checkAndUpdateGridIfNeeded, monitorDivergence, hasAnyDust } = require('../modules/order/grid');
+const { calculateGapSlots, _getSizingContext, createOrderGrid, initializeGrid, checkAndUpdateGridIfNeeded, checkCommittedSizeDrift, monitorDivergence, hasAnyDust } = require('../modules/order/grid');
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, GRID_LIMITS, BUILD_DIR } = require('../modules/constants');
 const { OrderManager } = require('../modules/order/manager');
-const { allocateFundsByWeights, getSingleDustThreshold, calculateOrderCreationFees } = require('../modules/order/utils/math');
+const { allocateFundsByWeights, getSingleDustThreshold, calculateOrderCreationFees, calculateRotationOrderSizes } = require('../modules/order/utils/math');
 const { shouldFlagOutOfSpread, assignGridRoles } = require('../modules/order/utils/order');
 const { whitelistFile, resetMarketAdapterWhitelistCache } = require('../modules/market_adapter_whitelist');
 const { ensureDir, unlink: safeUnlink, writeJSON } = require('../modules/storage').getStorage();
@@ -384,6 +384,144 @@ async function runTests() {
         const settled = checkAndUpdateGridIfNeeded(shrinkManager);
         assert.strictEqual(settled.buyUpdated, false, 'Re-sized post-fill grid must not re-trigger');
         assert.strictEqual(settled.sellUpdated, false, 'Re-sized post-fill grid must not re-trigger');
+    }
+
+    console.log(' - Testing committed-size drift closes the virtual-reservation blind spot...');
+    {
+        // Regression for the deposit that slips past the available-funds ratio:
+        // the fill/rotation sizing folds a deposit into funds.virtual, so
+        // `chainFree - virtual` stays pinned at the unallocated remainder while
+        // the on-chain (ACTIVE) orders still carry the pre-deposit sizes. The
+        // committed-size drift leg must flag the side so the full side is
+        // re-sized, not just the fill-generated replacement orders.
+        const BUDGET = 1000;
+        const PRECISION = 8;
+        const SLOT_COUNT = 20;
+        // On-chain window is only a small slice of the whole side (as on a live
+        // market-pair bot: low tens of thousands committed of a few hundred
+        // thousand planned).
+        const COMMITTED_COUNT = 2;
+        const buildManager = (committedFactor: number) => {
+            const config = {
+                assetA: 'USD',
+                assetB: 'EUR',
+                incrementPercent: 0.5,
+                targetSpreadPercent: 2,
+                weightDistribution: { buy: 1, sell: 1 },
+                activeOrders: { buy: 2, sell: 2 },
+                min_BTS_value: null,
+                gridLimits: { GRID_REGENERATION_PERCENTAGE: 3 },
+            };
+            const slots = [];
+            for (let i = 0; i < SLOT_COUNT; i++) {
+                slots.push({
+                    id: `slot-${100 + i}`,
+                    type: ORDER_TYPES.SELL,
+                    state: i < COMMITTED_COUNT ? ORDER_STATES.ACTIVE : ORDER_STATES.VIRTUAL,
+                    orderId: i < COMMITTED_COUNT ? `1.7.${i}` : '',
+                    price: 1 + i * 0.01,
+                    size: 0,
+                });
+            }
+            // Same ideal the resize path would write (matched budget/sort/curve).
+            // Virtual slots already carry the fill-pipeline sizing (they absorbed
+            // the deposit); the committed window is the stale leg under test.
+            const ideal = calculateRotationOrderSizes(
+                BUDGET, 0, slots.length, ORDER_TYPES.SELL, config, 0, PRECISION
+            );
+            for (let i = 0; i < SLOT_COUNT; i++) {
+                slots[i].size = i < COMMITTED_COUNT ? ideal[i] * committedFactor : ideal[i];
+            }
+
+            return {
+                assets: {
+                    assetA: { id: '1.3.0', symbol: 'USD', precision: PRECISION },
+                    assetB: { id: '1.3.1', symbol: 'EUR', precision: PRECISION },
+                },
+                config,
+                orders: new Map(slots.map((s) => [s.id, s])),
+                // virtual nearly equals chainFree -> the ratio leg sees ~0.5%,
+                // exactly the blind spot the committed-drift leg must cover.
+                funds: {
+                    total: { grid: { buy: 0, sell: BUDGET } },
+                    virtual: { buy: 0, sell: 895 },
+                    btsFeesOwed: 0,
+                    btsBalance: { free: 0, total: 0, locked: 0 },
+                },
+                accountTotals: { buyFree: 0, sellFree: 900 },
+                _gridSidesUpdated: new Set<string>(),
+                logger: { log: () => {} },
+                recalculateFunds: async () => {},
+                getChainFundsSnapshot() {
+                    return {
+                        allocatedBuy: 0,
+                        allocatedSell: BUDGET,
+                        chainTotalBuy: 0,
+                        chainTotalSell: BUDGET,
+                        btsBalance: null,
+                    };
+                },
+            };
+        };
+
+        // The active window is a small slice of the allocation, so measuring the
+        // committed gap against `allocated` would never reach 3% even though the
+        // committed side is genuinely ~5% under-sized. Pin that scaling trap.
+        const committedIdeals = calculateRotationOrderSizes(
+            BUDGET, 0, SLOT_COUNT, ORDER_TYPES.SELL,
+            { incrementPercent: 0.5, weightDistribution: { buy: 1, sell: 1 } }, 0, PRECISION
+        );
+        const committedIdealSum = committedIdeals.slice(0, COMMITTED_COUNT).reduce((a, b) => a + b, 0);
+        const underAllocatedPct = (committedIdealSum * 0.05 / BUDGET) * 100;
+        assert(underAllocatedPct < 3, 'precondition: committed gap is below 3% of the whole allocation');
+
+        // Steady state: committed equals ideal -> the ratio leg is blind AND the
+        // committed-drift leg must stay silent (no churn).
+        const settledManager = buildManager(1);
+        const settledRatio = checkAndUpdateGridIfNeeded(settledManager);
+        assert.strictEqual(settledRatio.sellUpdated, false, 'settled ratio leg must stay silent');
+        const settledDrift = await checkCommittedSizeDrift(settledManager);
+        assert.strictEqual(settledDrift.sellUpdated, false, 'settled committed grid must not drift-trigger');
+        assert.strictEqual(settledDrift.sellShrink, false, 'settled committed grid must not shrink-trigger');
+
+        // Deposit folded into virtual (committed window 5% under ideal): the ratio
+        // leg is blind, the committed-drift leg must fire.
+        const depositedManager = buildManager(0.95);
+        const depositedRatio = checkAndUpdateGridIfNeeded(depositedManager);
+        assert.strictEqual(depositedRatio.sellUpdated, false, 'precondition: ratio leg is blind to the absorbed deposit');
+        const depositedDrift = await checkCommittedSizeDrift(depositedManager);
+        assert.strictEqual(depositedDrift.sellUpdated, true, 'under-sized committed sell orders must drift-trigger grow');
+        assert.strictEqual(depositedDrift.sellShrink, false, 'grow direction must not be flagged as shrink');
+        assert.ok(depositedManager._gridSidesUpdated.has(ORDER_TYPES.SELL), 'sell side must be flagged for the full-side resize');
+
+        // monitorDivergence must surface the drift as a ratio-leg update so the
+        // maintenance runtime routes it to the COW resize (not an RMS resync).
+        depositedManager._gridSidesUpdated = new Set();
+        const deposited = await monitorDivergence(depositedManager, [], []);
+        assert.strictEqual(deposited.needsUpdate, true, 'committed drift must request a divergence update');
+        assert.strictEqual(deposited.sell.ratio, true, 'committed drift must travel the ratio leg');
+        assert.strictEqual(deposited.sell.rms, false, 'committed drift must not be reported as RMS');
+
+        // External withdrawal: committed exceeds ideal -> shrink leg.
+        const withdrewManager = buildManager(1.05);
+        const withdrewDrift = await checkCommittedSizeDrift(withdrewManager);
+        assert.strictEqual(withdrewDrift.sellUpdated, true, 'over-sized committed sell orders must drift-trigger');
+        assert.strictEqual(withdrewDrift.sellShrink, true, 'withdrawal direction must be flagged as shrink');
+
+        // Partial-fill remainder left on a committed slot (sync wrote the on-chain
+        // remainder, pipeline has not resized it back): the leg is self-correcting
+        // once the gap crosses the threshold, and stays silent for a sub-threshold
+        // remainder so ordinary small partials do not churn a full-side resize.
+        const committedTotalIdeals = committedIdealSum;
+        const withRemainder = (fillFraction: number) => {
+            const manager = buildManager(1);
+            manager.orders.get('slot-100').size = committedIdeals[0] - fillFraction * committedTotalIdeals;
+            return manager;
+        };
+        const largePartialDrift = await checkCommittedSizeDrift(withRemainder(0.06));
+        assert.strictEqual(largePartialDrift.sellUpdated, true, 'a >=3% partial-fill remainder must drift-trigger the self-correcting resize');
+        const smallPartialDrift = await checkCommittedSizeDrift(withRemainder(0.01));
+        assert.strictEqual(smallPartialDrift.sellUpdated, false, 'a sub-threshold partial-fill remainder must not churn a full-side resize');
     }
 
     console.log(' - Testing initializeGrid with case-insensitive AMA mode and out-of-bounds startPrice...');

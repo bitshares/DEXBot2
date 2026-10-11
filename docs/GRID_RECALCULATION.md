@@ -457,16 +457,19 @@ GRID_LIMITS: {
 **Parameters:**
 - `GRID_REGENERATION_PERCENTAGE`: Bidirectional threshold for size recalculation (default: `3%`)
   - Grow: free funds accumulate to ≥3% of allocated capital (e.g. availableFunds ≥ 60 BTS on a 2000 BTS grid)
+  - Grow (committed drift): the on-chain (ACTIVE/PARTIAL) orders lag their geometric ideal by ≥3% of the committed size — catches an external deposit that the fill/rotation pipeline already folded into `virtual`, which blinds the `availableFunds = chainFree − virtual` ratio
   - Shrink: grid-tracked size (ACTIVE + PARTIAL + VIRTUAL) exceeds allocation by ≥3% (external fund removal resizes affected orders down; per-side chain totals are not used — fills move value across sides)
+  - Shrink (committed drift): the on-chain orders exceed their geometric ideal by ≥3% of the committed size (external withdrawal)
 
 ### How It Works
 
 1. **OrderManager** tracks available funds per side (BUY and SELL separately)
 2. Allocated capital = number of active orders × size per order
-3. When `availableFunds / allocatedCapital × 100 >= GRID_REGENERATION_PERCENTAGE`:
+3. When `availableFunds / allocatedCapital × 100 >= GRID_REGENERATION_PERCENTAGE`, OR the committed-drift leg flags the side (on-chain orders ≥threshold off their geometric ideal):
    - Triggers `Grid.recalculateGrid()` on that side only
    - Recalculates order sizes to incorporate freed capital
    - Maintains asymmetric fills (BUY fills don't trigger SELL resize)
+   - The committed-drift leg is what keeps a deposit that was absorbed into the VIRTUAL reservation from silently leaving the on-chain side un-resized
 4. After the resize, available funds are re-allocated into active orders
 5. Mirror (shrink): when `(gridTracked - allocated) / allocated × 100 >= threshold` (external fund removal), the same path resizes affected orders down
 

@@ -12,7 +12,7 @@
  * - Detects and flags out-of-spread conditions
  *
  * ===============================================================================
- * TABLE OF CONTENTS - Grid Functions (22 exported functions)
+ * TABLE OF CONTENTS - Grid Functions (23 exported functions)
  * ===============================================================================
  *
  * CONFIGURATION & CALCULATION (2 functions)
@@ -34,8 +34,11 @@
  * GRID RECALCULATION (1 function - async)
  *   7. recalculateGrid(manager, opts) - Recalculate grid based on current state
  *
- * GRID STATE CHECKING (1 function)
+ * GRID STATE CHECKING (2 functions)
  *   8. checkAndUpdateGridIfNeeded(manager) - Check if grid needs update
+ *   8b. checkCommittedSizeDrift(manager) - Flag a side whose on-chain orders
+ *       lag the geometric ideal (closes the fund-trigger blind spot left by
+ *       VIRTUAL reservations absorbing deposits/withdrawals)
  *
  * BLOCKCHAIN SYNCHRONIZATION (2 functions - async)
  *   9. _recalculateGridOrderSizesFromBlockchain(manager, orderType, options) - Recalculate sizes from blockchain
@@ -1802,6 +1805,159 @@ export function checkAndUpdateGridIfNeeded(manager: OrderManagerLike): { buyUpda
     }
 
     /**
+     * Committed-size drift check (fund trigger blind-spot closure).
+     *
+     * checkAndUpdateGridIfNeeded measures available funds as
+     * `chainFree - virtualReservation`. The fill/rotation sizing pipeline
+     * re-derives VIRTUAL slot sizes from the live budget, so a deposit (or an
+     * external withdrawal) is folded into the virtual reservation on the first
+     * rotation after it lands. chainFree and virtual then move together, the
+     * ratio stays pinned at the unallocated remainder, and a side whose
+     * on-chain (ACTIVE/PARTIAL) orders still carry the pre-deposit sizes is
+     * never flagged — the full-side resize waits for an unrelated full resync
+     * (RMS or AMA recenter).
+     *
+     * This leg closes that blind spot: it computes the geometric ideal for
+     * every side slot from the current budget and measures the gap against the
+     * sizes actually committed on chain, applying the resize path's own
+     * free-balance growth cap so the metric equals the on-chain delta a resize
+     * would really produce. A side whose committed orders would change by
+     * >= GRID_REGENERATION_PERCENTAGE of the committed size is flagged for the
+     * same COW resize path (applyGridDivergenceCorrections), which updates
+     * every changed on-chain order — i.e. the full side.
+     *
+     * Only on-chain slots contribute: VIRTUAL slots are the plan (already sized
+     * by the fill pipeline) and SPREAD placeholders carry no commitment.
+     * Non-slot-N shelf/manual orders are excluded (never resized by the
+     * geometric pass; same gate as _recalculateGridOrderSizesFromBlockchain).
+     *
+     * @param {import('./types').OrderManager} manager - Manager instance with order state
+     * @returns {Promise<unknown>} Update status per side (grow/shrink flags)
+     */
+export async function checkCommittedSizeDrift(manager: OrderManagerLike): Promise<{ buyUpdated: boolean; sellUpdated: boolean; buyShrink: boolean; sellShrink: boolean }> {
+        const result = { buyUpdated: false, sellUpdated: false, buyShrink: false, sellShrink: false };
+        if (!manager || !manager.assets || !manager.orders) return result;
+
+        const rawThreshold = manager.config?.gridLimits?.GRID_REGENERATION_PERCENTAGE;
+        // Same fallback contract as checkAndUpdateGridIfNeeded: a configured 0 or
+        // non-numeric value falls back to the global default rather than disabling.
+        const threshold = (Number.isFinite(Number(rawThreshold)) && Number(rawThreshold) > 0)
+            ? Number(rawThreshold)
+            : GRID_LIMITS.GRID_REGENERATION_PERCENTAGE;
+
+        // Refresh totals once so both sides size from one fund snapshot (mirrors
+        // compareGrids) — the caller's tick already recalced, this is idempotent.
+        if (typeof manager.recalculateFunds === 'function') {
+            await manager.recalculateFunds();
+        }
+        const sides = [
+            { name: 'buy', orderType: ORDER_TYPES.BUY },
+            { name: 'sell', orderType: ORDER_TYPES.SELL }
+        ];
+
+        for (const s of sides) {
+            const ctx = await _getSizingContext(manager, s.name, { skipRecalc: true });
+            if (!ctx || !(ctx.budget > 0)) continue;
+
+            // Must match _recalculateGridOrderSizesFromBlockchain exactly: same
+            // source (manager.orders), same ASC price sort, same denominator set.
+            const allSideSlots = Array.from(manager.orders.values())
+                .filter((o) => o.type === s.orderType)
+                .sort((a, b) => a.price - b.price);
+            if (allSideSlots.length === 0) continue;
+
+            let newSizes: number[];
+            try {
+                newSizes = calculateRotationOrderSizes(
+                    ctx.budget,
+                    0,
+                    allSideSlots.length,
+                    s.orderType,
+                    manager.config,
+                    0,
+                    ctx.precision
+                );
+            } catch (_err) {
+                continue;
+            }
+
+            // Replay the resize path's free-balance cap so `growth` is exactly the
+            // committed growth the resize could apply (VIRTUAL slots do not consume
+            // free balance; shrink releases it back for later slots). The cap uses
+            // the float delta (matching the resize), but the reported drift is gated
+            // on the same blockchain-integer change test the resize uses to decide
+            // whether an on-chain UPDATE is emitted.
+            const freeKey = s.name === 'buy' ? 'buyFree' : 'sellFree';
+            let sideFreeAvailable = Number(manager.accountTotals?.[freeKey] || 0);
+            let growth = 0;
+            let shrink = 0;
+            let committedTotal = 0;
+            for (let i = 0; i < allSideSlots.length; i++) {
+                const slot = allSideSlots[i];
+                if (!isOrderOnChain(slot) || !hasOnChainId(slot)) continue;
+                if (parseSlotIndex(slot.id) === null) continue;
+
+                const ideal = Number(newSizes?.[i] || 0);
+                const current = Number(slot.size || 0);
+                committedTotal += current;
+
+                let newSize = ideal;
+                const delta = ideal - current;
+                if (delta > 0) {
+                    const affordableDelta = Math.min(delta, Math.max(0, sideFreeAvailable));
+                    if (affordableDelta < delta) newSize = current + affordableDelta;
+                    sideFreeAvailable = Math.max(0, sideFreeAvailable - affordableDelta);
+                } else if (delta < 0) {
+                    sideFreeAvailable += Math.abs(delta);
+                }
+
+                // Match the resize's integer-space change gate: a slot whose size
+                // rounds to the same blockchain integer emits no UPDATE and must not
+                // count toward the drift metric (otherwise the leg would re-trigger
+                // against a no-op resize every tick).
+                const currentInt = floatToBlockchainInt(current, ctx.precision);
+                const newInt = floatToBlockchainInt(newSize, ctx.precision);
+                if (currentInt === newInt) continue;
+
+                const applied = newSize - current;
+                if (applied > 0) growth += applied;
+                else if (applied < 0) shrink += Math.abs(applied);
+            }
+
+            // Baseline is the on-chain committed size, NOT the whole allocation:
+            // a deposit's active-window share is a small slice of the allocation
+            // (the far rail holds most of the plan), so an `allocated` denominator
+            // would never reach 3% while the committed side is genuinely ~12%
+            // under-sized. Relative to the committed side, a normal fill moves the
+            // budget by well under the threshold, so this stays quiet in steady
+            // state. No on-chain orders -> nothing to resize.
+            if (!(committedTotal > 0)) continue;
+            const growthPct = (growth / committedTotal) * 100;
+            const shrinkPct = (shrink / committedTotal) * 100;
+            const growTrigger = growthPct >= threshold;
+            const shrinkTrigger = shrinkPct >= threshold;
+
+            manager.logger?.log?.(
+                `[DIVERGENCE] ${s.name.toUpperCase()} committed-drift check: committedTotal=${committedTotal.toFixed(5)}, committedGrowth=${growth.toFixed(5)}, committedShrink=${shrink.toFixed(5)}, growth=${growthPct.toFixed(4)}% (threshold=${threshold}%) → ${growTrigger ? 'TRIGGER-GROW' : 'no trigger'} | shrink=${shrinkPct.toFixed(4)}% → ${shrinkTrigger ? 'TRIGGER-SHRINK' : 'no trigger'}`,
+                'debug'
+            );
+
+            if (growTrigger || shrinkTrigger) {
+                if (!(manager._gridSidesUpdated instanceof Set)) manager._gridSidesUpdated = new Set();
+                manager._gridSidesUpdated.add(s.orderType);
+                if (s.name === 'buy') {
+                    result.buyUpdated = true;
+                    if (shrinkTrigger) result.buyShrink = true;
+                } else {
+                    result.sellUpdated = true;
+                    if (shrinkTrigger) result.sellShrink = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Standardize grid sizes using blockchain total context.
      *
      * FUND CAPPING STRATEGY:
@@ -2280,26 +2436,37 @@ export async function compareGrids(calculatedGrid: unknown[], persistedGrid: unk
 export async function monitorDivergence(manager: OrderManagerLike, calculatedGrid: unknown[], persistedGrid: unknown[]): Promise<{ needsUpdate: boolean; buy: { updated: boolean; ratio: boolean; rms: boolean; metric: number; shrink: boolean }; sell: { updated: boolean; ratio: boolean; rms: boolean; metric: number; shrink: boolean }; orderType?: string | null; thresholdPct?: number }> {
         // 1. Check ratio-based divergence (available funds vs allocated)
         const ratioResult = checkAndUpdateGridIfNeeded(manager);
+        // 1b. Committed-size drift: the same 3% leg, but measured on the
+        // on-chain orders. Closes the blind spot where a deposit/withdrawal has
+        // already been folded into the VIRTUAL reservation, so
+        // `chainFree - virtual` no longer reflects it while the ACTIVE orders
+        // stay un-resized.
+        const driftResult = await checkCommittedSizeDrift(manager);
 
-        if (ratioResult.buyUpdated || ratioResult.sellUpdated) {
+        const ratioBuy = ratioResult.buyUpdated || driftResult.buyUpdated;
+        const ratioSell = ratioResult.sellUpdated || driftResult.sellUpdated;
+        const buyShrink = ratioResult.buyShrink === true || driftResult.buyShrink === true;
+        const sellShrink = ratioResult.sellShrink === true || driftResult.sellShrink === true;
+
+        if (ratioBuy || ratioSell) {
             return {
                 needsUpdate: true,
-                buy: { updated: ratioResult.buyUpdated, ratio: ratioResult.buyUpdated, rms: false, metric: 0, shrink: ratioResult.buyShrink === true },
-                sell: { updated: ratioResult.sellUpdated, ratio: ratioResult.sellUpdated, rms: false, metric: 0, shrink: ratioResult.sellShrink === true },
-                orderType: getOrderTypeFromUpdatedFlags(ratioResult.buyUpdated, ratioResult.sellUpdated)
+                buy: { updated: ratioBuy, ratio: ratioBuy, rms: false, metric: 0, shrink: buyShrink },
+                sell: { updated: ratioSell, ratio: ratioSell, rms: false, metric: 0, shrink: sellShrink },
+                orderType: getOrderTypeFromUpdatedFlags(ratioBuy, ratioSell)
             };
         }
         
         // 2. Check RMS-based divergence (structural deviation)
         const rmsResult = await compareGrids(calculatedGrid, persistedGrid, manager);
         
-        const buyUpdated = ratioResult.buyUpdated || rmsResult.buy.updated;
-        const sellUpdated = ratioResult.sellUpdated || rmsResult.sell.updated;
+        const buyUpdated = rmsResult.buy.updated;
+        const sellUpdated = rmsResult.sell.updated;
         
         return {
             needsUpdate: buyUpdated || sellUpdated,
-            buy: { updated: buyUpdated, ratio: ratioResult.buyUpdated, rms: rmsResult.buy.updated, metric: rmsResult.buy.metric, shrink: ratioResult.buyShrink === true },
-            sell: { updated: sellUpdated, ratio: ratioResult.sellUpdated, rms: rmsResult.sell.updated, metric: rmsResult.sell.metric, shrink: ratioResult.sellShrink === true },
+            buy: { updated: buyUpdated, ratio: false, rms: rmsResult.buy.updated, metric: rmsResult.buy.metric, shrink: false },
+            sell: { updated: sellUpdated, ratio: false, rms: rmsResult.sell.updated, metric: rmsResult.sell.metric, shrink: false },
             orderType: getOrderTypeFromUpdatedFlags(buyUpdated, sellUpdated),
             thresholdPct: rmsResult.thresholdPct
         };
