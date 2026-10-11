@@ -73,6 +73,13 @@ function testExternalWriteInvalidatesTheEntry() {
     clearJsonCache();
     const payload = { candles: [[1]] };
     writeFile(payload);
+    // Force the recorded stamp into the past so the foreign write below is
+    // guaranteed a strictly newer mtime even on coarse-granularity filesystems
+    // (a same-millisecond rewrite is the pathological case the cache's
+    // mtime+size stamp cannot distinguish; without this the test is
+    // filesystem-timing dependent).
+    const past = new Date(Date.now() - 10_000);
+    fs.utimesSync(filePath, past, past);
     noteJsonWritten(filePath, payload);
     // Another writer (gap repair, ama_signal_runner, clear script) rewrites it.
     writeFile({ candles: [[2]] });
