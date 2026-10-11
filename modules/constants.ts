@@ -359,6 +359,13 @@ let TIMING = {
     // by moving the boundary). Time-based so it holds for any tick cadence.
     SPREAD_STALE_WARN_MS: 10 * 60 * 1000,  // 10 minutes
     SPREAD_STALE_ESCALATE_MS: 30 * 60 * 1000,  // 30 minutes
+    // SPREAD_CORRECTION_SYNC_FRESH_MS: how old the last completed open-orders
+    // sync may be before a spread-correction CREATE loses its LAST-FILL-GUARD
+    // bypass. A stale local snapshot (old sync or known-unmatched chain
+    // orders) can hide the real window edge, so the bypass is withheld and the
+    // guard applies instead of trusting the stale anchor. Fail-open when no
+    // sync timestamp exists yet.
+    SPREAD_CORRECTION_SYNC_FRESH_MS: 10 * 60 * 1000,  // 10 minutes
     // Dedicated escalation cooldown for the spread-stale watchdog. Deliberately
     // separate from BOUNDARY_HOLD_RESYNC_COOLDOWN_MS so tuning boundary-hold
     // behavior never silently changes the spread watchdog cadence.

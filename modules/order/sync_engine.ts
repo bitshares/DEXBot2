@@ -746,6 +746,10 @@ class SyncEngine {
                         ? (innerResult.unmatchedChainOrders ?? []).map((order) => ({ ...(order as Record<string, unknown>) }) as UnmatchedChainOrder)
                         : [];
                     mgr._lastUnmatchedChainOrdersAt = unmatchedCount > 0 ? Date.now() : 0;
+                    // Freshness stamp for the spread-correction bypass gate:
+                    // only a completed open-orders sync makes the local anchor
+                    // trustworthy enough to bypass the LAST-FILL-GUARD.
+                    mgr._lastSyncAt = Date.now();
                     mgr.logger?.log?.(
                         `[SYNC] Synchronization complete: ${innerResult.filledOrders.length} filled, ` +
                         `${innerResult.updatedOrders.length} updated, ` +

@@ -828,6 +828,7 @@ export interface AccountOrdersLike {
   loadGenesis(forceReload?: boolean): unknown;
   loadGapEvacStreaks(forceReload?: boolean): unknown;
   loadLastFillPivot?(forceReload?: boolean): unknown;
+  loadLastMarketFill?(forceReload?: boolean): unknown;
   loadPendingFillCrawls(forceReload?: boolean): unknown[];
   loadRecentFillKeys(forceReload?: boolean): unknown;
   loadPersistedAssets(forceReload?: boolean): { assetA?: AssetInfo; assetB?: AssetInfo } | null;
@@ -836,6 +837,8 @@ export interface AccountOrdersLike {
   clearGrid(): Promise<unknown>;
   clearPersistedBoundary(...args: unknown[]): Promise<unknown>;
   clearPersistedLastFillPivot(...args: unknown[]): Promise<unknown>;
+  clearPersistedLastMarketFill?(...args: unknown[]): Promise<unknown>;
+  backupSnapshot?(reason?: string): Promise<string | null>;
   loadProcessedFills(options?: boolean | { forceReload?: boolean; minTimestamp?: number | null }): Map<string, number>;
   updateProcessedFillsBatch(fills: Map<string, number>): Promise<unknown>;
   cleanOldProcessedFills(olderThanMs?: number): Promise<unknown>;
@@ -983,6 +986,11 @@ export interface OrderManagerLike {
   _lastFilledType: string | null;
   _lastFilledAt: number | null;
   lastFillPivotSource: 'fill' | 'book' | null;
+  // Bot-scoped last-market-fill reference (survives grid regeneration).
+  _lastMarketFillPrice?: number | null;
+  _lastMarketFillType?: string | null;
+  _lastMarketFillAt?: number | null;
+  _lastSyncAt?: number;
 
   // --- internals the runtime wires in or the engine reads defensively ---
   _lastUnmatchedChainOrders?: UnmatchedChainOrder[];

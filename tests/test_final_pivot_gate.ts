@@ -257,8 +257,18 @@ async function testColdFreezeArmsMidBatch() {
 
 async function testBypassParity() {
     console.log('\n[FG-6] bypass parity: spread-correction CREATEs + stamped evacuations bypass; unstamped do not');
+    // Hybrid/book pivot (NOT a real fill) with a fresh snapshot: the
+    // spread-correction bypass is licensed. A real-fill pivot denies it
+    // (covered by SMR-6 in test_spread_market_reference.ts); the parity of
+    // the two spread origins and the stamped/unstamped evacuation asymmetry
+    // is what this case pins.
     const slots = [{ id: 'slot-106', orderId: '1.7.1', type: ORDER_TYPES.SELL, price: SELL_PIVOT }];
-    const bot = makeBot({ queue: [sellFillOp('1.7.1', SELL_PIVOT)], slots });
+    const bot = makeBot({ queue: [], slots });
+    bot.manager._lastFilledPrice = SELL_PIVOT;
+    bot.manager._lastFilledType = ORDER_TYPES.SELL;
+    bot.manager.lastFillPivotSource = 'book';
+    bot.manager._lastSyncAt = Date.now();
+    bot.manager._lastUnmatchedChainOrders = [];
     const ops = [{ fake: 1 }, { fake: 2 }, { fake: 3 }, { fake: 4 }];
     const ctxs = [
         createCtx('slot-c1', 879.0, 5, ORDER_TYPES.SELL), // violating price...

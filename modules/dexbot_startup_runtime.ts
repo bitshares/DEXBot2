@@ -16,6 +16,7 @@ import orderModule from './order/index.js';
 import { getErrorMessage } from './utils/errors.js';
 import type { BotLike, ManagedOrder } from './types.js';
 import { processSweepOrphanFill } from './dexbot_fill_runtime.js';
+import { restoreLastMarketFill } from './order/utils/system.js';
 import {
     ON_MISSING_GENESIS,
     recordMissingGenesisFault,
@@ -250,6 +251,19 @@ async function finishStartupSequence(bot: BotLike, startupState: Awaited<ReturnT
     } = startupState;
 
     try {
+        // Bot-scoped last-market-fill reference: restore BEFORE any chain
+        // touching/placement work so spread correction (including the
+        // post-reset path below) always has the last real trade price it must
+        // not cross. Independent of the boundary/genesis restore, so a
+        // regenerated grid still gets the anchor the genesis-bound pivot lost.
+        try {
+            restoreLastMarketFill(
+                bot.manager,
+                bot.manager?.accountOrders?.loadLastMarketFill?.() ?? null
+            );
+        } catch (marketRefErr) {
+            bot._warn(`[SPREAD-CORRECTION] Last-market-fill restore failed (${getErrorMessage(marketRefErr)}); spread correction runs without a market anchor`);
+        }
         if (typeof bot._fillsUnsubscribe === 'function') {
             await bot._fillsUnsubscribe().catch(() => { });
         }

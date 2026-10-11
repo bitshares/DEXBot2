@@ -695,6 +695,21 @@ async function rejectCorruptedGridSnapshot(bot: BotLike, context: string) {
         `Deleting corrupted snapshot.`
     );
     if (bot.accountOrders && typeof bot.accountOrders.clearGrid === 'function') {
+        // Keep a timestamped copy before the destructive clear. Drift is not
+        // always corruption (genuine unadopted orphans, re-anchoring), so the
+        // pre-reject grid/boundary/pivot/crawls are the only forensics and the
+        // only path to manual recovery. AccountOrders owns the path/storage
+        // knowledge. Best-effort: the clear proceeds either way.
+        try {
+            const backupPath = typeof bot.accountOrders.backupSnapshot === 'function'
+                ? await bot.accountOrders.backupSnapshot('rejected-drift')
+                : null;
+            if (backupPath) {
+                bot._warn(`${tag} Kept pre-reject snapshot copy at ${backupPath}`);
+            }
+        } catch (backupErr: unknown) {
+            bot._warn(`${tag} Failed to keep pre-reject snapshot copy: ${getErrorMessage(backupErr)}`);
+        }
         try {
             await bot.accountOrders.clearGrid();
             bot._warn(`${tag} Corrupted grid snapshot deleted.`);

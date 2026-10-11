@@ -16,10 +16,10 @@
  * 1. AccountOrders(options) - Class for per-bot order persistence
  *    Constructor options: { botKey, ordersDir?, profilesPath? } (botKey required, throws if missing)
  *    Methods:
- *      syncMeta(botConfig), storeMasterGrid(orders, btsFeesOwed, boundaryIdx, assets, debugInputs, recentFillKeys, genesis, gapEvacStreaks, pendingFillCrawls, lastFillPivot)
+ *      syncMeta(botConfig), storeMasterGrid(orders, btsFeesOwed, boundaryIdx, assets, debugInputs, recentFillKeys, genesis, gapEvacStreaks, pendingFillCrawls, lastFillPivot, lastMarketFill)
  *      loadGrid(forceReload), loadRecentFillKeys(forceReload), loadPersistedAssets(forceReload), loadPendingFillCrawls(forceReload)
- *      loadBoundaryIdx(forceReload), loadBtsBalance(forceReload), loadBtsFeesOwed(forceReload), loadGapEvacStreaks(forceReload), loadGenesis(forceReload), loadLastFillPivot(forceReload)
- *      clearGrid(), clearPersistedBoundary(), clearPersistedLastFillPivot()
+ *      loadBoundaryIdx(forceReload), loadBtsBalance(forceReload), loadBtsFeesOwed(forceReload), loadGapEvacStreaks(forceReload), loadGenesis(forceReload), loadLastFillPivot(forceReload), loadLastMarketFill(forceReload)
+ *      clearGrid(), clearPersistedBoundary(), clearPersistedLastFillPivot(), clearPersistedLastMarketFill(), backupSnapshot(reason)
  *      loadProcessedFills(options), updateProcessedFillsBatch(fills), cleanOldProcessedFills(olderThanMs)
  *      getAssetBalances(forceReload)
  *
@@ -68,7 +68,7 @@ import AsyncLock from './order/async_lock.js';
 import { isPhantomOrder } from './order/utils/order.js';
 import { hasGenesisLadder } from './order/genesis_policy.js';
 import * as Format from './order/format.js';
-import { ensureDir, nowIso, normalizeLastFillPivot } from './order/utils/system.js';
+import { ensureDir, nowIso, normalizeLastFillPivot, normalizeLastMarketFill } from './order/utils/system.js';
 import Logger from './order/logger.js';
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
 import { sanitizeKey } from './utils/sanitize_key.js';
@@ -202,6 +202,8 @@ interface BotData {
   gapEvacStreaks?: Record<string, number>;
   pendingFillCrawls?: { slotId: string; side: string; ts: number }[];
   lastFillPivot?: unknown;
+  /** Bot-scoped last-market-fill reference (survives grid regeneration). */
+  lastMarketFill?: { price: number; type: string; fillsAt: number };
 }
 
 /**
@@ -397,7 +399,7 @@ class AccountOrders {
    * @param {Object|null} recentFillKeys - Optional fill key dedup snapshot for crash recovery
    * @param {Object|null} genesis - Optional frozen genesis (priceLevels etc)
    */
-  async storeMasterGrid(orders: unknown[] = [], btsFeesOwed: number | null = null, boundaryIdx: number | null = null, assets: Record<string, unknown> | null = null, debugInputs: unknown = null, recentFillKeys: Record<string, unknown> | null = null, genesis: unknown = null, gapEvacStreaks: unknown = undefined, pendingFillCrawls: unknown = undefined, lastFillPivot: unknown = undefined) {
+  async storeMasterGrid(orders: unknown[] = [], btsFeesOwed: number | null = null, boundaryIdx: number | null = null, assets: Record<string, unknown> | null = null, debugInputs: unknown = null, recentFillKeys: Record<string, unknown> | null = null, genesis: unknown = null, gapEvacStreaks: unknown = undefined, pendingFillCrawls: unknown = undefined, lastFillPivot: unknown = undefined, lastMarketFill: unknown = undefined) {
     // Use AsyncLock to serialize read-modify-write operations
     await this._persistenceLock.acquire(async () => {
       // Reload from disk before writing to prevent race conditions
@@ -501,6 +503,25 @@ class AccountOrders {
             this.data.lastFillPivot = normalized;
           } else {
             delete this.data.lastFillPivot;
+          }
+        }
+      }
+
+      // Bot-scoped last-market-fill reference. Same absent-value contract as
+      // lastFillPivot above: undefined is a legacy no-op, null clears, a
+      // validated row is written, any other malformed shape clears (never
+      // store a stale row). The difference from the pivot is lifetime only —
+      // clearGrid() deliberately preserves this row, so it survives a grid
+      // regeneration instead of being bound to one generation.
+      if (lastMarketFill !== undefined) {
+        if (lastMarketFill === null) {
+          delete this.data.lastMarketFill;
+        } else {
+          const normalized = normalizeLastMarketFill(lastMarketFill);
+          if (normalized) {
+            this.data.lastMarketFill = normalized;
+          } else {
+            delete this.data.lastMarketFill;
           }
         }
       }
@@ -626,6 +647,55 @@ class AccountOrders {
   }
 
   /**
+   * Load the persisted bot-scoped last-market-fill reference.
+   * @param {boolean} forceReload - If true, reload from disk
+   * @returns {Object|null} {price, type, fillsAt} or null when absent/invalid
+   */
+  loadLastMarketFill(forceReload: boolean = false) {
+    this._ensureLoaded(forceReload);
+    return normalizeLastMarketFill(this.data && this.data.lastMarketFill);
+  }
+
+  /**
+   * Erase a persisted last-market-fill row that restoreLastMarketFill
+   * rejected (TTL expiry / malformed). Mirrors clearPersistedLastFillPivot:
+   * without an explicit erase a dead row would re-arm the same rejection on
+   * every restart. Load-time only.
+   */
+  async clearPersistedLastMarketFill() {
+    await this._persistenceLock.acquire(async () => {
+      this._reload();
+      delete this.data.lastMarketFill;
+      this.data.lastUpdated = nowIso();
+      this._persist();
+    });
+  }
+
+  /**
+   * Copy the on-disk snapshot to a timestamped sibling file before a
+   * destructive operation (snapshot rejection / regeneration). The reason tag
+   * is sanitized into the suffix: `<profile>.rejected-drift-<ts>`. Owns the
+   * path/storage knowledge so callers never reach through to the filesystem.
+   * @param {string} [reason='backup'] - Reason tag for the filename
+   * @returns {Promise<string|null>} Backup path, or null when absent/failed
+   */
+  async backupSnapshot(reason: string = 'backup') {
+    return await this._persistenceLock.acquire(async () => {
+      try {
+        if (!storage.exists(this.profilesPath)) return null;
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const tag = String(reason).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'backup';
+        const backupPath = `${this.profilesPath}.${tag}-${ts}`;
+        const snapshot = storage.readJSON(this.profilesPath);
+        storage.writeJSON(backupPath, snapshot, { fsync: true });
+        return backupPath;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
    * Load persisted pending fill crawls for this bot.
    * @param {boolean} forceReload - If true, reload from disk
    * @returns {Array} Sanitized pending crawl entries (possibly empty)
@@ -736,6 +806,9 @@ class AccountOrders {
       // generation (its slot ids and genesis): a rebuilt grid must re-arm on
       // a fresh fill, not inherit a pivot validated against wiped geometry.
       delete this.data.lastFillPivot;
+      // The bot-scoped last-market-fill reference is DELIBERATELY preserved:
+      // it records the last price the ACCOUNT traded at, not grid geometry, so
+      // a rebuilt grid still must not trade through it. (TTL applied on restore.)
       this.data.lastUpdated = nowIso();
       this._persist();
       return true;

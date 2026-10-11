@@ -1061,6 +1061,9 @@ export async function persistGridSnapshot(manager: OrderManagerLike, accountOrde
         // treats as an explicit clear; the row carries the CURRENT live
         // genesis hash so a restore that sees a re-derived genesis refuses it.
         const lastFillPivot = buildLastFillPivotPayload(manager);
+        // Bot-scoped market-fill reference: survives grid regeneration, used
+        // by spread correction as the price it must not trade through.
+        const lastMarketFill = buildLastMarketFillPayload(manager);
         await accountOrders.storeMasterGrid(
             orders,
             btsFeesOwed,
@@ -1076,7 +1079,8 @@ export async function persistGridSnapshot(manager: OrderManagerLike, accountOrde
             genesis,
             gapEvacStreaks,
             pendingFillCrawls,
-            lastFillPivot
+            lastFillPivot,
+            lastMarketFill
         );
         return true;
     } catch (e) {
@@ -1145,31 +1149,159 @@ function buildLastFillPivotPayload(manager: OrderManagerLike): { price: number; 
 }
 
 /**
- * Normalize a persisted LAST-FILL-GUARD pivot row (shared by the
- * AccountOrders sanitizer/loader and the payload builder's row contract).
+ * Build the persist payload for the bot-scoped last-market-fill reference.
  *
- * Returns the row normalized to {price:number, type, fillsAt:number,
- * genesisHash} when every field passes its gate, null otherwise:
- * - finite price > 0
- * - type is ORDER_TYPES.BUY or ORDER_TYPES.SELL
- * - finite fillsAt > 0
- * - non-empty string genesisHash
+ * Unlike buildLastFillPivotPayload this row has NO genesis binding and is
+ * never cleared by a grid regeneration/rejection: it records the last price
+ * the ACCOUNT traded at, which is market truth independent of the current
+ * grid. Returns `undefined` (storeMasterGrid no-op) while cold so a cold
+ * manager never erases a previously stored row; the restore path applies the
+ * TTL and drops an expired row instead.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @returns {{price:number,type:string,fillsAt:number}|undefined} Row, or undefined to leave untouched
+ */
+function buildLastMarketFillPayload(manager: OrderManagerLike): { price: number; type: string; fillsAt: number } | undefined {
+    const price = Number(manager?._lastMarketFillPrice);
+    const type = manager?._lastMarketFillType;
+    const fillsAt = Number(manager?._lastMarketFillAt);
+    if (!Number.isFinite(price) || price <= 0) return undefined;
+    if (type !== ORDER_TYPES.BUY && type !== ORDER_TYPES.SELL) return undefined;
+    if (!Number.isFinite(fillsAt) || fillsAt <= 0) return undefined;
+    return { price, type, fillsAt };
+}
+
+/**
+ * Resolve the last real market price spread correction must not trade
+ * through. Returns null (fail-open) when no real fill is known.
+ *
+ * The bot's grid anchor (AMA/startPrice) and its own book mid are NOT market
+ * references — they are grid geometry or the bot's own quotes — so they are
+ * deliberately not used here. Only a real fill price qualifies: the live
+ * LAST-FILL-GUARD pivot when it is fill-provenanced, else the bot-scoped
+ * persisted reference that survives grid regeneration.
+ *
+ * SINGLE SOURCE of "is there a real market reference": the planner's
+ * crossing filter and the COW bypass gate both resolve through here, so they
+ * can never disagree about whether a real fill is known.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @returns {number|null} Reference price or null
+ */
+export function resolveSpreadMarketReference(manager: OrderManagerLike): number | null {
+    const live = Number(manager?._lastFilledPrice);
+    const liveType = manager?._lastFilledType;
+    if (manager?.lastFillPivotSource === 'fill' && Number.isFinite(live) && live > 0 && (liveType === ORDER_TYPES.BUY || liveType === ORDER_TYPES.SELL)) {
+        return live;
+    }
+    const market = Number(manager?._lastMarketFillPrice);
+    const marketType = manager?._lastMarketFillType;
+    if (Number.isFinite(market) && market > 0 && (marketType === ORDER_TYPES.BUY || marketType === ORDER_TYPES.SELL)) {
+        return market;
+    }
+    return null;
+}
+
+/**
+ * Restore the persisted bot-scoped last-market-fill reference into the
+ * manager. Deliberately independent of the boundary and the genesis: this is
+ * the anchor spread correction uses to avoid trading through the last real
+ * fill price, and it must survive a grid regeneration (the genesis-bound
+ * LAST-FILL-GUARD pivot does not). TTL-expired rows are erased from disk,
+ * mirroring restoreLastFillPivot's dead-row hygiene.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @param {unknown} persisted - {price, type, fillsAt} from loadLastMarketFill
+ * @param {Object} [options]
+ * @param {number} [options.now] - Injectable clock (tests)
+ * @returns {boolean} True when the reference was restored
+ */
+export function restoreLastMarketFill(manager: OrderManagerLike, persisted: unknown, options: { now?: number } = {}): boolean {
+    if (!manager) return false;
+    const row = normalizeLastMarketFill(persisted);
+    if (!row) return false;
+    // Shared dead-row contract with restoreLastFillPivot: erase a rejected
+    // row so it cannot re-arm the same rejection on every restart.
+    const dropPersistedRow = () => {
+        try {
+            const acct = manager.accountOrders;
+            if (acct && typeof acct.clearPersistedLastMarketFill === 'function') {
+                void acct.clearPersistedLastMarketFill();
+            }
+        } catch { /* best-effort */ }
+    };
+    const now = Number.isFinite(options?.now) ? Number(options.now) : Date.now();
+    const ttl = Number(GRID_LIMITS.LAST_FILL_PIVOT_TTL_MS);
+    if (Number.isFinite(ttl) && ttl > 0 && now - row.fillsAt > ttl) {
+        manager.logger?.log?.(
+            `[SPREAD-CORRECTION] Persisted last-market-fill expired (age ${Math.round((now - row.fillsAt) / 1000)}s > TTL ${Math.round(ttl / 1000)}s) — reference dropped`,
+            'info'
+        );
+        dropPersistedRow();
+        return false;
+    }
+    manager._lastMarketFillPrice = row.price;
+    manager._lastMarketFillType = row.type;
+    manager._lastMarketFillAt = row.fillsAt;
+    manager.logger?.log?.(
+        `[SPREAD-CORRECTION] Restored last-market-fill ${row.price}(${row.type}) age=${Math.round((now - row.fillsAt) / 1000)}s — spread correction will not trade through it`,
+        'info'
+    );
+    return true;
+}
+
+/**
+ * Shared field gate for a persisted fill-derived row: finite price > 0,
+ * BUY/SELL side, finite positive timestamp. One shape contract for the
+ * LAST-FILL-GUARD pivot row and the bot-scoped last-market-fill row.
  *
  * @param {unknown} row - Raw candidate row
- * @returns {Object|null} Normalized row or null
+ * @returns {{price:number,type:string,fillsAt:number}|null} Core fields or null
  */
-export function normalizeLastFillPivot(row: unknown): { price: number; type: string; fillsAt: number; genesisHash: string } | null {
+function normalizeFillRow(row: unknown): { price: number; type: string; fillsAt: number } | null {
     if (!row || typeof row !== 'object') return null;
     const r = row as Record<string, unknown>;
     const price = Number(r.price);
     const type = r.type;
     const fillsAt = Number(r.fillsAt);
-    const genesisHash = r.genesisHash;
     if (!Number.isFinite(price) || price <= 0) return null;
     if (type !== ORDER_TYPES.BUY && type !== ORDER_TYPES.SELL) return null;
     if (!Number.isFinite(fillsAt) || fillsAt <= 0) return null;
+    return { price, type, fillsAt };
+}
+
+/**
+ * Normalize a persisted LAST-FILL-GUARD pivot row (shared by the
+ * AccountOrders sanitizer/loader and the payload builder's row contract).
+ *
+ * The shared normalizeFillRow gate plus a non-empty string genesisHash (the
+ * pivot is bound to the grid generation; the market row deliberately is not).
+ *
+ * @param {unknown} row - Raw candidate row
+ * @returns {Object|null} Normalized row or null
+ */
+export function normalizeLastFillPivot(row: unknown): { price: number; type: string; fillsAt: number; genesisHash: string } | null {
+    const core = normalizeFillRow(row);
+    if (!core) return null;
+    const genesisHash = (row as Record<string, unknown>).genesisHash;
     if (typeof genesisHash !== 'string' || genesisHash.length === 0) return null;
-    return { price, type, fillsAt, genesisHash };
+    return { ...core, genesisHash };
+}
+
+/**
+ * Normalize a persisted bot-scoped last-market-fill row.
+ *
+ * Same normalizeFillRow contract as normalizeLastFillPivot but deliberately
+ * WITHOUT the genesisHash binding: this row is market truth about the account
+ * (the last price it traded at), not grid geometry, so it must survive a grid
+ * regeneration/rejection. It is used only as a market reference by spread
+ * correction, never as the COW LAST-FILL-GUARD pivot.
+ *
+ * @param {unknown} row - Raw candidate row
+ * @returns {{price:number,type:string,fillsAt:number}|null} Normalized row or null
+ */
+export function normalizeLastMarketFill(row: unknown): { price: number; type: string; fillsAt: number } | null {
+    return normalizeFillRow(row);
 }
 
 /**
@@ -1203,6 +1335,15 @@ export function setLastFillPivot(manager: OrderManagerLike, type: string, price:
     manager.lastFillPivotSource = provenance;
     if (type === ORDER_TYPES.BUY) manager._lastFilledBuyPrice = p;
     else manager._lastFilledSellPrice = p;
+    // Bot-scoped market-fill reference: only a real fill is market truth. It
+    // is deliberately NOT cleared by resetLastFillPivot/clearGrid — it must
+    // survive a grid regeneration so spread correction still has a price it
+    // cannot trade through (the genesis-bound pivot above does not).
+    if (provenance === 'fill') {
+        manager._lastMarketFillPrice = p;
+        manager._lastMarketFillType = type;
+        manager._lastMarketFillAt = now;
+    }
     return true;
 }
 

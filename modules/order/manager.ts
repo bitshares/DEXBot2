@@ -612,6 +612,16 @@ class OrderManager implements OrderManagerLike {
     _lastFilledType: string | null;
     _lastFilledAt: number;
     lastFillPivotSource: 'fill' | 'book' | null;
+    // Bot-scoped "last market fill" reference. Unlike the genesis-bound
+    // LAST-FILL-GUARD pivot (reset with the grid generation), this survives a
+    // grid regeneration/rejection and is used ONLY as a market anchor by
+    // spread correction (a real fill price must not be traded through).
+    // Written by setLastFillPivot on 'fill' provenance; restored at startup
+    // from the bot-scoped persisted row under a TTL.
+    _lastMarketFillPrice: number | null;
+    _lastMarketFillType: string | null;
+    _lastMarketFillAt: number;
+    _lastSyncAt: number;
     _deferredRebalanceAt: number;
     _lastHeldPlanSignature: { boundaryIdx: number | null; pivot: number | null; fillsAt: number | null } | null;
     _heldPlanSuppressionCount: number;
@@ -753,6 +763,10 @@ class OrderManager implements OrderManagerLike {
         // 'fill' = armed by a real fill (persist-eligible), 'book' = armed by
         // the startup book seed (heuristic, in-memory only), null = unarmed.
         this.lastFillPivotSource = null;
+        this._lastMarketFillPrice = null;
+        this._lastMarketFillType = null;
+        this._lastMarketFillAt = 0;
+        this._lastSyncAt = 0;
         this._deferredRebalanceAt = 0;
         this._lastHeldPlanSignature = null;
         this._heldPlanSuppressionCount = 0;

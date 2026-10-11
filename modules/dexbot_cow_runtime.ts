@@ -14,7 +14,7 @@ const { readOpenOrdersWithMetaSafe } = chainOrdersModule;
 import { BroadcastUncertainError as BroadcastUncertainErrorBinding } from './dexbot_credential_client.js';
 const BroadcastUncertainError = BroadcastUncertainErrorBinding;
 import * as orderUtils from './order/utils/order.js';
-import { sleep, setLastFillPivot, fireStructuralResync } from './order/utils/system.js';
+import { sleep, setLastFillPivot, fireStructuralResync, resolveSpreadMarketReference } from './order/utils/system.js';
 const {
     buildCreateOrderArgs,
     buildCreateOpFingerprint,
@@ -76,6 +76,7 @@ const {
     ORDER_STATES,
     ORDER_TYPES,
     REBALANCE_STATES,
+    TIMING,
 } = constantsModule;
 import { acquireIfNotHeld } from './order/async_lock.js';
 import * as FormatModule from './order/format.js';
@@ -2111,6 +2112,45 @@ function isLastFillGuardBlocked(price: number, _size: number, type: unknown, las
 }
 
 /**
+ * Whether a spread-correction CREATE may bypass the LAST-FILL-GUARD.
+ *
+ * The bypass exists so gap repair can close even after a recent fill (the
+ * correction is tightening the spread, not chasing it). It must not become a
+ * licence to place THROUGH the market the bot last traded at:
+ *
+ * 1. A real fill pivot (`lastFillPivotSource === 'fill'`) is always honored —
+ *    no bypass. A sell below the last fill (or a buy above it) is the
+ *    issue-#31 adverse fill.
+ * 2. A cold/book pivot is a heuristic (book seed) or absent, so the historical
+ *    fail-open bypass is kept — but only while the LOCAL snapshot is fresh.
+ *    A stale snapshot (known-unmatched chain orders, or an old sync) can hide
+ *    the real window edge, so the bypass is withheld and the guard applies.
+ *
+ * Exported for tests.
+ * @param {Object} bot
+ * @returns {boolean} True when the bypass may be used
+ */
+function isSpreadCorrectionBypassAllowed(bot: BotLike): boolean {
+    const mgr = bot?.manager;
+    // (1) A real market reference is known (live fill pivot or the bot-scoped
+    //     persisted reference): never bypass. Shares ONE predicate with the
+    //     planner's crossing filter (resolveSpreadMarketReference), so the two
+    //     can never disagree about whether a real fill is known.
+    if (mgr && resolveSpreadMarketReference(mgr) != null) return false;
+    // (2) Heuristic/cold reference: preserve the historical fail-open bypass,
+    //     but only while the LOCAL snapshot is fresh. A stale snapshot (known
+    //     unmatched chain orders, or an old sync) can hide the real window
+    //     edge, so the bypass is withheld and the guard applies.
+    const unmatched = Array.isArray(mgr?._lastUnmatchedChainOrders) ? mgr._lastUnmatchedChainOrders.length : 0;
+    if (unmatched > 0) return false;
+    const lastSyncAt = Number(mgr?._lastSyncAt);
+    if (!Number.isFinite(lastSyncAt) || lastSyncAt <= 0) return true; // unknown ⇒ fail-open
+    const freshMs = Number(TIMING?.SPREAD_CORRECTION_SYNC_FRESH_MS);
+    if (!Number.isFinite(freshMs) || freshMs <= 0) return true; // constant absent ⇒ fail-open
+    return Date.now() - lastSyncAt <= freshMs;
+}
+
+/**
  * Refresh the LAST-FILL guard pivot from fills that arrived while the current
  * batch was being planned or broadcast but have not been ingested yet.
  *
@@ -3729,8 +3769,9 @@ async function updateOrdersOnChainBatchCOWBody(
                     try {
                         const actionOrigin = action?.origin;
                         const batchOrigin = cowResult?.origin;
-                        const isCorrectionCreate = actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
-                            || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION);
+                        const isCorrectionCreate = (actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
+                            || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION))
+                            && isSpreadCorrectionBypassAllowed(bot);
                         if (!isCorrectionCreate) {
                             const { check, refreshed } = runLastFillGuardCheck(bot, createPrice, order.size, order.type, lastFillGuardStats, true);
                             if (refreshed) lastFillGuardPivotRefreshed = true;
@@ -5510,8 +5551,9 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
                 // Spread-correction CREATE bypass (mirrors the build loop:
                 // per-action origin, batch origin as back-compat fallback).
                 const actionOrigin = action?.origin;
-                if (actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
-                    || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION)) {
+                if ((actionOrigin === COW_ORIGINS.SPREAD_CORRECTION
+                    || (actionOrigin == null && batchOrigin === COW_ORIGINS.SPREAD_CORRECTION))
+                    && isSpreadCorrectionBypassAllowed(bot)) {
                     if (stats) stats.bypassed = (Number(stats.bypassed) || 0) + 1;
                     continue;
                 }
@@ -5973,7 +6015,7 @@ async function processBatchResults(bot: BotLike, result: JsonObj, opContexts: Op
         updateOperationCount
     };
 }
-export { isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
+export { isSpreadCorrectionBypassAllowed, isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
 // Exported for regression tests (issue #23 sibling): the uncertain-broadcast
 // discard path must never drop a placement silently when master lost the slot.
 export { restoreDiscardedCreates };

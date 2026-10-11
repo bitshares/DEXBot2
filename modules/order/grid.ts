@@ -243,7 +243,7 @@ import {
     liveWindowIdSet,
     getOrderTypeFromUpdatedFlags
 } from './utils/order.js';
-import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot } from './utils/system.js';
+import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot, resolveSpreadMarketReference } from './utils/system.js';
 import * as MathUtils from './utils/math.js';
 import { derivePriceWithPoolRef, resolveStartPriceMode } from './utils/withPoolRef.js';
 import { getWhitelistFlags } from '../market_adapter_whitelist.js';
@@ -2418,6 +2418,27 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
             manager.outOfSpread = shouldFlagOutOfSpread(currentSpread, nominalSpread, toleranceSteps, buyCount, sellCount, manager.config.incrementPercent);
             if (manager.outOfSpread === 0) return false;
 
+            // COLD BOOK: with no live order on EITHER side there is no realized
+            // spread to repair — the "spread" is synthetic (an empty side plus
+            // the startPrice fallback). A correction here can only guess a
+            // side and place through an unseen market (issue #31: fresh sells
+            // at/below the flat market after a cold regeneration). Spread
+            // correction is a REPAIR mechanism; the first window belongs to
+            // the reconcile/initial-placement path. Report a structural stall
+            // so the maintenance mirror arms the targeted chain sync — a
+            // local-only cold book (orders filled while offline, or live chain
+            // orders left unmatched) heals on the next sync, after which the
+            // correction has a real anchor.
+            if (onChainBuys.length === 0 && onChainSells.length === 0) {
+                manager.logger?.log?.(
+                    `[SPREAD] Book is cold (no live BUY or SELL on chain); skipping spread correction — ` +
+                    `the reconcile path owns the first window. Requesting a targeted chain sync.`,
+                    'warn'
+                );
+                stall = 'no-candidates';
+                return false;
+            }
+
             // Check whether the empty side is caused by boundary-at-rail-edge.
             // When the boundary crawl has clamped to 0 or allSlots.length-1,
             // fill pressure can wipe out one entire side.  Spread correction
@@ -3162,6 +3183,18 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             if (bestLiveOnRail == null) return true;
             return railBestIsMax ? c.price > bestLiveOnRail : c.price < bestLiveOnRail;
         };
+        // MARKET-CROSSING GUARD: never place a SELL at/below (or a BUY at/above)
+        // the last price the account actually traded at. On a one-sided or
+        // freshly-regenerated book the local anchor is absent, so without this
+        // the correction happily sells under a market it cannot see (issue
+        // #31). Fail-open when no real fill is known — never guess from grid
+        // geometry. This complements tightensSpread (which is anchor-relative)
+        // with an absolute, market-relative floor.
+        const marketRef = resolveSpreadMarketReference(manager);
+        const doesNotCrossMarket = (c: ManagedOrder): boolean => {
+            if (marketRef == null || c?.price == null || !Number.isFinite(c.price)) return true;
+            return railBestIsMax ? c.price < marketRef : c.price > marketRef;
+        };
         const typedSpreadCandidates = allOrders
             .filter((o) =>
                 o.type === ORDER_TYPES.SPREAD
@@ -3169,6 +3202,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 && getSlotCorrectType(o) === railType
             )
             .filter(tightensSpread)
+            .filter(doesNotCrossMarket)
             .sort(sortCandidates)
             .slice(0, missingSlots);
 
@@ -3214,6 +3248,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 && getSlotCorrectType(o) === railType
             )
             .filter(tightensSpread)
+            .filter(doesNotCrossMarket)
             .sort(sortCandidates)
             .slice(0, missingSlots);
 
@@ -3266,6 +3301,22 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 spreadReserve,
                 maxPromotionDepth
             ));
+            // A boundary promotion moves the window into the spread band. If
+            // any of the contiguous run would land through the last real fill,
+            // the whole promotion is refused (dropping only the first slot
+            // would break the run's contiguity and the boundary derivation).
+            const crossingPromoted = marketRef == null
+                ? []
+                : promotedCandidates.filter((c) => !doesNotCrossMarket(c));
+            if (marketRef != null && crossingPromoted.length > 0) {
+                manager.logger?.log?.(
+                    `[SPREAD-CORRECTION] Refusing boundary promotion on ${sideName}: ` +
+                    `${crossingPromoted.length} slot(s) would cross the last market fill ` +
+                    `${Format.formatPrice6(marketRef)}`,
+                    'warn'
+                );
+                promotedCandidates.length = 0;
+            }
             if (promotedCandidates.length > 0) {
                 manager.logger?.log?.(
                     `[SPREAD-CORRECTION] ${promotedCandidates.length} gap slot(s) available for boundary promotion on ${sideName}`,
