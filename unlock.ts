@@ -61,8 +61,6 @@ import { buildRuntimeScriptArgs } from './modules/launcher/runtime_entry.js';
 import { sendControlCommand } from './modules/launcher/supervisor_control.js';
 import { registerCleanup, setupGracefulShutdown } from './modules/graceful_shutdown.js';
 import { normalizeBotEntry, resolveRawBotEntries, loadSettingsFile, type BotEntry } from './modules/bot_settings.js';
-import { main as runBotEditor } from './modules/account_bots.js';
-import { setSuppressConnectionLog, disconnectClient } from './modules/bitshares_client.js';
 import { selectStartOnboardingCommand } from './modules/cli_start_onboarding.js';
 import * as chainKeys from './modules/chain_keys.js';
 import * as credentialPolicy from './modules/credential_policy.js';
@@ -494,6 +492,13 @@ async function runStartOnboardingIfNeeded({ allowInteractive = true, nonInteract
         return true;
     }
 
+    // The interactive bot editor drags in the heavyweight native chain client
+    // (~80 ms of module graph). It is only needed on this onboarding path, so
+    // load it lazily instead of eagerly on every `unlock`/`start` invocation.
+    const [{ main: runBotEditor }, { setSuppressConnectionLog, disconnectClient }] = await Promise.all([
+        import('./modules/account_bots.js'),
+        import('./modules/bitshares_client.js'),
+    ]);
     setSuppressConnectionLog(true);
     try {
         await runBotEditor();
