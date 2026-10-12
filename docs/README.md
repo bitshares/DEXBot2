@@ -45,7 +45,7 @@ This directory contains the comprehensive technical documentation for the DEXBot
 - **API Boundary**: Responsibility split between the AI decision layer and the DEXBot2 execution substrate ([AI_BOT_LIBRARY_API.md](../claw/docs/AI_BOT_LIBRARY_API.md))
 - **Tuning Reference**: Practical grid-tuning baselines ([DEXBOT2_TUNING_CHEAT_SHEET.md](../claw/docs/DEXBOT2_TUNING_CHEAT_SHEET.md))
 - **Position Management**: Short-position tracking, position health monitoring (3-zone CR model), and shared CR planning via `cr_planner.ts`
-- **Skills**: Presentation-only, concept-reference, and launcher-orchestration skill packs for bitshares-guide, margin-trading, launcher-ops, and shared references
+- **Skills**: Presentation-only, concept-reference, and launcher-orchestration skill packs for bitshares-guide, margin-trading, launcher-ops, memu-memory, trend-detection, and shared references
 
 ## Operational & Security
 
@@ -58,7 +58,7 @@ This directory contains the comprehensive technical documentation for the DEXBot
 
 ### 📊 [Grid Recalculation](GRID_RECALCULATION.md)
 *When and why the grid resets.*
-- **Reset Sources**: Market-adapter bootstrap, AMA delta, AMA-slope range reset, RMS divergence correction, and fund regeneration
+- **Reset Sources**: Market-adapter bootstrap, AMA delta, AMA-slope range reset, RMS divergence correction, and available-funds resize
 - **Configuration**: Per-source thresholds, whitelist requirements, and defaults
 - **Trigger Execution**: How `profiles/recalculate.<botKey>.trigger` is consumed under the fill-processing lock
 

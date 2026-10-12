@@ -52,7 +52,7 @@ funds.allocated → _getSizingContext()       (budget for spread correction)
 **Key points:**
 - `botFunds` percentage applies to **total** capital (free + locked in orders), not just free. A bot at `"50%"` gets half of everything, not half of what's currently idle.
 - `funds.allocated` is the ceiling for each side. Existing orders already consume part of it; the remaining free portion is available for new placements.
-- The downstream `applyBotFundsAllocation()` (`manager.ts:1277`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
+- The downstream `applyBotFundsAllocation()` (`manager.ts:1296`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
 
 ---
 
@@ -112,7 +112,7 @@ See [developer_guide.md#order-state-helper-functions](developer_guide.md#order-s
 
 #### Gap-Slot Batch Fill Processing
 
-**Mechanism**: Fill events arrive via `modules/dexbot_fill_runtime.ts` (the fill-runtime module), which pushes them into `bot._incomingFillQueue` (declared in `modules/dexbot_class.ts`). The drain loop in `dexbot_fill_runtime.ts` then chunks the queue into capped batches and calls `modules/order/manager.ts::processFilledOrders` (line 1438) once per chunk to run the full rebalance pipeline.
+**Mechanism**: Fill events arrive via `modules/dexbot_fill_runtime.ts` (the fill-runtime module), which pushes them into `bot._incomingFillQueue` (declared in `modules/dexbot_class.ts`). The drain loop in `dexbot_fill_runtime.ts` then chunks the queue into capped batches and calls `modules/order/manager.ts::processFilledOrders` (line 1811) once per chunk to run the full rebalance pipeline.
 
 **Batch Sizing Algorithm**: Batch size is derived from the grid gap-slot count + 1 (`DEXBot._getGapSlotBatchSize`): a queue depth at or below gapSlots+1 is processed as one unified batch; deeper queues are chunked into repeated batches of gapSlots+1 (the last chunk may be smaller). The same gapSlots+1 size caps order operations per broadcast transaction (oversized op batches are split into sequential broadcasts).
 
@@ -123,7 +123,7 @@ See [developer_guide.md#order-state-helper-functions](developer_guide.md#order-s
 **Per-Batch Execution**:
 
 1. **Peek & Pop**: Check `_incomingFillQueue`, pop up to N fills (batch size)
-2. **Replay-safe Accounting Pass**: Each fill is accounted individually via `processFillAccounting(fillOp, fillKey)` with replay-safe dedup (`applyReplaySafeFillAccounting`, `dexbot_fill_runtime.ts:305`)
+2. **Replay-safe Accounting Pass**: Each fill is accounted individually via `processFillAccounting(fillOp, fillKey)` with replay-safe dedup (`applyReplaySafeFillAccounting`, `dexbot_fill_runtime.ts:303`)
    - Proceeds credited directly to `chainFree` (via `adjustTotalBalance`)
    - Same-order fill batching (sync_engine Phase 6 cumulative transition) aggregates multiple fill transitions on one order before a single rebalance
    - All proceeds immediately available to next rebalance cycle (not split across cycles)
@@ -137,7 +137,7 @@ See [developer_guide.md#order-state-helper-functions](developer_guide.md#order-s
 
 **Result**: 29 fills now processed in ~8 broadcasts (~24s) instead of 29 broadcasts (~90s).
 
-**Residual Dust Cancellation** (post-1.4.12): After a sub-dust fill leaves a residual order on chain (e.g. the quote-side value truncates to 0 on `bitshares-core` `maybe_cull_small_order`), the fill runtime explicitly cancels those residuals via `cancelResidualOrders()` (`dexbot_fill_runtime.ts:193`, `[RESIDUAL]` tag) so a leftover of ≥1 base unit cannot be re-adopted into a grid slot by maintenance.
+**Residual Dust Cancellation** (post-1.4.12): After a sub-dust fill leaves a residual order on chain (e.g. the quote-side value truncates to 0 on `bitshares-core` `maybe_cull_small_order`), the fill runtime explicitly cancels those residuals via `cancelResidualOrders()` (`dexbot_fill_runtime.ts:191`, `[RESIDUAL]` tag) so a leftover of ≥1 base unit cannot be re-adopted into a grid slot by maintenance.
 
 #### Grid Regeneration Trigger (Available Funds Ratio — bidirectional)
 

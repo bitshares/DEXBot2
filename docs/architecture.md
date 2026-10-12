@@ -620,12 +620,12 @@ mgr.outOfSpread = 3;  // three slots beyond the target spread
 ### Calculation
 
 ```javascript
-// Calculate how many steps beyond target
-const currentSpreadSteps = calculateCurrentSpreadGap();
-const targetSpreadSteps = calculateTargetSpread();
-const outOfSpreadDistance = Math.max(0, currentSpreadSteps - targetSpreadSteps);
-
-mgr.outOfSpread = outOfSpreadDistance;  // 0 = in spread, 3+ = out
+// Requested extra slots, derived from the live spread vs the target tolerance:
+// calculateCurrentSpread(mgr) -> shouldFlagOutOfSpread(...) returns the slot count.
+mgr.outOfSpread = shouldFlagOutOfSpread(
+    calculateCurrentSpread(mgr), nominalSpread, toleranceSteps, buyCount, sellCount, incrementPercent
+);
+// 0 = in spread, 3+ = out
 ```
 
 ---

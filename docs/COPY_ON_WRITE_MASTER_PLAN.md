@@ -95,7 +95,6 @@ boundary position and slot BUY/SELL roles during blockchain execution.
        ├─> Create WorkingGrid (clone master)
        ├─> Calculate target grid (from strategy)
        ├─> Reconcile against working copy
-       ├─> Validate working grid funds
        └─> Return { workingGrid, actions, ... }
 
 2. updateOrdersOnChainBatch(result)
@@ -265,7 +264,7 @@ During Rebalance**.
 
 ## Safety Guardrails
 
-1. **Accountant Dry-Run:** `Accountant.validateTargetGrid(targetMap)` verifies that the entire proposed grid fits within `Liquid + CurrentOrderValue` *before* broadcasting.
+1. **Planning-time budget feasibility:** order sizes are derived from `funds.allocated` via `getSideBudget` / `_getSizingContext`, so a proposed grid cannot exceed the side budget by construction. (The historical `Accountant.validateTargetGrid` dry-run was removed — it had no production caller.)
 2. **Atomic Transaction Semantics:** Large boundary shifts (>5 slots) are inherently safe because the COW pattern only commits after successful blockchain confirmation. If market volatility causes rapid shifts during planning, the plan is caught by the **pre-broadcast staleness guard** (`evaluateCommit` against `_gridVersion`): it re-plans ONCE from the fresh master with the same fills (`replanStaleBatch`, bounded by `STALE_PLAN_REPLAN_LIMIT`), then proceeds + structural resync if still stale — never a silent discard that drops the fill set. If the master changes *during* broadcast, the commit-time guard refuses the commit and the placed orders are adopted from chain so on-chain state never runs ahead of the grid.
 3. **Resync on Error:** If any blockchain action fails (e.g., "Insufficient funds"), the bot discards the working grid and triggers `grid_reconcile.ts` for a fresh blockchain sync ([GRID_RECONCILE.md](GRID_RECONCILE.md)).
 

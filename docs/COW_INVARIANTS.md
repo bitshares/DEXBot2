@@ -87,11 +87,11 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
 - `INV-PROJ-002` Preserve on-chain PARTIAL size in projection
   - If identity is retained (`keepOrderId=true`) and current state is `PARTIAL`, projected size must preserve current on-chain remaining size.
   - It must not be overwritten by ideal geometric `targetSize`.
-  - Exception: a `PARTIAL` with a rotation/size-update action targeting its `orderId` does use `targetSize` (the explicit-UPDATE path at `modules/order/utils/validate.ts:1158`).
+  - Exception: a `PARTIAL` with a rotation/size-update action targeting its `orderId` does use `targetSize` (the explicit-UPDATE path at `modules/order/utils/validate.ts:1187`).
   - Preserve-path size must be normalized to finite, non-negative value.
 
 - `INV-PROJ-003` ACTIVE on-chain projection preserves current size (same as PARTIAL)
-  - If identity is retained and state is `ACTIVE`, projection preserves current on-chain size via the same `shouldPreserveSize` path as `PARTIAL` (`validate.ts:1158`).
+  - If identity is retained and state is `ACTIVE`, projection preserves current on-chain size via the same `shouldPreserveSize` path as `PARTIAL` (`validate.ts:1187`).
   - An explicit UPDATE action targeting the `orderId` is required to apply `targetSize`.
 
 - `INV-ID-001` Order identity retention rule
