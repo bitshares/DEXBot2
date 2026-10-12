@@ -101,7 +101,7 @@ async function broadcastViaChainOrders(accountName: string, operations: ChainOrd
     return { success: true };
 }
 
-export class DaemonKeyStore implements KeyStore {
+class DaemonKeyStore implements KeyStore {
     async resolveSigningKey(accountName: string, vaultSecret?: unknown, chainClient?: unknown): Promise<unknown> {
         if (vaultSecret) {
             return chainKeys.resolvePrivateKey(accountName, vaultSecret, chainClient);

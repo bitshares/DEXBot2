@@ -6268,7 +6268,7 @@ async function processBatchResults(bot: BotLike, result: JsonObj, opContexts: Op
         updateOperationCount
     };
 }
-export { isSpreadCorrectionBypassAllowed, isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, recordRestampBuyAboveAnchor, collectGapBandPlacementShadowSlots, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, reconcileAfterUncertainBroadcastImpl, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, pollChainForConfirmation, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
+export { isSpreadCorrectionBypassAllowed, isLastFillGuardBlocked, resolveOnGridPivot, checkGridPriceInvariant, recordRestampBuyAboveAnchor, collectGapBandPlacementShadowSlots, deriveRotationPrice, refreshLastFillPivotFromQueue, runFinalPivotGate, buildOutsideInPairGroupsForOrders, buildOutsideInPairGroupsForCreateEntries, markMissingCreateResultsAsStructuralBlocker, formatUnmatchedChainOrderForLog, recordPendingBroadcast, clearPendingBroadcasts, popPushedWorkingGrid, findChainOrderForSlot, reconcileAfterUncertainBroadcast, executeWithRetryOnUncertain, executeChunkedWithRetryOnUncertain, formatPartialBroadcastSummary, buildActionsFromPlan, buildCowResultFromPlan, applyRotationTransitionsToWorkingGrid, updateOrdersOnChainBatchCOW, processBatchResults, adoptPlacedBatchFromChain, resolveRefillBoundaryHold, toRefillSlotIdSet, trackBoundaryHold };
 // Exported for regression tests (issue #23 sibling): the uncertain-broadcast
 // discard path must never drop a placement silently when master lost the slot.
 export { restoreDiscardedCreates };
@@ -6277,35 +6277,16 @@ export { restoreDiscardedCreates };
 export default {
     buildOutsideInPairGroupsForOrders,
     buildOutsideInPairGroupsForCreateEntries,
-    extractOperationResults,
-    findMissingCreateResultContexts,
     markMissingCreateResultsAsStructuralBlocker,
     formatUnmatchedChainOrderForLog,
     recordPendingBroadcast,
     clearPendingBroadcasts,
-    clearPendingBroadcastsForSlots,
-    popPushedWorkingGrid,
-    buildChainOrderFingerprint,
-    normalizeChainOrderForPendingMatch,
     findChainOrderForSlot,
     reconcileAfterUncertainBroadcast,
-    reconcileAfterUncertainBroadcastImpl,
-    shouldExecuteCreatePairMode,
     executeWithRetryOnUncertain,
     executeChunkedWithRetryOnUncertain,
-    formatPartialBroadcastSummary,
-    validateOperationFunds,
-    resolveIdealSizeForValidation,
-    validateOrderSizeForExecution,
-    buildActionsFromPlan,
+    popPushedWorkingGrid,
     buildCowResultFromPlan,
-    restoreSkippedUpdateSlotsInWorkingGrid,
-    resolveRefillBoundaryHold,
-    toRefillSlotIdSet,
-    trackBoundaryHold,
-    applyRotationTransitionsToWorkingGrid,
-    pollChainForConfirmation,
     updateOrdersOnChainBatchCOW,
     processBatchResults,
-    runFinalPivotGate,
 };

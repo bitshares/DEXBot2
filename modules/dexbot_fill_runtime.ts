@@ -27,7 +27,7 @@ export interface FillOpLike {
 
 type MissingKeyMessageFn = (op: FillOpLike, fill: unknown) => string;
 type FallbackKeyMessageFn = (op: FillOpLike, fill: unknown, fillKey: string) => string;
-export type ReplayMessageFn = (op: FillOpLike, fill: unknown, fillKey: string) => string;
+type ReplayMessageFn = (op: FillOpLike, fill: unknown, fillKey: string) => string;
 type FillErrorFn = (op: FillOpLike, fill: unknown, err: unknown) => string;
 
 interface SweepOrphanFillOptions {

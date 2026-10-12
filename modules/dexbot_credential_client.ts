@@ -302,5 +302,5 @@ async function executeOperationsViaCredentialDaemon(accountName: string, operati
     }
 }
 
-export { DEFAULT_READY_FILE, DEFAULT_SOCKET_PATH, DEFAULT_BROADCAST_TIMEOUT_MS, sendCredentialDaemonRequest, executeOperationsViaCredentialDaemon, isCredentialDaemonReady, waitForCredentialDaemon, BroadcastUncertainError }
+export { DEFAULT_READY_FILE, DEFAULT_SOCKET_PATH, DEFAULT_BROADCAST_TIMEOUT_MS, executeOperationsViaCredentialDaemon, isCredentialDaemonReady, waitForCredentialDaemon, BroadcastUncertainError }
 

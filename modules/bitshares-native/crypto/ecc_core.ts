@@ -245,7 +245,6 @@ function wifDecodePayload(payload: Uint8Array): { privateKey: Uint8Array; compre
 }
 
 export {
-    equalsBytes,
     isValidPrivateKeyBytes,
     recoverPublicKeyBytes,
     verifyBytes,
