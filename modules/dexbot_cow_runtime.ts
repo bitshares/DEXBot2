@@ -45,9 +45,17 @@ import { parseSlotIndex } from './order/utils/slot.js';
  * keeps the plan-build authority (fail-open to the stamp, never to the guard).
  */
 export function isEvacuationStampStillValid(liveBoundary: unknown, liveGapSlots: unknown, sourceId: unknown, destId: unknown, orderType: unknown): boolean {
+    if (orderType !== ORDER_TYPES.BUY && orderType !== ORDER_TYPES.SELL) return false;
+    // Explicit null/undefined/'' guard BEFORE Number(): Number(null) === 0 and
+    // Number('') === 0 are finite and would read an unknown live geometry as
+    // boundary 0, falsely DISPROVING the stamp and downgrading the rotation to
+    // the live guard — the opposite of the documented "non-finite geometry
+    // keeps plan-build authority" contract (undefined already fails open via
+    // NaN). Same Number(null)===0 trap guarded elsewhere in the COW runtime.
+    if (liveBoundary === null || liveBoundary === undefined || liveBoundary === '') return true;
+    if (liveGapSlots === null || liveGapSlots === undefined || liveGapSlots === '') return true;
     const b = Number(liveBoundary);
     const g = Number(liveGapSlots);
-    if (orderType !== ORDER_TYPES.BUY && orderType !== ORDER_TYPES.SELL) return false;
     if (!Number.isFinite(b) || !Number.isFinite(g) || g < 0) return true;
     const srcIdx = parseSlotIndex(sourceId);
     const dstIdx = parseSlotIndex(destId);
@@ -2162,8 +2170,9 @@ function collectGapBandPlacementShadowSlots(actions: CowAction[] | null | undefi
 
 /**
  * LAST-FILL-GUARD helper — pivot ± halfIncrement (replaces price-tolerance).
- *  last fill @x with increment i: BUY < x*(1 - i/2/100), SELL > x*(1 + i/2/100)
- *  e.g. x=1000, i=0.5% => BUY < 997.5, SELL > 1002.5
+ *  last fill @x with increment i (blocked shapes): BUY > x*(1 - i/2/100),
+ *  SELL < x*(1 + i/2/100)
+ *  e.g. x=1000, i=0.5% => BUY > 997.5 and SELL < 1002.5 are blocked
  * Cold (pivot null or lastType null) => disabled. Spread-correction CREATES
  * bypass per-action (see broadcast sites); gap-evacuation rotation UPDATEs
  * bypass only via the violation-reducing allowance (origin='gap-evacuation',
@@ -2524,8 +2533,16 @@ function buildCowResultFromPlan(bot: BotLike, plan: JsonObj): CowResult {
     const toWorkingHole = (slot: ManagedOrder) => {
         try {
             const idx = parseSlotIndex(slot?.id);
-            const b = Number(workingBoundary);
-            const gapSlots = Number(bot?.manager?._gapSlots);
+            // Explicit null/'' guard: the workingBoundary fallback (manager.boundaryIdx)
+            // can be null, and Number(null) === 0 would misclassify slot 0 as a BUY
+            // rail hole (same trap guarded for plan.boundaryIdx above).
+            const b = (workingBoundary === null || workingBoundary === undefined || (workingBoundary as unknown) === '')
+                ? NaN
+                : Number(workingBoundary);
+            const rawGapSlots: unknown = bot?.manager?._gapSlots;
+            const gapSlots = (rawGapSlots === null || rawGapSlots === undefined || rawGapSlots === '')
+                ? NaN
+                : Number(rawGapSlots);
             if (idx !== null && idx !== undefined && Number.isFinite(b) && Number.isFinite(gapSlots) && gapSlots >= 0) {
                 if (Number(idx) <= b) return toRailHolePlaceholder(slot, ORDER_TYPES.BUY);
                 if (Number(idx) >= getSellStartIdx(b, gapSlots)) return toRailHolePlaceholder(slot, ORDER_TYPES.SELL);
@@ -3548,11 +3565,12 @@ async function runPreBroadcastGuards(bot: BotLike, cowResult: CowResult): Promis
             ? NaN
             : Number(planBoundaryValue);
         // Fall back to the committed boundary only when it is itself known:
-        // Number(null) === 0 must not silently become slot 0 (see the helper).
-        const managerBoundaryRaw = bot.manager?.boundaryIdx;
+        // Number(null) === 0 and Number('') === 0 must not silently become
+        // slot 0 (same trap the helper guards).
+        const managerBoundaryRaw: unknown = bot.manager?.boundaryIdx;
         const shadowBoundary = Number.isFinite(planBoundaryRaw)
             ? planBoundaryRaw
-            : (managerBoundaryRaw != null ? Number(managerBoundaryRaw) : NaN);
+            : (managerBoundaryRaw != null && managerBoundaryRaw !== '' ? Number(managerBoundaryRaw) : NaN);
         const shadowGapSlots = Number(bot.manager?._gapSlots);
         const shadowSlots = collectGapBandPlacementShadowSlots(actions, shadowBoundary, shadowGapSlots);
         if (shadowSlots.length > 0) {

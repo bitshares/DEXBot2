@@ -1359,6 +1359,10 @@ function geometryTypeForSlotIndex(idx: number | string | null | undefined, bound
     // treat "no index" as slot 0 (BUY rail). Fail closed instead.
     if (idx === null || idx === undefined || idx === '') return null;
     if (boundaryIdx === null || boundaryIdx === undefined || boundaryIdx === '') return null;
+    // Unknown gap width must also fail closed: Number(null)/Number('') === 0
+    // would collapse the gap band and misclassify an in-band slot as a rail
+    // slot (the same trap guarded in detectGapEvacuationCandidates).
+    if (gapSlots === null || gapSlots === undefined || gapSlots === '') return null;
     const n = Number(idx);
     const b = Number(boundaryIdx);
     const g = Number(gapSlots);
@@ -1383,6 +1387,12 @@ function geometryTypeForSlotIndex(idx: number | string | null | undefined, bound
 function detectGapEvacuationCandidates(masterGrid: Map<string, ManagedOrder>, boundaryIdx: number | string | null, gapSlots: number | string | null): Array<{ id: string; idx: number; type: OrderType; price: number; size: number; orderId: string }> {
     const out: Array<{ id: string; idx: number; type: OrderType; price: number; size: number; orderId: string }> = [];
     if (!masterGrid || typeof masterGrid.values !== 'function') return out;
+    // Explicit null/undefined/'' guard BEFORE Number(): Number(null) === 0 and
+    // Number('') === 0 are finite and would read an unknown boundary as slot 0,
+    // selecting a fake gap band around it (same trap guarded in
+    // geometryTypeForSlotIndex / isSlotIndexInGapBand).
+    if (boundaryIdx === null || boundaryIdx === undefined || boundaryIdx === '') return out;
+    if (gapSlots === null || gapSlots === undefined || gapSlots === '') return out;
     const b = Number(boundaryIdx);
     const g = Number(gapSlots);
     if (!Number.isFinite(b) || !Number.isFinite(g) || g < 0) return out;

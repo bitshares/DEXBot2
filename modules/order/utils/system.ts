@@ -2028,7 +2028,7 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
         // executor already handles rotation UPDATEs (newGridId + newPrice remap).
         const optimizedActions = optimizeRebalanceActions(actions, manager.orders, {
             logger: (msg: string, level?: string) => manager.logger?.log?.(msg, level),
-            boundaryIdx: pendingBoundaryIdx,
+            boundaryIdx: pendingBoundaryIdx ?? undefined,
             gapSlots: manager._gapSlots,
             assets: manager.assets
         });

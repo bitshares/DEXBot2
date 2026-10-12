@@ -30,7 +30,7 @@ const {
     updateGapEvacuationStreaks,
     assignGridRoles
 } = require('../modules/order/utils/order');
-const { reconcileGrid, validateOrder } = require('../modules/order/utils/validate');
+const { reconcileGrid, validateOrder, stampGapEvacuationRotation, optimizeRebalanceActions } = require('../modules/order/utils/validate');
 const { ORDER_TYPES, ORDER_STATES, COW_ACTIONS, GRID_LIMITS } = require('../modules/constants');
 const { OrderManager } = require('../modules/order/index').default;
 
@@ -131,6 +131,14 @@ async function testEVAC005_GeometryTyping() {
     assert.strictEqual(isSlotIndexInGapBand(141, BOUNDARY, GAP_SLOTS), false);
     assert.strictEqual(isSlotIndexInGapBand(144, BOUNDARY, GAP_SLOTS), false);
     assert.strictEqual(geometryTypeForSlotIndex(null, BOUNDARY, GAP_SLOTS), null, 'unusable index fails closed');
+    assert.strictEqual(geometryTypeForSlotIndex(BOUNDARY, null, GAP_SLOTS), null, 'null boundary fails closed');
+    // Unknown gap width must fail closed too: Number(null)/Number('') === 0
+    // would collapse the gap band and misclassify in-band slot 142 as a rail
+    // slot instead of SPREAD.
+    assert.strictEqual(geometryTypeForSlotIndex(142, BOUNDARY, null), null, 'null gap fails closed');
+    assert.strictEqual(geometryTypeForSlotIndex(142, BOUNDARY, ''), null, "'' gap fails closed");
+    assert.strictEqual(geometryTypeForSlotIndex(142, BOUNDARY, undefined), null, 'undefined gap fails closed');
+    assert.strictEqual(geometryTypeForSlotIndex(BOUNDARY, BOUNDARY, 0), ORDER_TYPES.BUY, 'genuine gap 0 still types');
     console.log('✓ EVAC-005 passed');
 }
 
@@ -152,6 +160,9 @@ async function testEVAC006_RailHolePlaceholder() {
 async function testEVAC007_GeometryOnlyDetection() {
     console.log('\n[EVAC-007] Detection is geometry-only (rail-typed stray still found)...');
     const master = new Map([
+        // Below boundary 0's fake band (idx 1..2): makes the null-boundary
+        // assertion non-vacuous — Number(null) === 0 would select it.
+        ['slot-1', slot('slot-1', ORDER_TYPES.SELL, ORDER_STATES.ACTIVE, 100, 10, '1.7.1')],
         // In-band stray typed SELL (Phase 2 retype) — type-based detection
         // would miss it; geometry must still flag it.
         ['slot-143', slot('slot-143', ORDER_TYPES.SELL, ORDER_STATES.ACTIVE, 950, 100, '1.7.143')],
@@ -168,8 +179,12 @@ async function testEVAC007_GeometryOnlyDetection() {
     const cands = detectGapEvacuationCandidates(master, BOUNDARY, GAP_SLOTS);
     const ids = cands.map((c: any) => c.id).sort();
     assert.deepStrictEqual(ids, ['slot-142', 'slot-143'], `only in-band on-chain slots, got ${ids}`);
-    // Null boundary fails closed (no candidates, no throw).
-    assert.deepStrictEqual(detectGapEvacuationCandidates(master, null, GAP_SLOTS), []);
+    // Null/'' boundary/gap fails closed (no candidates, no throw). The
+    // Number(null)===0 / Number('')===0 trap must not select slot 1..2.
+    assert.deepStrictEqual(detectGapEvacuationCandidates(master, null, GAP_SLOTS), [], 'null boundary fails closed');
+    assert.deepStrictEqual(detectGapEvacuationCandidates(master, '', GAP_SLOTS), [], "'' boundary fails closed");
+    assert.deepStrictEqual(detectGapEvacuationCandidates(master, BOUNDARY, null), [], 'null gapSlots fails closed');
+    assert.deepStrictEqual(detectGapEvacuationCandidates(master, BOUNDARY, ''), [], "'' gapSlots fails closed");
     console.log('✓ EVAC-007 passed');
 }
 
@@ -376,6 +391,12 @@ async function testEVAC016_StampStillValidFreshGeometry() {
     assert.strictEqual(isEvacuationStampStillValid(BOUNDARY, GAP_SLOTS, 'planned', 'slot-147', ORDER_TYPES.SELL), false);
     // Non-rail types fail closed explicitly (never fall into the BUY branch).
     assert.strictEqual(isEvacuationStampStillValid(BOUNDARY, GAP_SLOTS, 'slot-143', 'slot-147', ORDER_TYPES.SPREAD), false);
+    // Unknown live geometry keeps the plan-build stamp (fail-open): null/''
+    // must NOT collapse to boundary 0 via Number(null) === 0 and void it.
+    assert.strictEqual(isEvacuationStampStillValid(null, GAP_SLOTS, 'slot-143', 'slot-147', ORDER_TYPES.SELL), true, 'null live boundary fail-open');
+    assert.strictEqual(isEvacuationStampStillValid(undefined, GAP_SLOTS, 'slot-143', 'slot-147', ORDER_TYPES.SELL), true, 'undefined live boundary fail-open');
+    assert.strictEqual(isEvacuationStampStillValid('', GAP_SLOTS, 'slot-143', 'slot-147', ORDER_TYPES.SELL), true, "'' live boundary fail-open");
+    assert.strictEqual(isEvacuationStampStillValid(BOUNDARY, null, 'slot-143', 'slot-147', ORDER_TYPES.SELL), true, 'null live gapSlots fail-open');
     console.log('✓ EVAC-016 passed');
 }
 
@@ -499,6 +520,57 @@ async function testEVAC020_StampedSizeReproof() {
     console.log('✓ EVAC-020 passed');
 }
 
+async function testEVAC021_UnknownPlanGeometryDoesNotStamp() {
+    console.log('\n[EVAC-021] Unknown plan geometry never stamps a boundary-0 evacuation...');
+    // Source slot-1 sits inside the FAKE band (0, 3) that Number(null) === 0
+    // would select. A genuine boundary 0 legitimately stamps it; null/undefined/''
+    // (unknown geometry) must not.
+    const srcMaster = slot('slot-1', ORDER_TYPES.SELL, ORDER_STATES.ACTIVE, 100, 100, '1.7.1');
+    const buildAction = () => ({
+        type: COW_ACTIONS.UPDATE,
+        id: 'slot-1',
+        orderId: '1.7.1',
+        newGridId: 'slot-4',
+        newSize: 100,
+        newPrice: 104,
+        order: slot('slot-4', ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL, 104, 100),
+        isRotation: true
+    });
+
+    const genuineZero = stampGapEvacuationRotation(
+        buildAction(), srcMaster, 104, 100, ORDER_TYPES.SELL, 0, GAP_SLOTS
+    );
+    assert.strictEqual(genuineZero.origin, 'gap-evacuation', 'genuine boundary 0 still stamps');
+    assert.strictEqual(genuineZero.evacBoundary, 0, 'genuine boundary 0 is preserved, not treated as unknown');
+
+    for (const unknown of [null, undefined, '']) {
+        const stamped = stampGapEvacuationRotation(
+            buildAction(), srcMaster, 104, 100, ORDER_TYPES.SELL, unknown as any, GAP_SLOTS
+        );
+        assert.ok(!stamped.origin, `unknown boundary (${String(unknown)}) must not stamp`);
+        assert.strictEqual(stamped.evacBoundary, undefined, `unknown boundary (${String(unknown)}) leaves no B-stamp`);
+    }
+    // Unknown gapSlots with a real boundary must not stamp either.
+    const noGap = stampGapEvacuationRotation(
+        buildAction(), srcMaster, 104, 100, ORDER_TYPES.SELL, 0, null as any
+    );
+    assert.ok(!noGap.origin, 'unknown gapSlots must not stamp');
+
+    // The optimizeRebalanceActions fold must honor the same contract.
+    const actions = [
+        { type: COW_ACTIONS.CANCEL, id: 'slot-1', orderId: '1.7.1' },
+        { type: COW_ACTIONS.CREATE, id: 'slot-4', order: slot('slot-4', ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL, 104, 100) }
+    ];
+    const optMaster = new Map([['slot-1', srcMaster]]);
+    const optUnknown = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: null, gapSlots: GAP_SLOTS });
+    const rotUnknown = optUnknown.find((a: any) => a.type === COW_ACTIONS.UPDATE);
+    assert.ok(rotUnknown && !rotUnknown.origin, 'unknown boundary must not stamp via optimizeRebalanceActions');
+    const optZero = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: 0, gapSlots: GAP_SLOTS });
+    const rotZero = optZero.find((a: any) => a.type === COW_ACTIONS.UPDATE);
+    assert.strictEqual(rotZero.origin, 'gap-evacuation', 'genuine boundary 0 still stamps via optimizeRebalanceActions');
+    console.log('✓ EVAC-021 passed');
+}
+
 async function runAllTests() {
     console.log('=== Gap-Evacuation Test Suite ===\n');
     await testEVAC001_AllowsSellOutwardNonGrowing();
@@ -521,6 +593,7 @@ async function runAllTests() {
     await testEVAC018_StampUsesPrecisionBitExactSize();
     await testEVAC019_PlanLevelOriginRoutesThroughProof();
     await testEVAC020_StampedSizeReproof();
+    await testEVAC021_UnknownPlanGeometryDoesNotStamp();
     console.log('\n=== All gap-evacuation tests passed! ===');
 }
 

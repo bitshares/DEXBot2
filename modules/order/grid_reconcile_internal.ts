@@ -1835,6 +1835,12 @@ async function _reconcileStartupSide({
     const planVacatedRailRefill = (chainOrder: ChainOrder, parsedChain: ParsedChainOrder | null) => {
         const boundary = manager.boundaryIdx;
         const gapSlots = manager._gapSlots;
+        // Explicit null/undefined/'' guard BEFORE Number(): Number(null) === 0
+        // is finite and would defeat this bail-out, running the refill scan on
+        // a bogus boundary 0 (and a null gapSlots would default to 0 through
+        // getSellStartIdx).
+        if (boundary === null || boundary === undefined || (boundary as unknown) === '') return;
+        if (gapSlots === null || gapSlots === undefined || (gapSlots as unknown) === '') return;
         if (!Number.isFinite(Number(boundary)) || !Number.isFinite(Number(gapSlots))) return;
         const chainPrice = parsedChain?.price;
         if (!Number.isFinite(Number(chainPrice))) return;

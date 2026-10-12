@@ -462,6 +462,13 @@ function clampRotationSizeForPartial(surplusMaster: ManagedOrder | null, holeSiz
  * @returns {Object} The action, stamped when it qualifies
  */
 function stampGapEvacuationRotation(action: CowAction, sourceMaster: ManagedOrder | null, destPrice: number | string, destSize: number, type: string, frozenBoundary: number | string | null, frozenGapSlots: number | string, assets: AssetPair | null = null): CowAction {
+    // Explicit null/undefined/'' guard BEFORE Number(): Number(null) === 0 is
+    // finite and would stamp a bogus gap-evacuation bypass at boundary 0 when
+    // the plan geometry is unknown (absent geometry means no stamp, never
+    // fail-open — same trap guarded across the COW/gap-evacuation stack).
+    if (frozenBoundary === null || frozenBoundary === undefined || frozenBoundary === '') return action;
+    const rawFrozenGapSlots: unknown = frozenGapSlots;
+    if (rawFrozenGapSlots === null || rawFrozenGapSlots === undefined || rawFrozenGapSlots === '') return action;
     const b = Number(frozenBoundary);
     const g = Number(frozenGapSlots);
     if (!Number.isFinite(b) || !Number.isFinite(g) || g < 0) return action;
@@ -713,8 +720,18 @@ function optimizeRebalanceActions(actions: CowAction[], masterGrid: Map<string, 
     // B-stamp inputs (same contract as reconcileGrid): frozen plan-build
     // boundary + gap width for gap-evacuation rotation stamping. Absent =>
     // no stamping, guarded default.
-    const optBoundary = Number(options?.boundaryIdx);
-    const optGapSlots = Number(options?.gapSlots);
+    // Explicit null/undefined guard BEFORE Number(): Number(null) === 0 is
+    // finite and would turn an absent boundary into a valid slot-0 geometry,
+    // stamping a bogus gap-evacuation bypass (undefined already fails open via
+    // NaN, so only null was hazardous).
+    const rawOptBoundary = options?.boundaryIdx;
+    const rawOptGapSlots = options?.gapSlots;
+    const optBoundary = (rawOptBoundary === null || rawOptBoundary === undefined)
+        ? NaN
+        : Number(rawOptBoundary);
+    const optGapSlots = (rawOptGapSlots === null || rawOptGapSlots === undefined)
+        ? NaN
+        : Number(rawOptGapSlots);
     const hasOptGeometry = Number.isFinite(optBoundary) && Number.isFinite(optGapSlots) && optGapSlots >= 0;
     const optAssets = options?.assets ?? null;
 
