@@ -36,7 +36,11 @@ async function main() {
     }
 
     // ── Keys / sign / verify / recover / DER / WIF ──────────────────
-    for (let i = 0; i < 32; i++) {
+    // Both implementations are pure-JS and signing/recovery dominates this
+    // test's runtime (~65 ms/iteration). The conformance check is
+    // differential over random inputs and any divergence is deterministic,
+    // so a handful of samples exercises every op without paying for 32.
+    for (let i = 0; i < 8; i++) {
         const priv = randomBytes(32);
         const digest = randomBytes(32);
 

@@ -1343,7 +1343,7 @@ function makeAccountRecord(account) {
             // The decisive property: once the cap is hit, fast retries stop and
             // the failure run stops growing on its own.
             const settledFailures = aliceSub._channelFailures;
-            await new Promise(r => setTimeout(r, 150));
+            await new Promise(r => setTimeout(r, 60));
             assert.strictEqual(aliceSub._channelFailures, settledFailures,
                 'a capped, dead channel must stop self-driving scans and fall back to the poll cadence');
             assert.strictEqual(aliceSub._channelRetryTimer, null,

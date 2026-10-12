@@ -831,16 +831,31 @@ Config.DEXBOT_SKIP_VERSION_NOTICE = false;
     // test silently asserted the defaults and passed for the wrong reason. A
     // fresh process is also the honest shape of the claim: a real install
     // reads its general.settings.json exactly once, at startup.
-    const { execFileSync } = require('child_process');
+    const { execFile } = require('child_process');
     const modulesDir = path.join(__dirname, '..', 'modules');
     const { UPDATER: LIVE_UPDATER } = require('../modules/constants');
 
+    const execFileAsync = (file: string, args: string[], options: any): Promise<{ stdout: string }> =>
+        new Promise((resolve, reject) => {
+            execFile(file, args, options, (err: any, stdout: string) => {
+                if (err) reject(err);
+                else resolve({ stdout });
+            });
+        });
+
     /** Resolve the probe's sources in a fresh process with `updater` written
-     *  to a temp profile root's general.settings.json. */
-    const sourcesWith = (updater: any): any[] => {
+     *  to a temp profile root's general.settings.json. Each distinct updater
+     *  needs its own process (the profile dir and merged UPDATER are captured
+     *  at module load), but the scenarios are independent: resolve them in
+     *  parallel and memoize, so repeated lookups do not re-spawn. */
+    const sourcesCache = new Map<string, any[]>();
+    const sourcesWith = async (updater: any): Promise<any[]> => {
+        const key = JSON.stringify(updater ?? null);
+        const cached = sourcesCache.get(key);
+        if (cached) return cached;
         const root = fs.mkdtempSync(path.join(tmpRoot, 'apibase-'));
         fs.writeFileSync(path.join(root, 'general.settings.json'), JSON.stringify({ UPDATER: updater }), { mode: 0o600 });
-        const out = execFileSync(process.execPath, ['-e', `
+        const { stdout } = await execFileAsync(process.execPath, ['-e', `
             const vn = require(${JSON.stringify(path.join(modulesDir, 'version_notice.js'))});
             process.stdout.write(JSON.stringify(vn.resolveReleaseSources().map((s) => ({ id: s.id, url: s.url }))));
         `], {
@@ -848,12 +863,30 @@ Config.DEXBOT_SKIP_VERSION_NOTICE = false;
             env: { ...process.env, DEXBOT_PROFILE_ROOT: root },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
-        return JSON.parse(out);
+        const sources = JSON.parse(stdout);
+        sourcesCache.set(key, sources);
+        return sources;
     };
-    const githubUrl = (updater: any): string | undefined => sourcesWith(updater).find((s) => s.id === 'github')?.url;
 
     const ownerRepo = String(LIVE_UPDATER.REPOSITORY_URL).replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
     const CUSTOM_BASE = 'https://ghe.example.com/api/v3';
+
+    // One child per distinct settings scenario, all in flight together.
+    const scenarios = [
+        { GITHUB_API_BASE: CUSTOM_BASE },
+        { GITHUB_API_BASE: CUSTOM_BASE, GITHUB_RELEASE_URL: '' },
+        { GITHUB_API_BASE: CUSTOM_BASE, GITHUB_RELEASE_URL: 'https://pinned.example.com/releases/latest' },
+        { GITHUB_API_BASE: CUSTOM_BASE, GITHUB_RELEASE_URL: 'off' },
+        { GITHUB_API_BASE: CUSTOM_BASE, REPOSITORY_URL: 'https://gitlab.example.com/o/r.git' },
+        {},
+    ];
+    const resolved = new Map<string, any[]>();
+    await Promise.all(scenarios.map(async (updater) => {
+        resolved.set(JSON.stringify(updater), await sourcesWith(updater));
+    }));
+    const sourcesFor = (updater: any): any[] => resolved.get(JSON.stringify(updater)) ?? [];
+    const githubUrl = (updater: any): string | undefined => sourcesFor(updater).find((s) => s.id === 'github')?.url;
+    const npmUrl = (updater: any): string | undefined => sourcesFor(updater).find((s) => s.id === 'npm')?.url;
 
     check('a custom GITHUB_API_BASE from the settings file builds the releases URL',
         githubUrl({ GITHUB_API_BASE: CUSTOM_BASE }) === `${CUSTOM_BASE}/repos/${ownerRepo}/releases/latest`,
@@ -868,7 +901,7 @@ Config.DEXBOT_SKIP_VERSION_NOTICE = false;
     check('a non-GitHub repository drops the source even with a custom base',
         githubUrl({ GITHUB_API_BASE: CUSTOM_BASE, REPOSITORY_URL: 'https://gitlab.example.com/o/r.git' }) === undefined);
     check('a custom base does not disturb the npm source',
-        sourcesWith({ GITHUB_API_BASE: CUSTOM_BASE }).find((s) => s.id === 'npm')?.url === LIVE_UPDATER.REGISTRY_URL);
+        npmUrl({ GITHUB_API_BASE: CUSTOM_BASE }) === LIVE_UPDATER.REGISTRY_URL);
     // No overrides at all: the shipped defaults still produce the public API URL.
     check('the shipped defaults derive the public API URL',
         githubUrl({}) === `https://api.github.com/repos/${ownerRepo}/releases/latest`, githubUrl({}));

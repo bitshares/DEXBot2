@@ -226,10 +226,13 @@ async function testSingleFlightDefersSecondBroadcast() {
         // Start the second batch while the first is still broadcasting.
         const p2 = bot._updateOrdersOnChainBatchCOW(second.cowResult);
 
-        // Give the second batch time to reach the single-flight wait.
-        await new Promise((r) => setTimeout(r, 150));
+        // Wait for the second batch to reach (and log) the single-flight wait.
+        let deferLog;
+        const deferDeadline = Date.now() + 2000;
+        while (!(deferLog = logEntries.find((l) => l.msg.includes('already in flight') || l.msg.includes('deferring this batch'))) && Date.now() < deferDeadline) {
+            await new Promise((r) => setTimeout(r, 5));
+        }
         assert.strictEqual(broadcastCalls, 1, 'second batch must NOT broadcast while first is in flight');
-        const deferLog = logEntries.find((l) => l.msg.includes('already in flight') || l.msg.includes('deferring this batch'));
         assert.ok(deferLog, 'single-flight defer log must be emitted');
 
         // Release the first broadcast; the second must then proceed.
@@ -303,7 +306,7 @@ async function testPreBroadcastRaceRecheck() {
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 150));
+            await new Promise((r) => setTimeout(r, 80));
         }
         return {
             op: {
@@ -351,9 +354,12 @@ async function testPreBroadcastRaceRecheck() {
 
         // The slow batch finishes building and must now wait at the
         // pre-broadcast recheck instead of broadcasting alongside.
-        await new Promise((r) => setTimeout(r, 250));
+        let preBroadcastLog;
+        const preBroadcastDeadline = Date.now() + 2000;
+        while (!(preBroadcastLog = logEntries.find((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight'))) && Date.now() < preBroadcastDeadline) {
+            await new Promise((r) => setTimeout(r, 5));
+        }
         assert.strictEqual(broadcastCalls, 1, 'slow batch must NOT broadcast while fast batch is in flight');
-        const preBroadcastLog = logEntries.find((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight'));
         assert.ok(preBroadcastLog, 'pre-broadcast defer log must be emitted for the racing batch');
 
         // Release the fast batch; the slow batch then proceeds.
@@ -390,7 +396,7 @@ async function testEarlyReturnDoesNotClearAnotherBatchSlot() {
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 150));
+            await new Promise((r) => setTimeout(r, 80));
         }
         return {
             op: {
@@ -492,7 +498,7 @@ async function testPostWaitStalenessTriggersReplan() {
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 150));
+            await new Promise((r) => setTimeout(r, 80));
         }
         return {
             op: {
@@ -537,7 +543,10 @@ async function testPostWaitStalenessTriggersReplan() {
         assert.strictEqual(bot._cowBroadcastInFlight, true, 'the fast batch must hold the broadcast slot');
 
         // Let slow finish building and reach the pre-broadcast single-flight wait.
-        await new Promise((r) => setTimeout(r, 250));
+        const preWaitDeadline = Date.now() + 2000;
+        while (!logEntries.some((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight')) && Date.now() < preWaitDeadline) {
+            await new Promise((r) => setTimeout(r, 5));
+        }
         assert.strictEqual(broadcastCalls, 1, 'the slow batch must defer at pre-broadcast while the fast batch is in flight');
 
         // Release fast: it commits (advancing the master version) and clears the slot.

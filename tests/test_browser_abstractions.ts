@@ -958,9 +958,12 @@ async function testPureScrypt() {
 
     // Cross-check against native scrypt, including a key length that is not a
     // multiple of the SHA-256 output size (exercises multi-block PBKDF2).
+    // Large-N correctness is already pinned by the RFC 7914 KAT above
+    // (N=16384), so these cross-checks run at the cheaper N=1024: pure-JS
+    // scrypt at N=16384 alone costs ~0.4 s and the duplicate adds no signal.
     const nativeCrypto = require('crypto');
     const crossChecks = [
-        { password: 'password', salt: 'salt', keyLength: 32, options: { N: 16384, r: 8, p: 1 } },
+        { password: 'password', salt: 'salt', keyLength: 32, options: { N: 1024, r: 8, p: 1 } },
         { password: 'password', salt: 'salt', keyLength: 100, options: { N: 1024, r: 8, p: 2 } },
     ];
     for (const check of crossChecks) {

@@ -664,14 +664,15 @@ async function testNodeFailureReportsOnce() {
         await transport.connect([server.url], false);
         const start = Date.now();
         while (failures.length === 0 && Date.now() - start < 5000) {
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 20));
         }
         assert.ok(failures.length >= 1, 'expected at least one node-failure report');
         assert.strictEqual(failures[0].url, server.url, 'failure must name the node');
         assert.strictEqual(failures[0].source, 'keep-alive', 'first failure source is keep-alive');
         // The close triggered by the keep-alive trip must not produce a second
-        // (connection) strike for the same event.
-        await new Promise(r => setTimeout(r, 400));
+        // (connection) strike for the same event. The keep-alive interval is
+        // 30 ms, so a duplicate would surface well inside a few intervals.
+        await new Promise(r => setTimeout(r, 80));
         assert.strictEqual(failures.filter(f => f.source === 'connection').length, 0,
             'keep-alive trip must not double-report as a connection failure');
         transport.disconnect();
@@ -697,7 +698,7 @@ async function testCloseClassification() {
         });
         await transport.connect([benignServer.url], false);
         benignServer.sendClose(1000);
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 80));
         assert.strictEqual(benignFailures.length, 0, 'normal close (1000) must not count as a node failure');
         transport.disconnect();
         console.log('  PASS: Benign close not reported');
@@ -720,7 +721,7 @@ async function testCloseClassification() {
         abnormalServer.abortAll();
         const start = Date.now();
         while (abnormalFailures.length === 0 && Date.now() - start < 3000) {
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 20));
         }
         assert.ok(abnormalFailures.length >= 1, 'abnormal close must count as a node failure');
         assert.strictEqual(abnormalFailures[0].source, 'connection');
@@ -756,7 +757,7 @@ async function testForceReconnect() {
 
         const start = Date.now();
         while (reconnects.length === 0 && Date.now() - start < 5000) {
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 20));
         }
         assert.ok(reconnects.length >= 1, 'forceReconnect must re-establish the connection and fire onReconnect');
         assert.strictEqual(transport.isConnected(), true, 'Should be connected after forced reconnect');

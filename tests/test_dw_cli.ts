@@ -1,6 +1,6 @@
 const assert = require('assert');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const { getErrorMessage } = require('../modules/utils/errors');
 
 console.log('Running dw cli tests');
@@ -49,25 +49,40 @@ function testRunIsSharedPipeline() {
     assert.strictEqual(typeof chartCommand.run, 'function', 'scripts/chart_command exports the shared run() pipeline');
 }
 
+// The three CLI invocations below are offline and independent (help, missing
+// target, unknown flag), so run them concurrently instead of paying node
+// startup + module load three times in series.
 function script(argv) {
-    return spawnSync(process.execPath, [DW_SCRIPT, ...argv], { encoding: 'utf8', timeout: 30000 });
+    return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+        const child = spawn(process.execPath, [DW_SCRIPT, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('dw.js timed out')); }, 30000);
+        child.stdout.on('data', (d) => { stdout += String(d); });
+        child.stderr.on('data', (d) => { stderr += String(d); });
+        child.on('error', (err) => { clearTimeout(timer); reject(err); });
+        child.on('close', (status) => {
+            clearTimeout(timer);
+            resolve({ status, stdout, stderr });
+        });
+    });
 }
 
-function testHelpPrintsDwUsageOffline() {
-    const res = script(['--help']);
+async function testHelpPrintsDwUsageOffline() {
+    const res = await script(['--help']);
     assert.strictEqual(res.status, 0, `--help should exit 0, got ${res.status}: ${res.stderr}`);
     assert.match(res.stdout, /Usage: dexbot dw /);
     assert.match(res.stdout, /--month N/);
 }
 
-function testNoTargetPrintsUsageAndFails() {
-    const res = script([]);
+async function testNoTargetPrintsUsageAndFails() {
+    const res = await script([]);
     assert.strictEqual(res.status, 1, 'missing target should exit 1');
     assert.match(res.stdout, /Usage: dexbot dw /);
 }
 
-function testUnknownFlagFailsWithDwUsage() {
-    const res = script(['--bogus']);
+async function testUnknownFlagFailsWithDwUsage() {
+    const res = await script(['--bogus']);
     assert.strictEqual(res.status, 1, 'unknown flag should exit 1');
     assert.match(res.stderr, /\[dw\] Error: Unknown flag "--bogus"\. Usage: dexbot dw /);
 }
@@ -76,9 +91,11 @@ async function run() {
     testParseArgsLabelsDw();
     testMonthFlagCanonicalWithAlias();
     testRunIsSharedPipeline();
-    testHelpPrintsDwUsageOffline();
-    testNoTargetPrintsUsageAndFails();
-    testUnknownFlagFailsWithDwUsage();
+    await Promise.all([
+        testHelpPrintsDwUsageOffline(),
+        testNoTargetPrintsUsageAndFails(),
+        testUnknownFlagFailsWithDwUsage(),
+    ]);
 }
 
 run()
