@@ -1,4 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 console.log('Running bot settings tests');
 
@@ -8,6 +11,7 @@ const {
     selectActiveBotEntries,
     selectBotEntry,
     validateBotEntry,
+    loadSettingsFile,
 } = require('../modules/bot_settings');
 
 const raw = {
@@ -47,7 +51,7 @@ const missingCollateralAsset = {
     name: 'C',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -66,7 +70,7 @@ const missingLending = {
     name: 'D',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
     },
@@ -82,7 +86,7 @@ const invalidCreditOfferRatio = {
     name: 'E',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -108,7 +112,7 @@ const validCreditOffer = {
     name: 'F',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -146,7 +150,7 @@ const invalidCreditOfferBorrowCap = {
     name: 'G',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -171,7 +175,7 @@ const invalidCreditOfferBorrowPercent = {
     name: 'H',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -196,7 +200,7 @@ const invalidCreditOfferPerDay = {
     name: 'I',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -221,7 +225,7 @@ const invalidMpaBorrowCap = {
     name: 'J',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -246,7 +250,7 @@ const invalidMpaCrRange = {
     name: 'J',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -271,7 +275,7 @@ const validMpa = {
     name: 'K',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         maxCollateralAmount: 10000,
@@ -302,7 +306,7 @@ const invalidMpaMinCollateralIncreaseThreshold = {
     name: 'K2',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -327,7 +331,7 @@ const invalidCreditMinCollateralIncreaseThreshold = {
     name: 'K3',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -352,7 +356,7 @@ const validPercentMinCollateralIncreaseThreshold = {
     name: 'K4',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -378,7 +382,7 @@ const invalidPercentMinCollateralIncreaseThreshold = {
     name: 'K5',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -403,7 +407,7 @@ const invalidNumericStringMinCollateralIncreaseThreshold = {
     name: 'K6',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -428,7 +432,7 @@ const invalidNullMinCollateralIncreaseThreshold = {
     name: 'K7',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -453,7 +457,7 @@ const invalidType = {
     name: 'L',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -473,7 +477,7 @@ const negativeOutputWeight = {
     name: 'M',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -493,7 +497,7 @@ const removedRatio = {
     name: 'N2',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -514,7 +518,7 @@ const removedRatioWithOutputWeight = {
     name: 'N3',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -534,7 +538,7 @@ const globalMaxCollateralPercent = {
     name: 'N',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         maxCollateralAmount: '80%',
@@ -556,7 +560,7 @@ const validMpaDebtOnly = {
     name: 'O',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -576,7 +580,7 @@ const invalidMpaDebtOnly = {
     name: 'O2',
     assetA: 'BTS',
     assetB: 'USD',
-    activeOrders: { sell: 20, buy: 20 },
+    coreOrders: { sell: 20, buy: 20 },
     botFunds: { sell: '100%', buy: '100%' },
     debtPolicy: {
         lending: [
@@ -619,22 +623,56 @@ assert(
     'validateBotEntry should require assetA when creditOnly is not set'
 );
 
-// reserveOrders: legacy numeric form is accepted (migrated at read time) but
+// edgeOrders: legacy numeric form is accepted (migrated at read time) but
 // still must be a non-negative integer.
-const baseBot = { name: 'Res', assetA: 'BTS', assetB: 'USD', activeOrders: { sell: 5, buy: 5 }, botFunds: { sell: '100%', buy: '100%' } };
+const baseBot = { name: 'Res', assetA: 'BTS', assetB: 'USD', coreOrders: { sell: 5, buy: 5 }, botFunds: { sell: '100%', buy: '100%' } };
 assert.strictEqual(
-    validateBotEntry({ ...baseBot, reserveOrders: 2 }, 0, 'test'),
+    validateBotEntry({ ...baseBot, edgeOrders: 2 }, 0, 'test'),
     null,
-    'validateBotEntry should accept the legacy numeric reserveOrders form'
+    'validateBotEntry should accept the legacy numeric edgeOrders form'
 );
 assert(
-    validateBotEntry({ ...baseBot, reserveOrders: 2.5 }, 0, 'test')?.includes('reserveOrders'),
-    'validateBotEntry should reject a non-integer legacy numeric reserveOrders'
+    validateBotEntry({ ...baseBot, edgeOrders: 2.5 }, 0, 'test')?.includes('edgeOrders'),
+    'validateBotEntry should reject a non-integer legacy numeric edgeOrders'
 );
 assert(
-    validateBotEntry({ ...baseBot, reserveOrders: -1 }, 0, 'test')?.includes('reserveOrders'),
-    'validateBotEntry should reject a negative legacy numeric reserveOrders'
+    validateBotEntry({ ...baseBot, edgeOrders: -1 }, 0, 'test')?.includes('edgeOrders'),
+    'validateBotEntry should reject a negative legacy numeric edgeOrders'
 );
+
+// Legacy `activeOrders`/`reserveOrders` keys are aliased and validated under
+// the canonical names, so a pre-rename bots.json is never rejected.
+assert.strictEqual(
+    validateBotEntry({ name: 'Legacy', assetA: 'BTS', assetB: 'USD', activeOrders: { sell: 5, buy: 5 }, reserveOrders: 2, botFunds: { sell: '100%', buy: '100%' } }, 0, 'test'),
+    null,
+    'validateBotEntry should accept legacy activeOrders/reserveOrders keys'
+);
+assert(
+    validateBotEntry({ name: 'LegacyBad', assetA: 'BTS', assetB: 'USD', activeOrders: { sell: 5, buy: 5 }, reserveOrders: -1, botFunds: { sell: '100%', buy: '100%' } }, 0, 'test')?.includes('edgeOrders'),
+    'validateBotEntry should reject a negative legacy reserveOrders value'
+);
+
+// loadSettingsFile upgrades a pre-rename bots.json on disk: legacy keys are
+// rewritten to the canonical names so user settings migrate transparently.
+{
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-bots-migrate-'));
+    const botsPath = path.join(tmpDir, 'bots.json');
+    fs.writeFileSync(botsPath, JSON.stringify({
+        bots: [{
+            name: 'Old', assetA: 'BTS', assetB: 'USD',
+            activeOrders: { sell: 5, buy: 5 },
+            reserveOrders: 2,
+            botFunds: { sell: '100%', buy: '100%' },
+        }],
+    }, null, 2));
+    loadSettingsFile(botsPath, { silent: true });
+    const onDisk = JSON.parse(fs.readFileSync(botsPath, 'utf8'));
+    assert.deepStrictEqual(onDisk.bots[0].coreOrders, { sell: 5, buy: 5 }, 'loadSettingsFile must persist coreOrders');
+    assert.strictEqual(onDisk.bots[0].edgeOrders, 2, 'loadSettingsFile must persist edgeOrders');
+    assert.ok(!('activeOrders' in onDisk.bots[0]), 'activeOrders must be removed from disk');
+    assert.ok(!('reserveOrders' in onDisk.bots[0]), 'reserveOrders must be removed from disk');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+}
 
 console.log('bot settings tests passed');
 process.exit(0);

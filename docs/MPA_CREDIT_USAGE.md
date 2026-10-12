@@ -139,7 +139,7 @@ Set `creditOnly: true` on a bot entry to run only the credit runtime — no grid
   "preferredAccount": "my-account", "debtPolicy": { "lending": [...] } }
 ```
 
-No trading fields (`assetA`, `assetB`, `startPrice`, `incrementPercent`, `activeOrders`, `reserveOrders`, `botFunds`) are needed.
+No trading fields (`assetA`, `assetB`, `startPrice`, `incrementPercent`, `coreOrders`, `edgeOrders`, `botFunds`) are needed.
 
 ```bash
 dexbot start credit          # Background daemon — runs only the credit worker

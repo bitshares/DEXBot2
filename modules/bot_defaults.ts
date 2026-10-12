@@ -42,7 +42,7 @@ export const DRAFT_EXCLUDED_KEYS = ['assetA', 'assetB', 'creditOnly', 'min_BTS_v
  * fails when a new DEFAULT_CONFIG key is added without classifying it here.
  */
 export const DRAFT_SEED_ORDER = [
-    'weightDistribution', 'botFunds', 'activeOrders', 'reserveOrders',
+    'weightDistribution', 'botFunds', 'coreOrders', 'edgeOrders',
     'active', 'dryRun', 'minPrice', 'maxPrice', 'incrementPercent',
     'targetSpreadPercent', 'startPrice', 'gridPrice',
 ];
@@ -79,10 +79,36 @@ function clone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
 
+/**
+ * Legacy bot-config key aliases: `activeOrders` → `coreOrders` and
+ * `reserveOrders` → `edgeOrders`. Applied at every read/seed funnel so a
+ * pre-rename or hand-edited `bots.json` keeps working: the new key wins when
+ * both are present, the legacy key is dropped, and a later save rewrites the
+ * entry in canonical form. Mutates and returns the passed object.
+ *
+ * Must run BEFORE fingerprinting and the live-config allowlist so both see the
+ * canonical key (the maintained-key list and the raw-key fingerprint would
+ * otherwise miss a legacy entry).
+ * @param {Object} data - Bot entry or runtime config.
+ * @returns {Object} The same object, aliased in place.
+ */
+export function migrateLegacyOrderKeys<T extends UnknownRecord>(data: T): T {
+    const record = data as UnknownRecord;
+    if (record.coreOrders === undefined && record.activeOrders !== undefined) {
+        record.coreOrders = record.activeOrders;
+    }
+    if (record.edgeOrders === undefined && record.reserveOrders !== undefined) {
+        record.edgeOrders = record.reserveOrders;
+    }
+    delete record.activeOrders;
+    delete record.reserveOrders;
+    return data;
+}
+
 /** Numbers migrate to `{ buy, sell: 0 }` (floored, clamped at 0); anything
  *  that is not a plain object becomes the default; plain objects — including
  *  partial ones — are kept verbatim. */
-function seedReserveOrders(value: unknown, def: unknown): unknown {
+function seedEdgeOrders(value: unknown, def: unknown): unknown {
     if (typeof value === 'number') {
         return { buy: Math.max(0, Math.floor(value)), sell: 0 };
     }
@@ -96,10 +122,10 @@ function seedReserveOrders(value: unknown, def: unknown): unknown {
  * Editor draft seed (formerly the `normalizeBotDraft` if-chain in
  * modules/account_bots.ts). Deep-clones the input, then applies defaults:
  *
- *  * count objects (`weightDistribution`/`botFunds`/`activeOrders`): falsy
+ *  * count objects (`weightDistribution`/`botFunds`/`coreOrders`): falsy
  *    input → default clone; truthy input (including partials) kept verbatim —
  *    never deep-filled;
- *  * `reserveOrders`: number migration / invalid → default (see seedReserveOrders);
+ *  * `edgeOrders`: number migration / invalid → default (see seedEdgeOrders);
  *  * `startPrice`: undefined → `default || 'pool'` (falsy defaults fall back);
  *  * `gridPrice`: undefined → `DEFAULT_CONFIG.gridPrice` ("ama3" today),
  *    falling back to null only when the default itself is null (Phase 2:
@@ -108,11 +134,11 @@ function seedReserveOrders(value: unknown, def: unknown): unknown {
  */
 export function seedBotDraft(base?: UnknownRecord | null, options: SeedOptions = {}): UnknownRecord {
     const defaults: UnknownRecord = options.defaults ?? DEFAULT_CONFIG;
-    const data: UnknownRecord = JSON.parse(JSON.stringify(base ?? {}));
+    const data: UnknownRecord = migrateLegacyOrderKeys(JSON.parse(JSON.stringify(base ?? {})));
     for (const key of DRAFT_SEED_ORDER) {
         const def = defaults[key];
-        if (key === 'reserveOrders') {
-            data.reserveOrders = seedReserveOrders(data.reserveOrders, def);
+        if (key === 'edgeOrders') {
+            data.edgeOrders = seedEdgeOrders(data.edgeOrders, def);
         } else if (key === 'startPrice') {
             if (data.startPrice === undefined) data.startPrice = def || 'pool';
         } else if (key === 'gridPrice') {
@@ -146,7 +172,8 @@ export function seedBotDraft(base?: UnknownRecord | null, options: SeedOptions =
  */
 export function seedBotEntry<T extends UnknownRecord>(entry: T, options: SeedOptions = {}): T {
     const defaults: UnknownRecord = options.defaults ?? DEFAULT_CONFIG;
-    return { active: entry.active === undefined ? defaults.active : entry.active, ...entry } as T;
+    const data = migrateLegacyOrderKeys({ ...entry });
+    return { active: data.active === undefined ? defaults.active : data.active, ...data } as T;
 }
 
 /**

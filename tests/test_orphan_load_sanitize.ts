@@ -30,7 +30,7 @@ async function testOrphanLoadSanitize() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 100, sell: 100 },
-        activeOrders: { buy: 1, sell: 1 },
+        coreOrders: { buy: 1, sell: 1 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -67,7 +67,7 @@ async function testOrphanLoadSanitize() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 100, sell: 100 },
-        activeOrders: { buy: 1, sell: 1 },
+        coreOrders: { buy: 1, sell: 1 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });

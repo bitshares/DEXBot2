@@ -591,7 +591,7 @@ class Logger {
         if (!this.config.display?.statusSummary?.enabled && !forceOutput) return;
 
         const market = manager.marketName || manager.config?.market || 'unknown';
-        const activeOrders = manager.getOrdersByTypeAndState?.(null, ORDER_STATES.ACTIVE) || [];
+        const liveOrders = manager.getOrdersByTypeAndState?.(null, ORDER_STATES.ACTIVE) || [];
         const partialOrders = manager.getOrdersByTypeAndState?.(null, ORDER_STATES.PARTIAL) || [];
         const virtualOrders = manager.getOrdersByTypeAndState?.(null, ORDER_STATES.VIRTUAL) || [];
 
@@ -625,7 +625,7 @@ class Logger {
             `virtual.grid: ${buy}Buy ${Format.formatAmountByPrecision(virtualBuy, buyPrecision)}${reset} ${buyName} | ${sell}Sell ${Format.formatAmountByPrecision(virtualSell, sellPrecision)}${reset} ${sellName}`,
             `committed.grid: ${buy}Buy ${Format.formatAmountByPrecision(committedGridBuy, buyPrecision)}${reset} ${buyName} | ${sell}Sell ${Format.formatAmountByPrecision(committedGridSell, sellPrecision)}${reset} ${sellName}`,
             `committed.chain: ${buy}Buy ${Format.formatAmountByPrecision(committedChainBuy, buyPrecision)}${reset} ${buyName} | ${sell}Sell ${Format.formatAmountByPrecision(committedChainSell, sellPrecision)}${reset} ${sellName}`,
-            `Orders: Virtual ${virtualOrders.length} | Active ${activeOrders.length} | Partial ${partialOrders.length}`,
+            `Orders: Virtual ${virtualOrders.length} | Active ${liveOrders.length} | Partial ${partialOrders.length}`,
             `Spreads: ${manager.initialSpreadCount > 0 ? `${manager.currentSpreadCount}/${manager.initialSpreadCount} (gap)` : 'n/a (gap)'}`,
         ];
 

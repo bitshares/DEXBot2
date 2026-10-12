@@ -282,7 +282,7 @@ The bot-specific state Claw already owns and passes through the infrastructure l
 type BotState = {
   botId: string;
   name: string;
-  activeOrders?: number;
+  coreOrders?: number;
   incrementPercent?: number;
   targetSpreadPercent?: number;
   weightDistribution?: { sell: number; buy: number };

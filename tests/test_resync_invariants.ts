@@ -113,7 +113,7 @@ async function runTests() {
             market: 'TEST/BTS',
             assetA: 'TEST',
             assetB: 'BTS',
-            activeOrders: { buy: 5, sell: 5 }
+            coreOrders: { buy: 5, sell: 5 }
         });
         await mgr.setAccountTotals({
             buy: 10000,
@@ -273,7 +273,7 @@ async function runTests() {
             market: 'TEST/BTS',
             assetA: 'TEST',
             assetB: 'BTS',
-            activeOrders: { buy: 1, sell: 0 }
+            coreOrders: { buy: 1, sell: 0 }
         });
         manager.assets = {
             assetA: { id: '1.3.1', symbol: 'TEST', precision: 5 },

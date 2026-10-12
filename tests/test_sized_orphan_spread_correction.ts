@@ -22,7 +22,7 @@ async function testSizedOrphanSpreadCorrection() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 0, sell: 100 },
-        activeOrders: { buy: 1, sell: 2 },
+        coreOrders: { buy: 1, sell: 2 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });

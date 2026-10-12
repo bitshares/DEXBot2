@@ -60,13 +60,13 @@
  *   - getOrderSize(order) - Extract order size with fallback
  *
  * SECTION 10: STRATEGY CALCULATIONS (7 functions)
- *   - resolveReserveCount(config, side) - Clamped per-side reserve count (>=0 int, 0 disables)
- *   - resolveReserveOrders(config) - Total reserves buy+sell (fee/count totals)
- *   - resolveLiveReserveEdgeAnchorPrice(manager, side) - Live-grid edge anchor (genesis ladder extreme; null when no usable ladder)
- *   - resolveReserveEdgeAnchorPrice(config, side) - Config-bound anchor fallback (buy→minPrice, sell→maxPrice; null when unresolvable)
- *   - compareReserveEdge(a, b, edge, anchorPrice) - Shared anchored edge comparator (single ordering source)
- *   - reserveEdgeIdSet(allSlots, config, orderType, anchorPrice?, excludeIds?) - Edge reserve id set (config count; shares the picker ordering; excludeIds carries the window exclusion)
- *   - selectReserveEdgeSlots(sortedAsc, count, excludeIds, edge, anchorPrice?) - Shared position picker (both edges anchor toward their bound)
+ *   - resolveEdgeCount(config, side) - Clamped per-side edge count (>=0 int, 0 disables)
+ *   - resolveEdgeOrders(config) - Total edge orders buy+sell (fee/count totals)
+ *   - resolveLiveEdgeAnchorPrice(manager, side) - Live-grid edge anchor (genesis ladder extreme; null when no usable ladder)
+ *   - resolveEdgeAnchorPrice(config, side) - Config-bound anchor fallback (buy→minPrice, sell→maxPrice; null when unresolvable)
+ *   - compareEdge(a, b, edge, anchorPrice) - Shared anchored edge comparator (single ordering source)
+ *   - edgeOrderIdSet(allSlots, config, orderType, anchorPrice?, excludeIds?) - Edge order id set (config count; shares the picker ordering; excludeIds carries the window exclusion)
+ *   - selectEdgeSlots(sortedAsc, count, excludeIds, edge, anchorPrice?) - Shared position picker (both edges anchor toward their bound)
  *
  * ===============================================================================
  */
@@ -2104,9 +2104,9 @@ interface DeltaAction {
     [key: string]: unknown;
 }
 
-interface ReserveConfig {
-    reserveOrders?: number | { buy?: number; sell?: number; [key: string]: unknown };
-    activeOrders?: { buy?: number; sell?: number; [key: string]: unknown };
+interface OrderConfigView {
+    edgeOrders?: number | { buy?: number; sell?: number; [key: string]: unknown };
+    coreOrders?: { buy?: number; sell?: number; [key: string]: unknown };
     startPrice?: number | string;
     minPrice?: number | string | null;
     maxPrice?: number | string | null;
@@ -2472,7 +2472,7 @@ function isShiftEligibleFill(fill: { isPartial?: boolean; isDelayedRotationTrigg
     return fill?.isPartial !== true || fill?.isDelayedRotationTrigger === true;
 }
 
-function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?: string; [key: string]: unknown }> | null | undefined, currentBoundaryIdx: number | null | undefined, allSlots: ManagedOrder[], config: { startPrice?: number | string; genesisStartPrice?: number | string; activeOrders?: { buy?: number; sell?: number; [key: string]: unknown }; [key: string]: unknown } | null | undefined, gapSlots: number, crossChunkBudget?: number | null, pendingCrawls?: Array<{ slotId?: string; side?: string; [key: string]: unknown }> | null, edgeAnchors?: { buy?: number | null; sell?: number | null } | null): { boundaryIdx: number | null; remainingBudget: number } {
+function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?: string; [key: string]: unknown }> | null | undefined, currentBoundaryIdx: number | null | undefined, allSlots: ManagedOrder[], config: { startPrice?: number | string; genesisStartPrice?: number | string; coreOrders?: { buy?: number; sell?: number; [key: string]: unknown }; [key: string]: unknown } | null | undefined, gapSlots: number, crossChunkBudget?: number | null, pendingCrawls?: Array<{ slotId?: string; side?: string; [key: string]: unknown }> | null, edgeAnchors?: { buy?: number | null; sell?: number | null } | null): { boundaryIdx: number | null; remainingBudget: number } {
     let newBoundaryIdx: number | null = currentBoundaryIdx ?? null;
 
     // Recovery when the committed boundary is unknown (GRID-LOAD rejected a
@@ -2546,8 +2546,8 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
         }
         if (referencePrice === null) {
             const fallbackCap = Math.max(
-                Math.floor((config?.activeOrders?.sell ?? 1) / 2),
-                Math.floor((config?.activeOrders?.buy ?? 1) / 2),
+                Math.floor((config?.coreOrders?.sell ?? 1) / 2),
+                Math.floor((config?.coreOrders?.buy ?? 1) / 2),
                 1
             );
             const effectiveBudget = crossChunkBudget ?? fallbackCap;
@@ -2559,8 +2559,8 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
             // exists (calculateIdealBoundary returns -1). Stay null rather
             // than letting the clamp below fabricate a slot-0 boundary.
             const fallbackCap = Math.max(
-                Math.floor((config?.activeOrders?.sell ?? 1) / 2),
-                Math.floor((config?.activeOrders?.buy ?? 1) / 2),
+                Math.floor((config?.coreOrders?.sell ?? 1) / 2),
+                Math.floor((config?.coreOrders?.buy ?? 1) / 2),
                 1
             );
             return { boundaryIdx: null, remainingBudget: crossChunkBudget ?? fallbackCap };
@@ -2568,17 +2568,17 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
         recovered = true;
     }
 
-    // Apply shift from fills with rate-limiting (reserve fills excluded: static insurance).
+    // Apply shift from fills with rate-limiting (edge fills excluded: static insurance).
     let netShift = 0;
-    // Reserve ladder: fills from edge-pinned reserve slots never crawl the
+    // Edge ladder: fills from edge-pinned edge slots never crawl the
     // boundary — they are static fat-finger insurance, not market movement.
-    // `edgeAnchors` (resolveLiveReserveEdgeAnchorPrice) is the same anchor the
+    // `edgeAnchors` (resolveLiveEdgeAnchorPrice) is the same anchor the
     // placement sites use; without it the classification falls back to the
     // config-bound anchor, which can disagree with the slots actually placed.
     // The window exclusion is the same one every placement picker applies: a
     // window that reaches the grid edge (e.g. a keep-low window sitting on
     // the floor) must not let the edge pick land on window members — otherwise
-    // a genuine window fill is treated as a static reserve fill and never
+    // a genuine window fill is treated as a static edge fill and never
     // crawls, and the hole is refilled same-side. Unknown geometry
     // (null boundary) fails open to the previous classification.
     const windowBoundaryIdx = (currentBoundaryIdx === null || currentBoundaryIdx === undefined)
@@ -2586,14 +2586,14 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
         : currentBoundaryIdx;
     const windowBuyIds = windowIdSetFromSlots(allSlots, config, ORDER_TYPES.BUY, windowBoundaryIdx, gapSlots);
     const windowSellIds = windowIdSetFromSlots(allSlots, config, ORDER_TYPES.SELL, windowBoundaryIdx, gapSlots);
-    const reserveBuyIds = reserveEdgeIdSet(allSlots, config, ORDER_TYPES.BUY, edgeAnchors?.buy ?? null, windowBuyIds);
-    const reserveSellIds = reserveEdgeIdSet(allSlots, config, ORDER_TYPES.SELL, edgeAnchors?.sell ?? null, windowSellIds);
+    const edgeBuyIds = edgeOrderIdSet(allSlots, config, ORDER_TYPES.BUY, edgeAnchors?.buy ?? null, windowBuyIds);
+    const edgeSellIds = edgeOrderIdSet(allSlots, config, ORDER_TYPES.SELL, edgeAnchors?.sell ?? null, windowSellIds);
     // Pending crawls: fills recorded by earlier batches whose derivation
     // never committed (refused broadcast, P4 abort, or pre-restart loss —
     // the Sep-10 case: 4 fills consumed under a null boundary, crawl lost,
     // restart refilled the holes same-side). Entries for slots in the
     // CURRENT batch are excluded — those fills crawl below as usual;
-    // anything older is still owed and shifts here. Reserve-slot entries
+    // anything older is still owed and shifts here. Edge-slot entries
     // never crawl (static insurance), same as live fills.
     const currentSlotIds = new Set(
         (fills ?? []).map((f) => f?.id).filter((id) => typeof id === 'string' && id.length > 0)
@@ -2602,12 +2602,12 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
         && typeof e.slotId === 'string' && e.slotId.length > 0
         && !currentSlotIds.has(e.slotId)
         && (e.side === ORDER_TYPES.BUY || e.side === ORDER_TYPES.SELL)
-        && !(e.side === ORDER_TYPES.BUY && reserveBuyIds && reserveBuyIds.has(e.slotId))
-        && !(e.side === ORDER_TYPES.SELL && reserveSellIds && reserveSellIds.has(e.slotId)));
+        && !(e.side === ORDER_TYPES.BUY && edgeBuyIds && edgeBuyIds.has(e.slotId))
+        && !(e.side === ORDER_TYPES.SELL && edgeSellIds && edgeSellIds.has(e.slotId)));
     for (const fill of fills ?? []) {
         if (!isShiftEligibleFill(fill)) continue;
-        if (fill && fill.type === ORDER_TYPES.BUY && reserveBuyIds && fill.id != null && reserveBuyIds.has(fill.id)) continue;
-        if (fill && fill.type === ORDER_TYPES.SELL && reserveSellIds && fill.id != null && reserveSellIds.has(fill.id)) continue;
+        if (fill && fill.type === ORDER_TYPES.BUY && edgeBuyIds && fill.id != null && edgeBuyIds.has(fill.id)) continue;
+        if (fill && fill.type === ORDER_TYPES.SELL && edgeSellIds && fill.id != null && edgeSellIds.has(fill.id)) continue;
         if (fill.type === ORDER_TYPES.SELL) netShift++;
         else if (fill.type === ORDER_TYPES.BUY) netShift--;
     }
@@ -2628,8 +2628,8 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
     // never exceeds half the active window.
     // Falls back to a per-call cap when no budget is set.
     const fallbackCap = Math.max(
-        Math.floor((config?.activeOrders?.sell ?? 1) / 2),
-        Math.floor((config?.activeOrders?.buy ?? 1) / 2),
+        Math.floor((config?.coreOrders?.sell ?? 1) / 2),
+        Math.floor((config?.coreOrders?.buy ?? 1) / 2),
         1
     );
     const effectiveBudget = crossChunkBudget ?? fallbackCap;
@@ -2713,22 +2713,22 @@ export function consumePendingFillCrawls(manager: OrderManagerLike): { applied: 
     const slots: SlotLike[] = Array.from(manager?.orders instanceof Map ? manager.orders.values() : []);
     // Classify with the SAME live anchors the strategy derivation uses, or the
     // two disagree: the config-bound fallback is null for mode-string/relative
-    // bounds, so a restart would rank a stale below-rail slot as a reserve and
+    // bounds, so a restart would rank a stale below-rail slot as an edge order and
     // silently drop a crawl the live run recorded as ordinary market movement.
     // The window exclusion must match placement too (same source as the count
-    // fix) — a window over the reserve edge must not be read as a reserve, or
+    // fix) — a window over the edge must not be read as an edge order, or
     // its owed crawl is dropped instead of applied.
     const windowBuyIds = liveWindowIdSet(manager, ORDER_TYPES.BUY);
     const windowSellIds = liveWindowIdSet(manager, ORDER_TYPES.SELL);
-    const reserveBuyIds = reserveEdgeIdSet(slots, config, ORDER_TYPES.BUY, resolveLiveReserveEdgeAnchorPrice(manager, 'buy'), windowBuyIds);
-    const reserveSellIds = reserveEdgeIdSet(slots, config, ORDER_TYPES.SELL, resolveLiveReserveEdgeAnchorPrice(manager, 'sell'), windowSellIds);
+    const edgeBuyIds = edgeOrderIdSet(slots, config, ORDER_TYPES.BUY, resolveLiveEdgeAnchorPrice(manager, 'buy'), windowBuyIds);
+    const edgeSellIds = edgeOrderIdSet(slots, config, ORDER_TYPES.SELL, resolveLiveEdgeAnchorPrice(manager, 'sell'), windowSellIds);
     let netShift = 0;
     let count = 0;
     for (const e of pending) {
         if (!e || typeof e.slotId !== 'string' || e.slotId.length === 0) continue;
         if (e.side !== ORDER_TYPES.BUY && e.side !== ORDER_TYPES.SELL) continue;
-        if (e.side === ORDER_TYPES.BUY && reserveBuyIds && reserveBuyIds.has(e.slotId)) continue;
-        if (e.side === ORDER_TYPES.SELL && reserveSellIds && reserveSellIds.has(e.slotId)) continue;
+        if (e.side === ORDER_TYPES.BUY && edgeBuyIds && edgeBuyIds.has(e.slotId)) continue;
+        if (e.side === ORDER_TYPES.SELL && edgeSellIds && edgeSellIds.has(e.slotId)) continue;
         netShift += e.side === ORDER_TYPES.SELL ? 1 : -1;
         count++;
     }
@@ -2736,11 +2736,11 @@ export function consumePendingFillCrawls(manager: OrderManagerLike): { applied: 
         clear();
         return { applied: false, reason: 'nothing-owed' };
     }
-    const activeOrdersCfg = config?.activeOrders;
-    const activeOrdersObj = (activeOrdersCfg && typeof activeOrdersCfg === 'object') ? activeOrdersCfg : {};
+    const coreOrdersCfg = config?.coreOrders;
+    const coreOrdersObj = (coreOrdersCfg && typeof coreOrdersCfg === 'object') ? coreOrdersCfg : {};
     const fallbackCap = Math.max(
-        Math.floor(Number(activeOrdersObj.sell ?? 1) / 2),
-        Math.floor(Number(activeOrdersObj.buy ?? 1) / 2),
+        Math.floor(Number(coreOrdersObj.sell ?? 1) / 2),
+        Math.floor(Number(coreOrdersObj.buy ?? 1) / 2),
         1
     );
     if (Math.abs(netShift) > fallbackCap) netShift = Math.sign(netShift) * fallbackCap;
@@ -2778,87 +2778,87 @@ export function consumePendingFillCrawls(manager: OrderManagerLike): { applied: 
 }
 
 /**
- * Per-side reserve count (edge-pinned fat-finger insurance orders).
- * Buy reserves pin at the grid floor, sell reserves at the grid ceiling.
+ * Per-side edge count (edge-pinned fat-finger insurance orders).
+ * Buy edges pin at the grid floor, sell edges at the grid ceiling.
  * Non-finite/non-integer/negative values disable (0).
  *
- * The legacy numeric form (`reserveOrders: n`) is migrated here at read time
+ * The legacy numeric form (`edgeOrders: n`) is migrated here at read time
  * to `{ buy: n, sell: 0 }`: the editor seeder rewrites the persisted JSON, but
- * a hand-edited bots.json that bypassed the editor must not have its reserve
+ * a hand-edited bots.json that bypassed the editor must not have its edge
  * count silently read as 0.
  *
  * @param {Object} config - Bot configuration
  * @param {string} side - 'buy' or 'sell'
- * @returns {number} Reserve count for the side (>= 0 integer)
+ * @returns {number} Edge count for the side (>= 0 integer)
  */
-function resolveReserveCount(config: ReserveConfig | null | undefined, side: string) {
+function resolveEdgeCount(config: OrderConfigView | null | undefined, side: string) {
     const key = side === 'sell' ? 'sell' : 'buy';
-    const rawReserve = config?.reserveOrders;
-    if (typeof rawReserve === 'number') {
+    const rawEdge = config?.edgeOrders;
+    if (typeof rawEdge === 'number') {
         if (side === 'sell') return 0;
-        const n = Math.floor(rawReserve);
+        const n = Math.floor(rawEdge);
         return Number.isFinite(n) && n >= 0 ? n : 0;
     }
-    const raw = Number(rawReserve?.[key] ?? 0);
+    const raw = Number(rawEdge?.[key] ?? 0);
     if (!Number.isInteger(raw) || raw < 0) return 0;
     return raw;
 }
 
 /**
- * Total reserve count across both sides (fee/count totals).
+ * Total edge count across both sides (fee/count totals).
  *
  * @param {Object} config - Bot configuration
- * @returns {number} Total reserves (buy + sell)
+ * @returns {number} Total edges (buy + sell)
  */
-function resolveReserveOrders(config: ReserveConfig | null | undefined) {
-    return resolveReserveCount(config, 'buy') + resolveReserveCount(config, 'sell');
+function resolveEdgeOrders(config: OrderConfigView | null | undefined) {
+    return resolveEdgeCount(config, 'buy') + resolveEdgeCount(config, 'sell');
 }
 
 /**
- * Edge-pinned reserve id set for one side, or null when disabled.
+ * Edge-pinned order id set for one side, or null when disabled.
  * Type/price-filtered, then ordered by the SAME edge order the placement
- * pickers use (compareReserveEdge via selectReserveEdgeSlots) — single source
+ * pickers use (compareEdge via selectEdgeSlots) — single source
  * of truth, so the no-crawl classification can never drift from placement.
  * Anchor: explicit live-grid edge when supplied, otherwise the config-bound
  * fallback (unresolved -> plain rank). Shelf/manual ids (non-slot-N, e.g.
- * fork-kept deep-* orders below the rail) are never reserves: they would
+ * fork-kept deep-* orders below the rail) are never edge orders: they would
  * otherwise win the cheapest-first rank and poison the deficit check while
  * the shelf is live (issue #27 follow-up). No-op upstream (grids only mint
  * slot-N).
  *
  * @param {Array<Object>} allSlots - All grid slots (need id/price/type)
- * @param {Object} config - Bot configuration (reserve count source)
+ * @param {Object} config - Bot configuration (edge count source)
  * @param {string} orderType - ORDER_TYPES.BUY (floor) or SELL (ceiling)
  * @param {number|null} [anchorPrice] - Explicit edge anchor (live grid edge);
  *   callers that picked slots must pass the SAME anchor so no-crawl
  *   classification matches placement. NB: null/undefined falls back to the
  *   config-bound anchor (unresolved -> plain rank) — unlike
- *   selectReserveEdgeSlots, where null alone means plain rank.
+ *   selectEdgeSlots, where null alone means plain rank.
  * @param {Set<string>|null} [excludeIds] - Windowed ids to skip (same set the
  *   placement pickers exclude). Window + edge are additive in every target
  *   (order counts, fees, hold-back), so a window that reaches the grid edge
  *   (e.g. a keep-low window sitting on the floor) must not let the edge pick
  *   land on window members — otherwise counting reads N/N with zero
- *   dedicated reserves and the deficit never fires (issue #27 follow-up).
+ *   dedicated edge orders and the deficit never fires (issue #27 follow-up).
  * @returns {Set<string>|null} Edge slot ids, or null when side disabled
  */
-function reserveEdgeIdSet(allSlots: SlotLike[], config: ReserveConfig | null | undefined, orderType: OrderType, anchorPrice: unknown = null, excludeIds: Set<string> | null = null): Set<string> | null {
+function edgeOrderIdSet(allSlots: SlotLike[], config: OrderConfigView | null | undefined, orderType: OrderType, anchorPrice: unknown = null, excludeIds: Set<string> | null = null): Set<string> | null {
     const isSell = orderType === ORDER_TYPES.SELL;
     const side = isSell ? 'sell' : 'buy';
     // Filter by the canonical side type, not the caller's token: the previous
     // per-side resolvers did the same, so a non-canonical token keeps the
     // floor behavior instead of silently matching nothing.
     const type = isSell ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
-    const n = resolveReserveCount(config, side);
+    const n = resolveEdgeCount(config, side);
     if (n <= 0) return null;
     const ids = new Set<string>();
     if (!Array.isArray(allSlots)) return ids;
     // NB: Number(null) === 0 is finite — null/undefined must mean "no anchor".
-    const anchor = anchorPrice == null ? resolveReserveEdgeAnchorPrice(config, side) : Number(anchorPrice);
+    const anchor = anchorPrice == null ? resolveEdgeAnchorPrice(config, side) : Number(anchorPrice);
     const ascending = allSlots
         .filter((s) => s && s.id != null && s.price != null && s.type === type && parseSlotIndex(s.id) !== null)
         .sort((a, b) => Number(a.price) - Number(b.price));
-    for (const s of selectReserveEdgeSlots(ascending, n, excludeIds, isSell ? 'ceiling' : 'floor', anchor)) {
+    for (const s of selectEdgeSlots(ascending, n, excludeIds, isSell ? 'ceiling' : 'floor', anchor)) {
         ids.add(String(s.id));
     }
     return ids;
@@ -2867,32 +2867,32 @@ function reserveEdgeIdSet(allSlots: SlotLike[], config: ReserveConfig | null | u
 /**
  * Window member ids for one side from an explicit slot list and geometry.
  *
- * Mirror of the window every placement picker excludes from its reserve
+ * Mirror of the window every placement picker excludes from its edge
  * pick: in-rail slots of the side (geometry via isSlotInRail), ordered
  * closest to market first (buys: highest price first; sells: lowest first),
- * sliced to the configured activeOrders count. The slice runs over the FULL
+ * sliced to the configured coreOrders count. The slice runs over the FULL
  * rail, not just live orders — window membership is geometric (a virtual
- * hole inside the window still blocks the reserve pick there), so live-only
- * slices would misclassify live reserves as window members whenever the
+ * hole inside the window still blocks the edge pick there), so live-only
+ * slices would misclassify live edge orders as window members whenever the
  * window itself is under-filled.
  *
  * Returns null when the boundary geometry is unknown (null boundary): the
- * pickers cannot place reserves without it either, so callers fail open
+ * pickers cannot place edge orders without it either, so callers fail open
  * (no exclusion) and keep their previous classification instead of guessing.
  *
  * @param {Array<Object>} allSlots - Slots (master grid or clone)
- * @param {Object} config - Bot configuration (activeOrders count source)
+ * @param {Object} config - Bot configuration (coreOrders count source)
  * @param {string} orderType - ORDER_TYPES.BUY or SELL
  * @param {number|null|undefined} boundaryIdx - Boundary the rail is derived from
  * @param {number} gapSlots - Gap band size
  * @returns {Set<string>|null} Window slot ids, or null when geometry unknown
  */
-function windowIdSetFromSlots(allSlots: SlotLike[], config: ReserveConfig | null | undefined, orderType: OrderType, boundaryIdx: number | null | undefined, gapSlots: number): Set<string> | null {
+function windowIdSetFromSlots(allSlots: SlotLike[], config: OrderConfigView | null | undefined, orderType: OrderType, boundaryIdx: number | null | undefined, gapSlots: number): Set<string> | null {
     try {
         const isSell = orderType === ORDER_TYPES.SELL;
         const type = isSell ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
         const side = isSell ? 'sell' : 'buy';
-        const count = Math.max(0, Math.floor(Number(config?.activeOrders?.[side])) || 0);
+        const count = Math.max(0, Math.floor(Number(config?.coreOrders?.[side])) || 0);
         if (!(count > 0)) return new Set<string>();
         if (!Array.isArray(allSlots)) return new Set<string>();
         if (boundaryIdx === null || boundaryIdx === undefined || !Number.isFinite(Number(boundaryIdx))) return null;
@@ -2946,28 +2946,28 @@ function liveWindowIdSet(manager: OrderManagerLike, orderType: OrderType): Set<s
  *
  *   - CREATE ids of the plan (the slots a fold did not convert into an
  *     UPDATE), minus
- *   - reserve-ladder ids. Reserves are static edge insurance; their fills
+ *   - edge-ladder ids. Edge orders are static edge insurance; their fills
  *     never crawl (deriveTargetBoundary filters them), so a guard-skipped
- *     reserve must not pin geometry either. Without this exclusion a reserve
+ *     edge order must not pin geometry either. Without this exclusion an edge order
  *     CREATE skipped at the wrong moment (e.g. a floor BUY above the last-fill
  *     pivot while the market dumps below the grid) would hold the boundary for
  *     a cycle although nothing was stranded.
  *
- * Absent/disabled reserves or an empty action list yield the plain CREATE ids,
- * so callers that never configured reserves keep the previous behavior.
+ * Absent/disabled edge orders or an empty action list yield the plain CREATE ids,
+ * so callers that never configured edge orders keep the previous behavior.
  *
  * @param {Array<Object>} actions - Optimized COW actions
  * @param {Object} [options]
- * @param {Object} [options.config] - Bot configuration (reserve count source)
- * @param {Iterable<Object>} [options.slots] - Master slots (reserve classification)
+ * @param {Object} [options.config] - Bot configuration (edge count source)
+ * @param {Iterable<Object>} [options.slots] - Master slots (edge classification)
  * @param {{buy?: number|null, sell?: number|null}} [options.edgeAnchors] - Live
- *   edge anchors (same pair the strategy classifies reserve fills against)
+ *   edge anchors (same pair the strategy classifies edge fills against)
  * @param {unknown} [options.manager] - OrderManager for the window exclusion (same
  *   set the placement pickers exclude); omit to fall back to the previous
  *   exclusion-free classification (fail-open)
- * @returns {string[]} Refill slot ids (CREATE ids minus reserve edge ids)
+ * @returns {string[]} Refill slot ids (CREATE ids minus edge ids)
  */
-function collectRefillSlotIds(actions: CowAction[], options: { config?: ReserveConfig | null; slots?: unknown; edgeAnchors?: { buy?: number | null; sell?: number | null } | null; manager?: OrderManagerLike | null } = {}): string[] {
+function collectRefillSlotIds(actions: CowAction[], options: { config?: OrderConfigView | null; slots?: unknown; edgeAnchors?: { buy?: number | null; sell?: number | null } | null; manager?: OrderManagerLike | null } = {}): string[] {
     const { config = null, slots = null, edgeAnchors = null, manager = null } = options;
     const out: string[] = [];
     if (!Array.isArray(actions)) return out;
@@ -2975,12 +2975,12 @@ function collectRefillSlotIds(actions: CowAction[], options: { config?: ReserveC
         .filter((a) => a?.type === COW_ACTIONS.CREATE && typeof a?.id === 'string' && a.id.length > 0)
         .map((a) => a.id);
     if (createIds.length === 0) return out;
-    let reserveIds: Set<string> | null = null;
+    let edgeIds: Set<string> | null = null;
     if (slots && config) {
         try {
             // Accept a Map (master grid), an array of slots, or any iterable of
             // slot objects. Map entries are [id, slot] pairs, so `.values()` is
-            // required — Array.from(map) would hand reserveEdgeIdSet pairs.
+            // required — Array.from(map) would hand edgeOrderIdSet pairs.
             const allSlots: SlotLike[] = Array.isArray(slots)
                 ? slots as SlotLike[]
                 : (slots && typeof (slots as { values?: unknown }).values === 'function'
@@ -2989,26 +2989,26 @@ function collectRefillSlotIds(actions: CowAction[], options: { config?: ReserveC
             // Window exclusion keeps classification in agreement with the
             // placement pickers: a window reaching the grid edge must not have
             // its window hole-CREATEs dropped from the wire as if they were
-            // reserves, or a guard-skipped window refill would no longer pin
+            // edge orders, or a guard-skipped window refill would no longer pin
             // the committed boundary (stranding the hole it failed to fill).
             const windowBuyIds = manager ? liveWindowIdSet(manager, ORDER_TYPES.BUY) : null;
             const windowSellIds = manager ? liveWindowIdSet(manager, ORDER_TYPES.SELL) : null;
-            const buyIds = reserveEdgeIdSet(allSlots, config, ORDER_TYPES.BUY, edgeAnchors?.buy ?? null, windowBuyIds);
-            const sellIds = reserveEdgeIdSet(allSlots, config, ORDER_TYPES.SELL, edgeAnchors?.sell ?? null, windowSellIds);
-            if (buyIds || sellIds) reserveIds = new Set<string>([...(buyIds ?? []), ...(sellIds ?? [])]);
-        } catch { reserveIds = null; }
+            const buyIds = edgeOrderIdSet(allSlots, config, ORDER_TYPES.BUY, edgeAnchors?.buy ?? null, windowBuyIds);
+            const sellIds = edgeOrderIdSet(allSlots, config, ORDER_TYPES.SELL, edgeAnchors?.sell ?? null, windowSellIds);
+            if (buyIds || sellIds) edgeIds = new Set<string>([...(buyIds ?? []), ...(sellIds ?? [])]);
+        } catch { edgeIds = null; }
     }
     for (const id of createIds) {
-        // Fail-open on classification errors: an id we cannot prove is a reserve
+        // Fail-open on classification errors: an id we cannot prove is an edge order
         // stays in the wire, so the hold keeps its previous (conservative) reach.
-        if (reserveIds && reserveIds.has(id)) continue;
+        if (edgeIds && edgeIds.has(id)) continue;
         out.push(id);
     }
     return out;
 }
 
 /**
- * Resolved bound anchor for reserve edges from CONFIG alone.
+ * Resolved bound anchor for edges from CONFIG alone.
  * BUY floor anchors toward minPrice (dip-insurance end), SELL ceiling toward
  * maxPrice (spike-insurance end). Resolves numeric and "Nx" relative forms
  * via resolveConfiguredPriceBound (startPrice-referenced); falls back to the
@@ -3016,16 +3016,16 @@ function collectRefillSlotIds(actions: CowAction[], options: { config?: ReserveC
  *
  * Known limit: this is the statically resolved config bound, not the
  * gridPrice/AMA-referenced live rail bound. Placement call sites should use
- * resolveLiveReserveEdgeAnchorPrice(manager, side), which prefers the genesis
+ * resolveLiveEdgeAnchorPrice(manager, side), which prefers the genesis
  * ladder extreme and returns null when there is no usable ladder. Callers that
- * need a fallback (e.g. reserveEdgeIdSet) still resolve this config bound when
+ * need a fallback (e.g. edgeOrderIdSet) still resolve this config bound when
  * the live anchor is null; the live resolver itself no longer computes it.
  *
  * @param {Object} config - Bot configuration
  * @param {string} side - 'buy' or 'sell'
  * @returns {number|null} Finite anchor price, or null
  */
-function resolveReserveEdgeAnchorPrice(config: ReserveConfig | null | undefined, side: string): number | null {
+function resolveEdgeAnchorPrice(config: OrderConfigView | null | undefined, side: string): number | null {
     const isSell = side === 'sell';
     const bound = isSell ? config?.maxPrice : config?.minPrice;
     const mode = isSell ? 'max' : 'min';
@@ -3037,8 +3037,8 @@ function resolveReserveEdgeAnchorPrice(config: ReserveConfig | null | undefined,
     return Number.isFinite(raw) ? raw : null;
 }
 
-/** Manager surface the live reserve-edge anchor reads (structural view). */
-type ReserveEdgeAnchorManager = {
+/** Manager surface the live edge anchor reads (structural view). */
+type EdgeAnchorManager = {
     _genesis?: { priceLevels?: readonly unknown[] } | null;
     orders?: { values(): Iterable<unknown> } | null;
     boundaryIdx?: unknown;
@@ -3047,7 +3047,7 @@ type ReserveEdgeAnchorManager = {
 };
 
 /**
- * Live-grid reserve edge anchor (single source for edge placement).
+ * Live-grid edge anchor (single source for edge placement).
  *
  * The anchor must come from the geometry the bot is actually trading, never
  * from a config value that can be a mode string ("pool"/"book"), a relative
@@ -3065,7 +3065,7 @@ type ReserveEdgeAnchorManager = {
  * paper over. The former tiers — the live in-rail slot extreme and the resolved
  * config bound — are gone with the legacy matcher they only existed to cover;
  * any config-bound fallback is now resolved by the individual consumer that
- * wants one (see reserveEdgeIdSet), not by this live-edge resolver. The fault
+ * wants one (see edgeOrderIdSet), not by this live-edge resolver. The fault
  * itself is reported
  * once per grid generation by the sync-entry gate; this resolver stays silent
  * because it is called from per-fill and per-placement paths.
@@ -3074,7 +3074,7 @@ type ReserveEdgeAnchorManager = {
  * @param {string} side - 'buy' or 'sell'
  * @returns {number|null} Finite anchor price, or null
  */
-function resolveLiveReserveEdgeAnchorPrice(manager: ReserveEdgeAnchorManager | null | undefined, side: unknown): number | null {
+function resolveLiveEdgeAnchorPrice(manager: EdgeAnchorManager | null | undefined, side: unknown): number | null {
     const isSell = side === 'sell';
 
     const levels = manager?._genesis?.priceLevels;
@@ -3087,7 +3087,7 @@ function resolveLiveReserveEdgeAnchorPrice(manager: ReserveEdgeAnchorManager | n
 }
 
 /**
- * Shared anchored edge comparator for reserve selection (single source).
+ * Shared anchored edge comparator for edge selection (single source).
  * With a finite anchor: in-bound slots first, nearest the anchor first
  * (floor ascending, ceiling descending); stale out-of-bound slots last,
  * still nearest the anchor first. Without one: plain rank fallback
@@ -3099,7 +3099,7 @@ function resolveLiveReserveEdgeAnchorPrice(manager: ReserveEdgeAnchorManager | n
  * @param {number|null} anchorPrice - Resolved bound anchor (null = rank fallback)
  * @returns {number} Comparator result for Array.prototype.sort
  */
-function compareReserveEdge(a: SlotLike, b: SlotLike, edge: string, anchorPrice: number | null): number {
+function compareEdge(a: SlotLike, b: SlotLike, edge: string, anchorPrice: number | null): number {
     const ceil = edge === 'ceiling';
     // NB: Number(null) === 0 is finite — null/undefined must mean "no anchor".
     const anchor = anchorPrice == null ? Number.NaN : Number(anchorPrice);
@@ -3116,25 +3116,25 @@ function compareReserveEdge(a: SlotLike, b: SlotLike, edge: string, anchorPrice:
 }
 
 /**
- * Central edge selector: take reserve slots from a price-ascending list,
+ * Central edge selector: take edge slots from a price-ascending list,
  * skipping already-windowed ids. Both edges anchor at the live grid's own
- * edge (resolveLiveReserveEdgeAnchorPrice) when finite — floor: nearest
+ * edge (resolveLiveEdgeAnchorPrice) when finite — floor: nearest
  * at/above the live floor first, slots below it rank last; ceiling: nearest
  * at/below the live ceiling first, slots above it rank last. Anchoring to the
- * live edge keeps the reserve on genuine live-rail slots when the grid still
+ * live edge keeps the edge order on genuine live-rail slots when the grid still
  * carries leftovers from an older bound or the configured bound disagrees
  * with the geometry being traded. Callers pre-filter rail/type and apply
  * their own size gates; this only picks positions. A null anchor degrades to
  * plain rank (floor: lowest first; ceiling: highest first).
  *
  * @param {Array<Object>} sortedAsc - Slots sorted by price ascending
- * @param {number} count - Reserve count
+ * @param {number} count - Edge count
  * @param {Set<string>|null} excludeIds - Windowed ids to skip
  * @param {string} edge - 'floor' or 'ceiling'
  * @param {number|null} [anchorPrice] - Live edge anchor for the side (null = rank-based)
- * @returns {Array<Object>} Reserve slots (ascending for floor, descending for ceiling)
+ * @returns {Array<Object>} Edge slots (ascending for floor, descending for ceiling)
  */
-function selectReserveEdgeSlots<T extends SlotLike>(sortedAsc: T[], count: number, excludeIds: Set<string> | null, edge: string, anchorPrice: number | null = null): T[] {
+function selectEdgeSlots<T extends SlotLike>(sortedAsc: T[], count: number, excludeIds: Set<string> | null, edge: string, anchorPrice: number | null = null): T[] {
     const n = Math.max(0, Math.floor(Number(count) || 0));
     if (n <= 0 || !Array.isArray(sortedAsc)) return [];
     const avail = sortedAsc.filter((s) => s && s.id != null && (!excludeIds || !excludeIds.has(s.id)));
@@ -3148,22 +3148,23 @@ function selectReserveEdgeSlots<T extends SlotLike>(sortedAsc: T[], count: numbe
     // Anchored: shared comparator — in-bound slots nearest the bound first,
     // stale out-of-bound slots last.
     return avail
-        .sort((x, y) => compareReserveEdge(x, y, edge, anchor))
+        .sort((x, y) => compareEdge(x, y, edge, anchor))
         .slice(0, n);
 }
 
 /**
  * Total target order count across both sides (used for BTS fee calculation).
  * Single source of truth so every budget derivation sizes identically.
- * Includes per-side reserves: they rest live on-chain and pay creation fees.
+ * Includes per-side edge orders: they rest live on-chain and pay creation fees.
  *
  * @param {Object} config - Bot configuration
  * @returns {number} Total target order count
  */
-function getActiveOrdersTotal(config: ReserveConfig | null | undefined) {
-    return Math.max(0, config?.activeOrders?.buy ?? 1) +
-        Math.max(0, config?.activeOrders?.sell ?? 1) +
-        resolveReserveOrders(config);
+function getCoreOrdersTotal(config: OrderConfigView | null | undefined) {
+    const coreOrders = config?.coreOrders;
+    return Math.max(0, coreOrders?.buy ?? 1) +
+        Math.max(0, coreOrders?.sell ?? 1) +
+        resolveEdgeOrders(config);
 }
 /**
  * Calculate side budget after BTS fee deduction.
@@ -3174,7 +3175,7 @@ function getActiveOrdersTotal(config: ReserveConfig | null | undefined) {
  * @param {number} totalTarget - Total target order count (used for BTS fee calculation on both sides)
  * @returns {number} Available budget for the side
  */
-function getSideBudget(side: string, funds: ManagerFundsLike | ProjectedFunds | null, config: ReserveConfig, totalTarget: number) {
+function getSideBudget(side: string, funds: ManagerFundsLike | ProjectedFunds | null, config: OrderConfigView, totalTarget: number) {
     if (!funds) return 0;
     const isBuy = side === 'buy';
     const allocated = isBuy ? (funds.allocatedBuy || 0) : (funds.allocatedSell || 0);
@@ -3422,6 +3423,6 @@ function collectKnownOnChainOrderIds(mgr: OrderManagerLike, placedResults: unkno
     return { masterIds: [...masterIds], createIds: [...createIds], all: [...all] };
 }
 
-export { parseChainOrder, applyChainSizeToGridOrder, buildFillKey, correctOrderPriceOnChain, correctAllPriceMismatches, _validatePriceCorrectionEntry, _stampCorrectionProvenance, findLiveOrderOwnerByChainId, buildCreateOrderArgs, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, virtualizeOrder, convertToSpreadPlaceholder, toRailHolePlaceholder, geometryTypeForSlotIndex, detectGapEvacuationCandidates, updateGapEvacuationStreaks, resolveSpreadOrderSide, chainOrderMatchesSlot, chainOrderMatchesSlotWithTolerance, crossingCandidateChainId, isCrossingCheckCandidate, buildCrossingCheckCandidates, parseSlotIndex, filterOrdersByType, buildOutsideInPairGroups, extractBatchOperationResults, formatUnmatchedChainOrder, isNonBlockingUnmatchedOrder, isStrandedHoldOrder, isOrderOnChain, isOrderVirtual, hasOnChainId, isOrderPlaced, isPhantomOrder, isSlotAvailable, isEmptyGridSlot, isOrderHealthy, checkSizeThreshold, checkSizesBeforeMinimum, calculateIdealBoundary, assignGridRoles, resolveOnChainRetypeType, shouldFlagOutOfSpread, buildIndexes, validateIndexes, ordersEqual, buildDelta, deriveTargetBoundary, isShiftEligibleFill, resolveReserveCount, resolveReserveOrders, selectReserveEdgeSlots, getActiveOrdersTotal, getSideBudget, calculateBudgetedSizes, buildCreateOpFingerprint, isOrderGoneErrorMessage, recordDuplicateOrphanDetection, clearDuplicateOrphanDetection, duplicateOrphanLogInfo, chainOrderUnchangedFromCache, detectCrossedBookPlan, collectKnownOnChainOrderIds, reserveEdgeIdSet, liveWindowIdSet, checkGridPriceInvariant, reportGridPriceInvariant }
-export { resolveReserveEdgeAnchorPrice, resolveLiveReserveEdgeAnchorPrice, compareReserveEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder, _filterUnmatchedChainOrders };
+export { parseChainOrder, applyChainSizeToGridOrder, buildFillKey, correctOrderPriceOnChain, correctAllPriceMismatches, _validatePriceCorrectionEntry, _stampCorrectionProvenance, findLiveOrderOwnerByChainId, buildCreateOrderArgs, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, virtualizeOrder, convertToSpreadPlaceholder, toRailHolePlaceholder, geometryTypeForSlotIndex, detectGapEvacuationCandidates, updateGapEvacuationStreaks, resolveSpreadOrderSide, chainOrderMatchesSlot, chainOrderMatchesSlotWithTolerance, crossingCandidateChainId, isCrossingCheckCandidate, buildCrossingCheckCandidates, parseSlotIndex, filterOrdersByType, buildOutsideInPairGroups, extractBatchOperationResults, formatUnmatchedChainOrder, isNonBlockingUnmatchedOrder, isStrandedHoldOrder, isOrderOnChain, isOrderVirtual, hasOnChainId, isOrderPlaced, isPhantomOrder, isSlotAvailable, isEmptyGridSlot, isOrderHealthy, checkSizeThreshold, checkSizesBeforeMinimum, calculateIdealBoundary, assignGridRoles, resolveOnChainRetypeType, shouldFlagOutOfSpread, buildIndexes, validateIndexes, ordersEqual, buildDelta, deriveTargetBoundary, isShiftEligibleFill, resolveEdgeCount, resolveEdgeOrders, selectEdgeSlots, getCoreOrdersTotal, getSideBudget, calculateBudgetedSizes, buildCreateOpFingerprint, isOrderGoneErrorMessage, recordDuplicateOrphanDetection, clearDuplicateOrphanDetection, duplicateOrphanLogInfo, chainOrderUnchangedFromCache, detectCrossedBookPlan, collectKnownOnChainOrderIds, edgeOrderIdSet, liveWindowIdSet, checkGridPriceInvariant, reportGridPriceInvariant }
+export { resolveEdgeAnchorPrice, resolveLiveEdgeAnchorPrice, compareEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder, _filterUnmatchedChainOrders };
 

@@ -35,7 +35,7 @@ async function setupManager() {
         minPrice: 0.01,
         maxPrice: 0.04,
         botFunds: { buy: 1000, sell: 50000 },
-        activeOrders: { buy: 3, sell: 3 }, 
+        coreOrders: { buy: 3, sell: 3 }, 
         incrementPercent: 1,
         targetSpreadPercent: 2,
         weightDistribution: { buy: 0.5, sell: 0.5 }

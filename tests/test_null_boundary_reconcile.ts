@@ -29,7 +29,7 @@ function buildManager({
     slots = [],
     funds = null,
     weightDistribution = { buy: 0.5, sell: 0.5 },
-    activeOrders = { buy: 10, sell: 10 },
+    coreOrders = { buy: 10, sell: 10 },
 }) {
     const orders = new Map();
     for (const s of slots) {
@@ -48,7 +48,7 @@ function buildManager({
             incrementPercent: 1,
             targetSpreadPercent: 2,
             gridLimits: { PARTIAL_DUST_THRESHOLD_PERCENTAGE: 5 },
-            activeOrders,
+            coreOrders,
             weightDistribution,
             feeParams: { BTS_RESERVATION_MULTIPLIER: 1.2 },
             min_BTS_value: 0,

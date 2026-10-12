@@ -16,7 +16,7 @@ function testNormalizeBotDraftSeedsDefaults() {
   });
   assert.ok(draft.weightDistribution, 'defaults should still seed nested objects');
   assert.ok(draft.botFunds, 'defaults should still seed nested objects');
-  assert.ok(draft.activeOrders, 'defaults should still seed nested objects');
+  assert.ok(draft.coreOrders, 'defaults should still seed nested objects');
   assert.strictEqual(draft.debtPolicy.lending[0].maxFeeRatePerDay, 0.001, 'debtPolicy should survive normalization');
 }
 

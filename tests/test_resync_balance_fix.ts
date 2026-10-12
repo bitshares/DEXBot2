@@ -97,7 +97,7 @@ async function testDeltaBalanceCheck() {
         privateKey: 'test-key',
         chainOpenOrders,
         chainOrders: chainOrdersMock,
-        config: { activeOrders: { sell: 1 } }
+        config: { coreOrders: { sell: 1 } }
     });
 
     // DELTA is 10 (100 - 90). Balance is 5.
@@ -114,7 +114,7 @@ async function testDeltaBalanceCheck() {
         privateKey: 'test-key',
         chainOpenOrders: JSON.parse(JSON.stringify(chainOpenOrders)), // Fresh copy
         chainOrders: chainOrdersMock,
-        config: { activeOrders: { sell: 1 } }
+        config: { coreOrders: { sell: 1 } }
     });
     assert.strictEqual(updateCalled, true, "Should allow update when delta increase is within balance");
     console.log("✅ Sub-test 2 passed");
@@ -129,7 +129,7 @@ async function testDeltaBalanceCheck() {
         privateKey: 'test-key',
         chainOpenOrders: JSON.parse(JSON.stringify(chainOpenOrders)), // Fresh copy
         chainOrders: chainOrdersMock,
-        config: { activeOrders: { sell: 1 } }
+        config: { coreOrders: { sell: 1 } }
     });
     // Delta is -10. Balance is 2. Increase is 0. 0 <= 2 so it should succeed.
     assert.strictEqual(updateCalled, true, "Should allow update when size is reduced even with low balance");

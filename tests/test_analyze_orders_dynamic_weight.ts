@@ -344,7 +344,7 @@ function testAnalyzeOrderIncludesAsymmetricBoundsFromRoot() {
       maxPrice: '1.55x',
       targetSpreadPercent: 2,
       incrementPercent: 0.5,
-      activeOrders: { buy: 20, sell: 20 },
+      coreOrders: { buy: 20, sell: 20 },
       botFunds: { buy: '100%', sell: '100%' },
       weightDistribution: { buy: 1, sell: 1 },
     };
@@ -611,7 +611,7 @@ function testAnalyzeOrderIncludesDynamicWeightForAma() {
       gridPrice: 'ama',
       targetSpreadPercent: 1.5,
       incrementPercent: 0.5,
-      activeOrders: { buy: 1, sell: 1 },
+      coreOrders: { buy: 1, sell: 1 },
       botFunds: { buy: 1, sell: 1 },
       weightDistribution: { buy: 0.5, sell: 0.5 },
     };
@@ -643,7 +643,7 @@ function testAnalyzeOrderOmitsDynamicWeightForNonAma() {
     gridPrice: 'fixed',
     targetSpreadPercent: 1.5,
     incrementPercent: 0.5,
-    activeOrders: { buy: 1, sell: 1 },
+    coreOrders: { buy: 1, sell: 1 },
     weightDistribution: { buy: 0.5, sell: 0.5 },
   };
   const analysis = analyzeOrder(botData, config, 'does-not-exist');
@@ -668,7 +668,7 @@ function testAnalyzeOrderFormatsNumericBotFunds() {
     gridPrice: 'fixed',
     targetSpreadPercent: 1.5,
     incrementPercent: 0.5,
-    activeOrders: { buy: 1, sell: 1 },
+    coreOrders: { buy: 1, sell: 1 },
     botFunds: { buy: 35, sell: 90 },
     weightDistribution: { buy: 0.5, sell: 0.5 },
   };
@@ -719,7 +719,7 @@ function makeMockAnalysis(overrides) {
     gridMinPrice: 90,
     gridMaxPrice: 110,
     marketPrice: null,
-    activeOrdersTarget: { buy: 10, sell: 10 },
+    coreOrdersTarget: { buy: 10, sell: 10 },
     weightDistribution: { buy: 0.5, sell: 0.5 },
     gridPriceLabel: null,
     gridPriceValue: null,
@@ -827,7 +827,7 @@ function testAnalyzeOrderBoundaryLessClassifiesByType() {
     maxPrice: '1.55x',
     targetSpreadPercent: 2,
     incrementPercent: 0.5,
-    activeOrders: { buy: 4, sell: 4 },
+    coreOrders: { buy: 4, sell: 4 },
     botFunds: { buy: '100%', sell: '100%' },
     weightDistribution: { buy: 1, sell: 1 },
   };
@@ -865,7 +865,7 @@ function testAnalyzeOrderNumericBoundaryKeepsRailGeometry() {
     maxPrice: '1.55x',
     targetSpreadPercent: 2,
     incrementPercent: 0.5,
-    activeOrders: { buy: 4, sell: 4 },
+    coreOrders: { buy: 4, sell: 4 },
     botFunds: { buy: '100%', sell: '100%' },
     weightDistribution: { buy: 1, sell: 1 },
   };

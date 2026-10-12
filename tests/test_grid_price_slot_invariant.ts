@@ -31,7 +31,7 @@ function makeGenesis() {
 function makeManagerForLoad(overrides: any = {}) {
     const logs: string[] = [];
     const manager: any = {
-        config: { startPrice: 100, minPrice: 80, maxPrice: 120, incrementPercent: 1, targetSpreadPercent: 2, gridLimits: {}, activeOrders: { buy: 5, sell: 5 } },
+        config: { startPrice: 100, minPrice: 80, maxPrice: 120, incrementPercent: 1, targetSpreadPercent: 2, gridLimits: {}, coreOrders: { buy: 5, sell: 5 } },
         assets: { assetA: { id: '1.3.0', precision: 5, symbol: 'BTS' }, assetB: { id: '1.3.1', precision: 5, symbol: 'USD' } },
         funds: { btsFeesOwed: 0 },
         orders: new Map(),

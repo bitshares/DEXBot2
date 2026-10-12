@@ -22,7 +22,7 @@ const mockBitShares = {
  * MockManager that satisfies checkAndUpdateGridIfNeeded's real data contract.
  *
  * The threshold check works as follows:
- *   avail  = calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB, activeOrders)
+ *   avail  = calculateAvailableFundsValue(side, accountTotals, funds, assetA, assetB, coreOrders)
  *          = max(0, chainFree - virtual - btsFeesOwed - btsFeesReservation)
  *   ratio  = (avail / allocated) * 100
  *   trigger when ratio >= GRID_REGENERATION_PERCENTAGE (default 3%)
@@ -36,7 +36,7 @@ class MockManager {
         this.config = {
             assetA: 'USD',
             assetB: 'EUR',
-            activeOrders: { buy: 10, sell: 10 },
+            coreOrders: { buy: 10, sell: 10 },
             incrementPercent: 1,
             weightDistribution: { buy: 1, sell: 1 },
             gridLimits: { GRID_REGENERATION_PERCENTAGE: GRID_LIMITS.GRID_REGENERATION_PERCENTAGE }

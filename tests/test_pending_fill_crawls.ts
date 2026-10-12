@@ -29,8 +29,8 @@ const StrategyEngine = require('../modules/order/strategy').default;
 const {
     deriveTargetBoundary,
     consumePendingFillCrawls,
-    reserveEdgeIdSet,
-    resolveLiveReserveEdgeAnchorPrice,
+    edgeOrderIdSet,
+    resolveLiveEdgeAnchorPrice,
 } = require('../modules/order/utils/order');
 const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
 const { OrderManager } = require('../modules/order/manager');
@@ -41,7 +41,7 @@ const { buildGenesisFromPriceLevels, calculateGapSlots } = require('../modules/o
 
 const GAP = 4;
 const N_SLOTS = 216;
-const CFG = { startPrice: 'pool', activeOrders: { buy: 20, sell: 20 } };
+const CFG = { startPrice: 'pool', coreOrders: { buy: 20, sell: 20 } };
 
 // AccountOrders persists next to the resolved profiles dir, which may be the
 // repo or the home config. Never hardcode `profiles/orders` — resolve it.
@@ -184,7 +184,7 @@ async function testPending_GenesisAnchorKeepsOwed() {
 
 async function testPending_ReserveEntriesSkipped() {
     console.log('\n[PEND-005] reserve-slot entries never crawl...');
-    const cfg = { ...CFG, reserveOrders: { buy: 2, sell: 0 } };
+    const cfg = { ...CFG, edgeOrders: { buy: 2, sell: 0 } };
     const { boundaryIdx } = deriveTargetBoundary(
         [buyFill(95)],
         96,
@@ -254,11 +254,11 @@ async function testConsume_LiveAnchorClassifies() {
         type: ORDER_TYPES.BUY, state: ORDER_STATES.VIRTUAL, orderId: '', price: 0.0005, size: 0,
     });
     const mgr = mockManager(96, orders, [{ slotId: 'slot-210', side: ORDER_TYPES.BUY, ts: 1 }],
-        { ...CFG, reserveOrders: { buy: 2, sell: 0 } });
+        { ...CFG, edgeOrders: { buy: 2, sell: 0 } });
     const allSlots = Array.from(orders.values());
-    const liveAnchor = resolveLiveReserveEdgeAnchorPrice(mgr, 'buy');
-    const liveReserveIds = reserveEdgeIdSet(allSlots, mgr.config, ORDER_TYPES.BUY, liveAnchor);
-    const configAnchorIds = reserveEdgeIdSet(allSlots, mgr.config, ORDER_TYPES.BUY);
+    const liveAnchor = resolveLiveEdgeAnchorPrice(mgr, 'buy');
+    const liveReserveIds = edgeOrderIdSet(allSlots, mgr.config, ORDER_TYPES.BUY, liveAnchor);
+    const configAnchorIds = edgeOrderIdSet(allSlots, mgr.config, ORDER_TYPES.BUY);
     assert.strictEqual(liveAnchor, 0.001, 'live anchor is the ladder bottom (buy rail floor)');
     assert.ok(!liveReserveIds.has('slot-210'), 'ladder anchor must not rank the stale leftover as a reserve');
     assert.ok(configAnchorIds.has('slot-210'), 'config fallback would (the drift this pins down)');
@@ -502,7 +502,7 @@ const GEOM_CFG = {
     startPrice: 1,
     incrementPercent: 0.5,
     targetSpreadPercent: 2.5,   // calculateGapSlots(0.5, 2.5) === GAP
-    activeOrders: { buy: 20, sell: 20 },
+    coreOrders: { buy: 20, sell: 20 },
 };
 
 function buildPersistableMaster(count) {

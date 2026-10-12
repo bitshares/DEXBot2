@@ -39,7 +39,7 @@ async function createDivergenceFixture(sellFunds = 30, buyFunds = 5700) {
         startPrice: 100,
         incrementPercent: 1,
         targetSpreadPercent: 2,
-        activeOrders: { buy: 5, sell: 2 },
+        coreOrders: { buy: 5, sell: 2 },
         botFunds: { buy: 10000, sell: 5000 },
     });
 

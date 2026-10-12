@@ -12,7 +12,7 @@ async function run() {
         startPrice: 1,
         incrementPercent: 0.4,
         targetSpreadPercent: 2,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         weightDistribution: { buy: 0.5, sell: 0.5 }
     });
 

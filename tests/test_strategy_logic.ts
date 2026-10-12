@@ -30,7 +30,7 @@ async function runTests() {
         const mgr = new OrderManager({
             market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
             startPrice: 100, incrementPercent: 1, targetSpreadPercent: 2,
-            activeOrders: { buy: 5, sell: 5 }, weightDistribution: { sell: 0.5, buy: 0.5 }
+            coreOrders: { buy: 5, sell: 5 }, weightDistribution: { sell: 0.5, buy: 0.5 }
         });
         mgr.logger.level = 'debug';
         mgr.assets = { assetA: { id: '1.3.0', precision: 8 }, assetB: { id: '1.3.1', precision: 5 } };

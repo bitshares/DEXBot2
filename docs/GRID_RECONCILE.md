@@ -26,7 +26,7 @@ Phase 1 does all reasoning in memory under `_gridLock` (fast); Phases 2 and 3 ex
 
 Phase 2 and 3 both respect the `dryRun` flag: when true, no on-chain mutations are attempted — plans are logged but not executed.
 
-`targetCount` (per side, `targetSell`/`targetBuy`) is sourced from bot config (`activeOrders` window plus `reserveOrders` edge ladder) and determines how many live orders each side should maintain. The internal `planOnly` flag controls whether `_reconcileStartupSide` records plans for Phase 2 or executes inline — Phase 1 always calls with `planOnly=true`.
+`targetCount` (per side, `targetSell`/`targetBuy`) is sourced from bot config (`coreOrders` window plus `edgeOrders` edge ladder) and determines how many live orders each side should maintain. The internal `planOnly` flag controls whether `_reconcileStartupSide` records plans for Phase 2 or executes inline — Phase 1 always calls with `planOnly=true`.
 
 ```
                     Grid generated
@@ -93,7 +93,7 @@ Phase 2 and 3 both respect the `dryRun` flag: when true, no on-chain mutations a
    - Match sorted unmatched chain orders to virtual slots → `plannedUpdates`
    - Detect grid-edge lock and plan a largest-order cancel
    - Plan creates for remaining slots
-   - Plan excess cancellations (guarded by `matchedOnGrid > 0`): orphans first, then **matched surplus** (`chainCount - targetCount`, reserve edge slots last) — the matched-excess selection is shared by the planOnly and execute branches so planning can never drift from execution; planOnly omits `releaseUntrackedFunds` for matched slots (their funds are tracked on the grid slot)
+   - Plan excess cancellations (guarded by `matchedOnGrid > 0`): orphans first, then **matched surplus** (`chainCount - targetCount`, edge slots last) — the matched-excess selection is shared by the planOnly and execute branches so planning can never drift from execution; planOnly omits `releaseUntrackedFunds` for matched slots (their funds are tracked on the grid slot)
    - Fork-kept **shelf orders** (live non-slot-N ids below the rail, e.g. `deep-*`) are never cancel candidates or reserve members — see [Shelf Orders](#shelf-orders-fork-kept-manual-orders)
    - **Vacated-rail refill**: each PROCEEDING update whose vacated price exactly matches (`priceSlotEqual`) an empty, sized, in-rail slot of the same side queues a refill CREATE in the same plan (`source startupVacatedRailRefill`) — skipped updates, ghost prices (lattice moved), in-band slots, and already-desired slots never refill; refill targets require VIRTUAL state with no `orderId`
 
@@ -213,7 +213,7 @@ Reconcile's role in the defense-in-depth: during Phase 1, any ACTIVE/PARTIAL ord
 
 Live on-chain orders with non-slot-N ids below the rail (e.g. `deep-*` manuals kept across a fork) are **shelf orders**: they sit outside the grid contract and must survive every startup path untouched. Three gates enforce this (all no-ops on grids that only mint slot-N ids):
 
-- **Reserve classification/placement** (`order.ts`, `grid_reconcile_internal.ts`, `manager.ts`): `reserveEdgeIdSet`, the Tier-2 live-anchor scan, `_pickEdgeReserveSlots`, and `pickEdgeReserves` all gate to `parseSlotIndex(id) !== null`, so a shelf can never count as the reserve edge (which would mask a real reserve deficit) nor be activated as a reserve it would never be counted as. The live-reserve count additionally excludes window members via `liveWindowIdSet`, so an edge-reaching window cannot masquerade as dedicated reserves.
+- **Reserve classification/placement** (`order.ts`, `grid_reconcile_internal.ts`, `manager.ts`): `edgeOrderIdSet`, the Tier-2 live-anchor scan, `_pickEdgeSlots`, and `pickEdgeSlots` all gate to `parseSlotIndex(id) !== null`, so a shelf can never count as the edge (which would mask a real edge deficit) nor be activated as an edge order it would never be counted as. The live-edge count additionally excludes window members via `liveWindowIdSet`, so an edge-reaching window cannot masquerade as dedicated edge orders.
 - **Startup excess cancels** (`grid_reconcile_internal.ts`): the matched-excess selection filters to slot-N ids in both planOnly and execute branches — the cheapest-first sort would otherwise wipe the shelf on the next boot.
 - **Geometric size recalc** (`grid.ts`): `_recalculateGridOrderSizesFromBlockchain` skips non-slot-N slots in the per-slot loop, so divergence-triggered resizing never overwrites manual shelf sizes on-chain (the shelf stays in the budget denominator, so allocation math is unchanged).
 
@@ -286,7 +286,7 @@ Commit `e64db685` replaced 6 single-value boolean state fields with refcounts/st
 | `tests/test_race_condition_fixes_batch1.ts` | ABBA deadlock (RC-1B) |
 | `tests/test_async_lock_force_release.ts` | Nested multi-lock re-entrancy |
 | `tests/test_targeted_drift_reconcile.ts` | Active-order shortfall triggers sync |
-| `tests/test_reserve_orders.ts` | Reserve startup coverage: fully-placed matched-surplus cancels, orphan+matched ordering, at-target silence, plan/execute parity, shelf-order survival, reserve-deficit trigger (`buy reserves 0/2`) with filled/disabled/empty-budget silence, window-exclusion counting |
+| `tests/test_edge_orders.ts` | Reserve startup coverage: fully-placed matched-surplus cancels, orphan+matched ordering, at-target silence, plan/execute parity, shelf-order survival, reserve-deficit trigger (`buy reserves 0/2`) with filled/disabled/empty-budget silence, window-exclusion counting |
 | `tests/repro_phantom_orders.ts` | Phantom order prevention |
 
 ---

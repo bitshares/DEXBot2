@@ -347,7 +347,7 @@ workers:
   "targetSpreadPercent": 4,
   "weightDistribution": { "sell": 1, "buy": 1 },
   "botFunds": { "sell": "100%", "buy": "100%" },
-  "activeOrders": { "sell": 5, "buy": 5 },
+  "coreOrders": { "sell": 5, "buy": 5 },
   "poolRef": "1.19.133"         // optional: pin a specific pool for price derivation
 }
 ```

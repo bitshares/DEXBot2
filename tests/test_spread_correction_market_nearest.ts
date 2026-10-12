@@ -85,7 +85,7 @@ function newManager(funds: { buy: number; sell: number } = { buy: 0, sell: 500 }
         assetB: 'QUOTE',
         startPrice: 1052.06,
         botFunds: { buy: funds.buy, sell: funds.sell },
-        activeOrders: { buy: 20, sell: 20 },
+        coreOrders: { buy: 20, sell: 20 },
         incrementPercent: INCREMENT,
         targetSpreadPercent: 1.5
     });

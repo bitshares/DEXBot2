@@ -141,7 +141,7 @@ A **phantom order** is an order in ACTIVE/PARTIAL state WITHOUT a valid `orderId
 | **Crawl Candidate** | Furthest active order eligible for rotation |
 | **Shortage** | Empty slot in the active window that needs an order |
 | **Surplus** | Order outside the active window that can be rotated |
-| **Hard Surplus** | Order beyond the configured window + reserve (`activeOrders` + `reserveOrders`) count |
+| **Hard Surplus** | Order beyond the configured window + reserve (`coreOrders` + `edgeOrders`) count |
 | **Reserve** | Edge-pinned live order outside the active window (buys at grid floor, sells at grid ceiling); never moves the boundary |
 | **Dust** | Partial order < 5% of ideal size |
 | **Dust Cancel** | Immediate on-chain cancel of dust partials on detection (no delay, no timer). Slot freed for a fresh counter-order. |

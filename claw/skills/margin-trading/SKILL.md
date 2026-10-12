@@ -11,7 +11,7 @@ Covers the trading concepts available through the claw bridge, the mechanics of 
 
 The practical control model is split into:
 
-- structural settings that are usually kept fixed (`incrementPercent`, `targetSpreadPercent`, `activeOrders`)
+- structural settings that are usually kept fixed (`incrementPercent`, `targetSpreadPercent`, `coreOrders`)
 - adaptive settings layered on top of AMA (`weightDistribution`, min/max range ratio, debt/collateral actions)
 
 ## Reference Files

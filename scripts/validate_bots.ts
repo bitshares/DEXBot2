@@ -7,7 +7,7 @@
  * for each bot entry. This is a health check to ensure configurations are
  * valid before being used by the system.
  *
- * Required fields for each bot: assetA, assetB, activeOrders, botFunds
+ * Required fields for each bot: assetA, assetB, coreOrders, botFunds
  * Optional field: gridPrice (number | null | "ama"/"ama1".."ama4")
  *
  * Usage: node dist/scripts/validate_bots.js
@@ -32,7 +32,7 @@ const livePath = PATHS.PROFILES.BOTS_JSON;
  * Required fields:
  * - assetA: Base currency symbol (e.g., 'XRP')
  * - assetB: Quote currency symbol (e.g., 'BTS')
- * - activeOrders: Number of orders in the grid
+ * - coreOrders: Number of orders in the grid
  * - botFunds: Amount of funds allocated to the bot
  *
  * Output:
@@ -50,7 +50,7 @@ function checkConfig(obj: unknown, src: string) {
   console.log(`\n== Checking ${src}: found ${bots.length} bot entries`);
 
   // List of required fields that every bot must have
-  const required = ['assetA', 'assetB', 'activeOrders', 'botFunds'];
+  const required = ['assetA', 'assetB', 'coreOrders', 'botFunds'];
   let anyMissing = false;
   let anyGridPriceWarnings = false;
 

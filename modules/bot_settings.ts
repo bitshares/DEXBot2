@@ -1,9 +1,9 @@
 
 import { getStorage } from './storage/index.js';
-import { readBotsFileSync } from './bots_file_lock.js';
+import { readBotsFileSync, writeJsonFileAtomic } from './bots_file_lock.js';
 import { parseJsonWithComments } from './order/utils/system.js';
 import { createBotKey } from './account_orders.js';
-import { seedBotEntry } from './bot_defaults.js';
+import { seedBotEntry, migrateLegacyOrderKeys } from './bot_defaults.js';
 import { isSameBotName } from './utils/sanitize_key.js';
 import { isPositiveNumber, isPositiveNumberOrPercent, toDecimal } from './order/utils/math.js';
 import { resolveMinCollateralIncreaseThreshold } from './cr_planner.js';
@@ -37,7 +37,11 @@ export interface BotEntry extends UnknownRecord {
     botKey?: string;
     botIndex?: number;
     preferredAccount?: string;
+    coreOrders?: UnknownRecord;
+    edgeOrders?: number | UnknownRecord;
+    /** @deprecated legacy key, migrated to `coreOrders` at read time. */
     activeOrders?: UnknownRecord;
+    /** @deprecated legacy key, migrated to `edgeOrders` at read time. */
     reserveOrders?: number | UnknownRecord;
     botFunds?: { buy?: unknown; sell?: unknown };
     debtPolicy?: BotDebtPolicy;
@@ -58,6 +62,11 @@ function loadSettingsFile(filePath: string, { silent = false, exitOnError = true
 
     try {
         const { config } = readBotsFileSync(filePath, parseJsonWithComments);
+        // Upgrade a pre-rename file in place: legacy `activeOrders`/
+        // `reserveOrders` keys become `coreOrders`/`edgeOrders` and the file is
+        // rewritten in canonical form. Idempotent; a failed write is
+        // non-fatal because the in-memory config is already canonical.
+        migratePersistedOrderKeys(filePath, config);
         return { config, filePath };
     } catch (err) {
         console.error('Failed to parse bot settings from', filePath);
@@ -84,6 +93,32 @@ function resolveRawBotEntries(settings: unknown): BotEntry[] {
     if (Array.isArray(settings.bots)) return settings.bots as BotEntry[];
     if (Object.keys(settings).length > 0) return [settings as BotEntry];
     return [];
+}
+
+/**
+ * Persist the user-settings key upgrade: rewrite bots.json in canonical form
+ * when any entry still carries the legacy `activeOrders`/`reserveOrders` keys.
+ * Runs at the read funnel so an old file is transparently migrated.
+ * @param {string} filePath - bots.json path
+ * @param {unknown} config - Parsed bots.json document (mutated in place)
+ * @returns {boolean} True when a legacy key was found and upgraded
+ */
+function migratePersistedOrderKeys(filePath: string, config: unknown): boolean {
+    let changed = false;
+    for (const entry of resolveRawBotEntries(config)) {
+        if (isUnknownRecord(entry) && ('activeOrders' in entry || 'reserveOrders' in entry)) {
+            migrateLegacyOrderKeys(entry);
+            changed = true;
+        }
+    }
+    if (changed) {
+        try {
+            writeJsonFileAtomic(filePath, config);
+        } catch (err) {
+            console.error('Failed to persist upgraded bot settings to', filePath, '-', getErrorMessage(err));
+        }
+    }
+    return changed;
 }
 
 function normalizeBotEntry(entry: BotEntry, index: number = 0): BotEntry {
@@ -122,34 +157,37 @@ function selectActiveBotEntries(settings: unknown): BotEntry[] {
 
 function validateBotEntry(b: BotEntry, i: number, src: string): string | null {
     const problems: string[] = [];
+    // Legacy `activeOrders`/`reserveOrders` keys are accepted and validated
+    // under their canonical names so a pre-rename bots.json is not rejected.
+    const entry = migrateLegacyOrderKeys({ ...b });
     const isCreditOnly = b.creditOnly === true;
-    const required = isCreditOnly ? [] : ['assetA', 'assetB', 'activeOrders', 'botFunds'];
+    const required = isCreditOnly ? [] : ['assetA', 'assetB', 'coreOrders', 'botFunds'];
     for (const k of required) {
-        if (!(k in b)) problems.push(`missing '${k}'`);
+        if (!(k in entry)) problems.push(`missing '${k}'`);
     }
 
-    if ('activeOrders' in b) {
-        if (typeof b.activeOrders !== 'object' || b.activeOrders === null) problems.push("'activeOrders' must be an object");
+    if ('coreOrders' in entry) {
+        if (typeof entry.coreOrders !== 'object' || entry.coreOrders === null) problems.push("'coreOrders' must be an object");
         else {
-            if (!('buy' in b.activeOrders)) problems.push("activeOrders missing 'buy'");
-            if (!('sell' in b.activeOrders)) problems.push("activeOrders missing 'sell'");
+            if (!('buy' in entry.coreOrders)) problems.push("coreOrders missing 'buy'");
+            if (!('sell' in entry.coreOrders)) problems.push("coreOrders missing 'sell'");
         }
     }
 
-    if ('reserveOrders' in b && b.reserveOrders !== undefined && b.reserveOrders !== null) {
-        if (typeof b.reserveOrders === 'number') {
-            // Legacy numeric form migrates at read time (resolveReserveCount):
+    if ('edgeOrders' in entry && entry.edgeOrders !== undefined && entry.edgeOrders !== null) {
+        if (typeof entry.edgeOrders === 'number') {
+            // Legacy numeric form migrates at read time (resolveEdgeCount):
             // { buy: n, sell: 0 }. Accept it here so a hand-edited bots.json
             // that bypassed the editor is not rejected for a form the runtime
             // still understands.
-            if (!Number.isInteger(b.reserveOrders) || b.reserveOrders < 0) problems.push("'reserveOrders' numeric form must be a non-negative integer");
-        } else if (typeof b.reserveOrders !== 'object' || Array.isArray(b.reserveOrders)) {
-            problems.push("'reserveOrders' must be an object {buy, sell}");
+            if (!Number.isInteger(entry.edgeOrders) || entry.edgeOrders < 0) problems.push("'edgeOrders' numeric form must be a non-negative integer");
+        } else if (typeof entry.edgeOrders !== 'object' || Array.isArray(entry.edgeOrders)) {
+            problems.push("'edgeOrders' must be an object {buy, sell}");
         } else {
             for (const side of ['buy', 'sell'] as const) {
-                const reserveOrders = b.reserveOrders as UnknownRecord;
-                const v = reserveOrders[side];
-                if (v !== undefined && (!Number.isInteger(Number(v)) || Number(v) < 0)) problems.push(`'reserveOrders.${side}' must be a non-negative integer`);
+                const edgeOrders = entry.edgeOrders as UnknownRecord;
+                const v = edgeOrders[side];
+                if (v !== undefined && (!Number.isInteger(Number(v)) || Number(v) < 0)) problems.push(`'edgeOrders.${side}' must be a non-negative integer`);
             }
         }
     }

@@ -9,7 +9,7 @@ async function makeManager() {
     const mgr = new OrderManager({
         assetA: 'BASE', assetB: 'QUOTE', startPrice: 100,
         minPrice: 50, maxPrice: 200, incrementPercent: 10, targetSpreadPercent: 20,
-        botFunds: { buy: 1000, sell: 10 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 10 }, coreOrders: { buy: 2, sell: 2 }
     });
     mgr.assets = { assetA: { precision: 5 }, assetB: { precision: 5 } };
     await mgr.setAccountTotals({ buy: 1000, sell: 10, buyFree: 1000, sellFree: 10 });

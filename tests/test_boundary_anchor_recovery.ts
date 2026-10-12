@@ -45,11 +45,11 @@ function buildSlots(count) {
 
 const NUMERIC_CFG = {
     startPrice: 0.0015,
-    activeOrders: { buy: 20, sell: 20 },
+    coreOrders: { buy: 20, sell: 20 },
 };
 const POOL_CFG = {
     startPrice: 'pool',
-    activeOrders: { buy: 20, sell: 20 },
+    coreOrders: { buy: 20, sell: 20 },
 };
 
 async function testP0a_NonNumericReferenceFallsToCenter() {
@@ -134,7 +134,7 @@ function engineWithPlan(targetGrid, boundaryIdx, fills = []) {
         assets: { assetA: { precision: 8 }, assetB: { precision: 5 } },
         config: {
             gridLimits: { PARTIAL_DUST_THRESHOLD_PERCENTAGE: 0.05 },
-            activeOrders: { buy: 20, sell: 20 },
+            coreOrders: { buy: 20, sell: 20 },
         },
     });
     return { engine, logs };

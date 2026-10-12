@@ -32,7 +32,7 @@ async function setupScenarioManager(activeCount = 3) {
         name: 'scenario-bot', assetA: 'BTS', assetB: 'USD',
         startPrice: 0.02, minPrice: 0.01, maxPrice: 0.04,
         botFunds: { buy: 1000, sell: 50000 },
-        activeOrders: { buy: activeCount, sell: activeCount },
+        coreOrders: { buy: activeCount, sell: activeCount },
         incrementPercent: 1, targetSpreadPercent: 2, weightDistribution: { buy: 0.5, sell: 0.5 }
     };
     const mgr = new OrderManager(cfg);

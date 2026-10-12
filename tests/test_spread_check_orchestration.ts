@@ -24,7 +24,7 @@ async function testMidGridEmptyPromotesInsteadOfResync() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 0 },
-        activeOrders: { buy: 4, sell: 0 },
+        coreOrders: { buy: 4, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -92,7 +92,7 @@ async function testRailEdgeEmptyRequestsResync() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 0 },
-        activeOrders: { buy: 4, sell: 0 },
+        coreOrders: { buy: 4, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });

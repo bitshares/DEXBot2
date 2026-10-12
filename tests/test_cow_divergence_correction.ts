@@ -21,7 +21,7 @@ async function testCOWDivergenceCorrection() {
         startPrice: 100,
         incrementPercent: 1,
         targetSpreadPercent: 2,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         botFunds: { buy: 1000, sell: 1000 }
     });
 
@@ -382,7 +382,7 @@ async function testCOWDivergenceCorrection() {
         // boundary 5, gap 2 → sellStart 8; gap band = slots 6,7.
         manager.boundaryIdx = 5;
         manager._gapSlots = 2;
-        manager.config.activeOrders.sell = 2;
+        manager.config.coreOrders.sell = 2;
 
         for (let i = 0; i < 10; i++) {
             const type = i <= 5 ? ORDER_TYPES.BUY : ORDER_TYPES.SELL;
@@ -466,7 +466,7 @@ async function testCOWDivergenceCorrection() {
             startPrice: 100,
             incrementPercent: 1,
             targetSpreadPercent: 2,
-            activeOrders: { buy: 5, sell: 3 },
+            coreOrders: { buy: 5, sell: 3 },
             botFunds: { buy: 1000, sell: 1000 }
         });
         shelfMgr.assets = {

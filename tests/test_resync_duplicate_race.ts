@@ -96,7 +96,7 @@ async function testDuplicateRacePrevention() {
     console.log("RUNNING RECONCILE: Expecting Phase 2 update for slot-5 to fail, trigger sync, and match slot-6");
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 2 } },
+        config: { coreOrders: { sell: 2 } },
         account: 'test',
         privateKey: 'test',
         chainOrders: chainOrdersMock,

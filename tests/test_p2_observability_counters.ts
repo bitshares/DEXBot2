@@ -195,7 +195,7 @@ function buildDriftHarness() {
             incrementPercent: 1,
             targetSpreadPercent: 2,
             gridLimits: { PARTIAL_DUST_THRESHOLD_PERCENTAGE: 5 },
-            activeOrders: { buy: 1, sell: 1 },
+            coreOrders: { buy: 1, sell: 1 },
             weightDistribution: { buy: 0.5, sell: 0.5 },
             feeParams: { BTS_RESERVATION_MULTIPLIER: 1.2 },
             min_BTS_value: 0,

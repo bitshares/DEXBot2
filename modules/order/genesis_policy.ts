@@ -6,7 +6,7 @@
  * missing is therefore not a degraded grid -- it is an undefined one: every
  * consumer that reads `priceForSlot(idx, genesis)` has no authority for a
  * slot's price (nearest-slot adoption, the materialize descriptor-price
- * fallback, reserve-edge anchoring, the `isSlotInRail` fail-open), and that is
+ * fallback, edge anchoring, the `isSlotInRail` fail-open), and that is
  * precisely the state on which an off-grid price became grid evidence and got
  * re-emitted. The tolerance matcher that used to cover it has been removed:
  * E2 refuses to sync such a grid and asks for the resync that re-derives the

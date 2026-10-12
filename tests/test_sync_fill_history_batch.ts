@@ -491,7 +491,7 @@ function boundaryShiftOf(filledOrder, allSlots) {
         [filledOrder],
         1,
         allSlots,
-        { startPrice: 1000, activeOrders: { sell: 5, buy: 5 } },
+        { startPrice: 1000, coreOrders: { sell: 5, buy: 5 } },
         3
     );
     return boundaryIdx;

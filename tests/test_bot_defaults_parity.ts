@@ -47,7 +47,7 @@ const SETTINGS_DOC_KEYS = [
     'LAUNCHER', 'NODES',
 ];
 
-const NESTED_DEFAULT_KEYS = ['weightDistribution', 'botFunds', 'activeOrders', 'reserveOrders'];
+const NESTED_DEFAULT_KEYS = ['weightDistribution', 'botFunds', 'coreOrders', 'edgeOrders'];
 
 function testSettingsDocShapeAndRoundTrip() {
     console.log(' - parity: settings-doc key set, round-trip, fixed point...');
@@ -124,14 +124,14 @@ function testWhitelistLiteralsLiveOnlyInConstants() {
 function testRuntimeConfigMatchesHistoricalSpread() {
     console.log(' - parity: seedBotRuntimeConfig == { ...DEFAULT_CONFIG, ...config }...');
 
-    const provided = { activeOrders: { buy: 3 }, minPrice: '4x', logFile: '/tmp/x.log' };
+    const provided = { coreOrders: { buy: 3 }, minPrice: '4x', logFile: '/tmp/x.log' };
     const spread = { ...DEFAULT_CONFIG, ...provided };
     const seeded = seedBotRuntimeConfig(provided);
 
     assert.deepStrictEqual(seeded, spread, 'values must equal the historical spread result');
     assert.deepStrictEqual(Object.keys(seeded), Object.keys(spread),
         'key order must equal the historical spread (deep clone of defaults must not reorder)');
-    assert.strictEqual(seeded.activeOrders, provided.activeOrders,
+    assert.strictEqual(seeded.coreOrders, provided.coreOrders,
         'provided nested values keep their reference (spread semantics)');
     for (const key of NESTED_DEFAULT_KEYS) {
         assert.notStrictEqual(seeded[key], DEFAULT_CONFIG[key],

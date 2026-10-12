@@ -27,7 +27,7 @@ function makeBot(processFilledOrdersImpl: any) {
         minPrice: 0.01,
         maxPrice: 0.04,
         botFunds: { buy: 100, sell: 100 },
-        activeOrders: { buy: 2, sell: 2 },
+        coreOrders: { buy: 2, sell: 2 },
         incrementPercent: 1,
         weightDistribution: { buy: 0.5, sell: 0.5 },
     });

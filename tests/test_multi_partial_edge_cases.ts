@@ -14,7 +14,7 @@ async function setupManager(gridSize = 6) {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 60, sell: 60 },
-        activeOrders: { buy: 2, sell: 2 },
+        coreOrders: { buy: 2, sell: 2 },
         incrementPercent: 1,
         weightDistribution: { buy: 0.5, sell: 0.5 }
     };

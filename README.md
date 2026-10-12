@@ -246,8 +246,8 @@ Grouped exactly as the bot editor shows them (`dexbot bot` → `2) Modify bot` �
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | **`botFunds`** | object | `Sell`/`Buy` — capital allocation: `{ sell: "100%", buy: "100%" }`. Numbers or percentage strings |
-| **`activeOrders`** | object | `MarketOrder` — target active orders per side, counted closest to the market: `{ sell: 20, buy: 20 }` |
-| **`reserveOrders`** | object | `EdgeOrder` — edge-pinned insurance orders resting live outside the active window, to catch fat fingers: `{ buy: 0, sell: 0 }` (`buy` pins the grid floor, `sell` the grid ceiling; `0` disables per side) |
+| **`coreOrders`** | object | `CoreOrder` — target active orders per side, counted closest to the market: `{ sell: 20, buy: 20 }` |
+| **`edgeOrders`** | object | `EdgeOrder` — edge-pinned insurance orders resting live outside the active window, to catch fat fingers: `{ buy: 0, sell: 0 }` (`buy` pins the grid floor, `sell` the grid ceiling; `0` disables per side) |
 
 **`6) Adapter`**
 

@@ -13,14 +13,14 @@ console.log('=== INITIAL GRID CONFIGURATION ===\n');
 const config = {
     incrementPercent: 1,
     weightDistribution: { buy: 0.5, sell: 0.5 },
-    activeOrders: { buy: 5, sell: 5 },
+    coreOrders: { buy: 5, sell: 5 },
     startPrice: 0.50,
     assetA: 'BTS',
     assetB: 'USDT'
 };
 
 console.log(`Market Price: ${config.startPrice} USDT/BTS`);
-console.log(`Active Orders: ${JSON.stringify(config.activeOrders)}`);
+console.log(`Active Orders: ${JSON.stringify(config.coreOrders)}`);
 console.log(`Weight Distribution: ${JSON.stringify(config.weightDistribution)}`);
 console.log(`Increment Percent: ${config.incrementPercent}%\n`);
 

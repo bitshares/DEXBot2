@@ -2318,12 +2318,12 @@ async function testRecoverFromPersistedGridBloated() {
     // maxAllowed = 60 + gap + 5 ≈ 67. But we inject 100 extra VIRTUAL
     // slots at tightly clustered prices (all at 1.0), so gridSize=160
     // far exceeds the price-range estimate from min/max prices.
-    const activeOrders = [];
-    for (let i = 0; i < 30; i++) activeOrders.push({
+    const coreOrders = [];
+    for (let i = 0; i < 30; i++) coreOrders.push({
         id: 'b' + i, type: 'buy', state: 'active',
         price: 1.0 * Math.pow(1.003, i), size: 10, orderId: '1.7.' + i,
     });
-    for (let i = 0; i < 30; i++) activeOrders.push({
+    for (let i = 0; i < 30; i++) coreOrders.push({
         id: 's' + i, type: 'sell', state: 'active',
         price: 1.0 * Math.pow(1.003, 100 + i), size: 10, orderId: '1.7.' + (100 + i),
     });
@@ -2332,9 +2332,9 @@ async function testRecoverFromPersistedGridBloated() {
         id: 'x' + i, type: 'spread', state: 'virtual',
         price: 1.0, size: 0, orderId: '',
     });
-    const persistedGrid = [...activeOrders, ...virtualExtra];
+    const persistedGrid = [...coreOrders, ...virtualExtra];
 
-    const chainState = activeOrders.map((o: any) => ({
+    const chainState = coreOrders.map((o: any) => ({
         id: o.orderId, type: o.type, price: o.price, for_sale: o.size,
     }));
 

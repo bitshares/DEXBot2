@@ -27,7 +27,7 @@ function makeMgr() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 910, sell: 100 },
-        activeOrders: { buy: 2, sell: 1 },
+        coreOrders: { buy: 2, sell: 1 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });

@@ -92,8 +92,8 @@ orders against the existing BitShares order book:
 |---|---|---|
 | `incrementPercent` | 0.5 | Price step between grid levels, *geometric* spacing: `s = 1 + inc/100` |
 | `targetSpreadPercent` | 2 | Width of the spread zone between best buy and best sell |
-| `activeOrders` | `{sell: 20, buy: 20}` | Number of live orders kept on each side |
-| `reserveOrders` | `{buy: 0, sell: 0}` | Edge-pinned live orders outside the window (dip/spike insurance, 0 disables per side) |
+| `coreOrders` | `{sell: 20, buy: 20}` | Number of live orders kept on each side |
+| `edgeOrders` | `{buy: 0, sell: 0}` | Edge-pinned live orders outside the window (dip/spike insurance, 0 disables per side) |
 | `weightDistribution` | `{sell: 1, buy: 1}` | Geometric weight for order sizing |
 | `botFunds` | — | Capital committed per side |
 | `gridLimits` | — | Price bounds, min order size, dust threshold |
@@ -305,7 +305,7 @@ quote deployment at `w = 1`, this density peaks in the interior and decays in
 `ρ = 0.5` the peak sits at `p ≈ 2`). **The peak is at a fixed price, not at
 the market.** The profile `y(p)` is fully determined by `(k, ρ)`: `k` scales
 its amplitude, `ρ` its shape, and nothing in the invariant references the
-current market price — the hump sits wherever `ρ` (and the reserve-unit
+current market price — the hump sits wherever `ρ` (and the edge-unit
 normalization) puts it, and trading only slides the active point along it
 (§2.4). Placing the peak *at* a chosen anchor therefore requires a unit
 normalization — `(x/X0)^ρ + (y/Y0)^ρ = 1`, whose `X0`/`Y0` ratio shifts the
@@ -339,7 +339,7 @@ curve-side expression of DEXBot's per-side intent (sell tight / buy deep) —
 see §3.1 for the derivation and the DEXBot-side asymmetry it mirrors.
 
 **Important limitation — shape only, not holdings.** Dual-`ρ` is **not** a
-holdings-ratio knob. At any given price the reserve ratio is fixed by the
+holdings-ratio knob. At any given price the edge ratio is fixed by the
 invariant: single-`ρ` is 50:50 only at `p = 1` and drifts with `p` (§2.2,
 holdings note), dual-`ρ` holds one fixed ratio per price with the 50:50 point
 shifted off `p = 1`. Neither
@@ -429,7 +429,7 @@ generic Balancer clone):
 |---|---|
 | `botFunds.sell / botFunds.buy` (capital per side) | `w = Vsell_value / (Vsell_value + Vbuy_value)` at `P0` |
 | `gridLimits` (min/max price) | `[P_low, P_high]` — direct copy, tails cut exactly here |
-| `activeOrders × incrementPercent` (range span) | range width when no explicit `gridLimits` (e.g. 20×0.5% ≈ ±10%) |
+| `coreOrders × incrementPercent` (range span) | range width when no explicit `gridLimits` (e.g. 20×0.5% ≈ ±10%) |
 | `weightDistribution.sell / .buy` (decay tilt) | tilt *inside* the range (v2 `ρ`-tilt, below), or approximated by skewing `w` ±5–10% |
 | AMA `p0` | anchor `P0` — set at creation, no keeper needed while price stays in range |
 | `targetSpreadPercent` | fee rate: wider spread intent → higher fee |
@@ -629,7 +629,7 @@ grid's decay *directions* rather than its exact quote density.
 | DEXBot2 concept | Curve equivalent |
 |---|---|
 | AMA center `p_0` | the curve's *density peak* — fixed at creation by `ρ` + unit normalization (§2.2); the *active point* slides automatically, but the peak does not — matching the grid's re-centering needs dynamic `ρ` (§3.3) |
-| `activeOrders × incrementPercent` (range span) | width of the concentrated region, set by `ρ` |
+| `coreOrders × incrementPercent` (range span) | width of the concentrated region, set by `ρ` |
 | `weightDistribution` (decay rate) | `ρ` (per side) — **shape only** (tail decay rates), split fixed by price |
 | `botFunds` sell/buy split (holdings ratio) | **no CES equivalent** — the split is fixed by price (single-`ρ`: 50:50 only at `p = 1`, drifts with `p`; dual-`ρ`: one fixed ratio per price); a free split needs the AB pool's `w` (§2.5) |
 | `targetSpreadPercent` | implicit — effective spread is *tightest* near the liquidity peak (`r^ρ = ρ`) and widens toward the tails |
@@ -806,7 +806,7 @@ Per concept, in deployment-priority order:
 - **For asymmetric books with no tail waste (Q4):** deploy the **AB pool**
   (§2.5) — `(w, P_low, P_high, fee)`, single range, closed-form swaps. `w`
   from `botFunds` ratio, bounds from `gridLimits` (or
-  `activeOrders × incrementPercent`), anchor `P0` from AMA. The v2
+  `coreOrders × incrementPercent`), anchor `P0` from AMA. The v2
   `ρ_high/ρ_low` tilt inside the bounds is the upgrade path if backtests
   justify the custom invariant.
 - **Fusion option:** a keeper that updates `ρ_high`/`ρ_low` from the same

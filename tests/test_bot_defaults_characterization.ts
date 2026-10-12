@@ -7,7 +7,7 @@
 // builder (buildDefaultGeneralSettings in modules/constants.ts):
 //
 //   * normalizeBotDraft   — editor seed: exact key set, null/partial preservation,
-//                           falsy-replace count objects, reserveOrders migration,
+//                           falsy-replace count objects, edgeOrders migration,
 //                           gridPrice now seeded from DEFAULT_CONFIG (Phase 2 fix).
 //   * normalizeBotEntry   — runtime entry: active default sourced from
 //                           DEFAULT_CONFIG (Phase 3), raw-value passthrough.
@@ -50,7 +50,7 @@ const ALL_TRUE = { ama: true, dynamicWeight: true, asymmetricBounds: true };
 // required-key check for assetA/assetB.
 const DRAFT_EXCLUDED_KEYS = ['assetA', 'assetB', 'creditOnly', 'min_BTS_value'];
 
-const COUNT_OBJECT_KEYS = ['weightDistribution', 'botFunds', 'activeOrders'];
+const COUNT_OBJECT_KEYS = ['weightDistribution', 'botFunds', 'coreOrders'];
 
 const SCALAR_SEED_KEYS = [
     'active', 'dryRun', 'minPrice', 'maxPrice',
@@ -77,7 +77,7 @@ function testDraftSnapshot() {
     const draft = normalizeBotDraft({});
     const expected: Record<string, any> = {};
     for (const key of COUNT_OBJECT_KEYS) expected[key] = { ...DEFAULT_CONFIG[key] };
-    expected.reserveOrders = { ...DEFAULT_CONFIG.reserveOrders };
+    expected.edgeOrders = { ...DEFAULT_CONFIG.edgeOrders };
     for (const key of SCALAR_SEED_KEYS) expected[key] = DEFAULT_CONFIG[key];
     // Phase 2 fix: gridPrice is seeded from DEFAULT_CONFIG.gridPrice (the
     // repo default is "ama3"; a null default still falls back to null),
@@ -89,7 +89,7 @@ function testDraftSnapshot() {
     const keySet = Object.keys(draft).sort();
     assert.deepStrictEqual(
         keySet,
-        [...COUNT_OBJECT_KEYS, 'reserveOrders', ...SCALAR_SEED_KEYS].sort(),
+        [...COUNT_OBJECT_KEYS, 'edgeOrders', ...SCALAR_SEED_KEYS].sort(),
         'draft key set must stay exactly the seeded 12 keys'
     );
     for (const key of DRAFT_EXCLUDED_KEYS) {
@@ -97,7 +97,7 @@ function testDraftSnapshot() {
     }
 
     // Seeded count objects must be fresh copies, never shared DEFAULT_CONFIG refs.
-    for (const key of [...COUNT_OBJECT_KEYS, 'reserveOrders']) {
+    for (const key of [...COUNT_OBJECT_KEYS, 'edgeOrders']) {
         assert.notStrictEqual(draft[key], DEFAULT_CONFIG[key], `draft.${key} must not alias DEFAULT_CONFIG.${key}`);
     }
     assert.notStrictEqual(draft, DEFAULT_CONFIG, 'draft must be a new object');
@@ -133,33 +133,49 @@ function testDraftPreservesNullsAndPartials() {
     const partial = normalizeBotDraft({
         weightDistribution: { buy: 7 },
         botFunds: {},
-        activeOrders: { sell: 1 },
-        reserveOrders: { buy: 2 },
+        coreOrders: { sell: 1 },
+        edgeOrders: { buy: 2 },
     });
     assert.deepStrictEqual(partial.weightDistribution, { buy: 7 }, 'partial weightDistribution kept (no deep-fill)');
     assert.deepStrictEqual(partial.botFunds, {}, 'empty botFunds kept');
-    assert.deepStrictEqual(partial.activeOrders, { sell: 1 }, 'partial activeOrders kept (no deep-fill)');
-    assert.deepStrictEqual(partial.reserveOrders, { buy: 2 }, 'partial reserveOrders kept (no deep-fill)');
+    assert.deepStrictEqual(partial.coreOrders, { sell: 1 }, 'partial coreOrders kept (no deep-fill)');
+    assert.deepStrictEqual(partial.edgeOrders, { buy: 2 }, 'partial edgeOrders kept (no deep-fill)');
 
     // Count-object keys replace on ANY falsy value (not just undefined/null).
     const falsy = normalizeBotDraft({
         weightDistribution: 0,
         botFunds: '',
-        activeOrders: false,
+        coreOrders: false,
     });
     assert.deepStrictEqual(falsy.weightDistribution, { ...DEFAULT_CONFIG.weightDistribution }, 'weightDistribution:0 → default');
     assert.deepStrictEqual(falsy.botFunds, { ...DEFAULT_CONFIG.botFunds }, "botFunds:'' → default");
-    assert.deepStrictEqual(falsy.activeOrders, { ...DEFAULT_CONFIG.activeOrders }, 'activeOrders:false → default');
+    assert.deepStrictEqual(falsy.coreOrders, { ...DEFAULT_CONFIG.coreOrders }, 'coreOrders:false → default');
 }
 
 function testDraftReserveOrdersMigrations() {
-    console.log(' - draft: reserveOrders number migration + invalid replacement...');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: 7 }).reserveOrders, { buy: 7, sell: 0 }, '7 → {buy:7, sell:0}');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: -7 }).reserveOrders, { buy: 0, sell: 0 }, '-7 clamps to 0');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: 2.9 }).reserveOrders, { buy: 2, sell: 0 }, 'floors decimals');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: null }).reserveOrders, { ...DEFAULT_CONFIG.reserveOrders }, 'null → default');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: [] }).reserveOrders, { ...DEFAULT_CONFIG.reserveOrders }, 'array → default');
-    assert.deepStrictEqual(normalizeBotDraft({ reserveOrders: 'x' }).reserveOrders, { ...DEFAULT_CONFIG.reserveOrders }, 'string → default');
+    console.log(' - draft: edgeOrders number migration + invalid replacement...');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: 7 }).edgeOrders, { buy: 7, sell: 0 }, '7 → {buy:7, sell:0}');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: -7 }).edgeOrders, { buy: 0, sell: 0 }, '-7 clamps to 0');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: 2.9 }).edgeOrders, { buy: 2, sell: 0 }, 'floors decimals');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: null }).edgeOrders, { ...DEFAULT_CONFIG.edgeOrders }, 'null → default');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: [] }).edgeOrders, { ...DEFAULT_CONFIG.edgeOrders }, 'array → default');
+    assert.deepStrictEqual(normalizeBotDraft({ edgeOrders: 'x' }).edgeOrders, { ...DEFAULT_CONFIG.edgeOrders }, 'string → default');
+}
+
+function testDraftLegacyKeyAliases() {
+    console.log(' - draft: legacy activeOrders/reserveOrders alias to coreOrders/edgeOrders...');
+    const legacy = normalizeBotDraft({
+        activeOrders: { sell: 7, buy: 8 },
+        reserveOrders: 3,
+    });
+    assert.deepStrictEqual(legacy.coreOrders, { sell: 7, buy: 8 }, 'activeOrders → coreOrders');
+    assert.deepStrictEqual(legacy.edgeOrders, { buy: 3, sell: 0 }, 'numeric reserveOrders → edgeOrders');
+    assert.ok(!('activeOrders' in legacy), 'legacy activeOrders dropped');
+    assert.ok(!('reserveOrders' in legacy), 'legacy reserveOrders dropped');
+
+    // Canonical key wins when both are present.
+    const both = normalizeBotDraft({ coreOrders: { buy: 1, sell: 1 }, activeOrders: { buy: 9, sell: 9 } });
+    assert.deepStrictEqual(both.coreOrders, { buy: 1, sell: 1 }, 'coreOrders wins over legacy activeOrders');
 }
 
 function testDraftGridPriceFollowsDefaultConfig() {
@@ -239,10 +255,18 @@ function testEntryNormalization() {
 
     // Entry normalization seeds NOTHING else: no count objects, no pair keys.
     const bare = normalizeBotEntry({ name: 'bare' }, 0);
-    for (const key of [...COUNT_OBJECT_KEYS, 'reserveOrders', ...DRAFT_EXCLUDED_KEYS, ...SCALAR_SEED_KEYS]) {
+    for (const key of [...COUNT_OBJECT_KEYS, 'edgeOrders', ...DRAFT_EXCLUDED_KEYS, ...SCALAR_SEED_KEYS]) {
         if (key === 'active') continue;
         assert.ok(!(key in bare), `normalizeBotEntry must not seed '${key}' (validation relies on key absence)`);
     }
+
+    // Legacy keys alias to the canonical names at the runtime-load funnel; the
+    // numeric reserve form stays numeric here and is migrated by resolveEdgeCount.
+    const legacy = normalizeBotEntry({ name: 'l', activeOrders: { buy: 4, sell: 5 }, reserveOrders: 2 }, 0);
+    assert.deepStrictEqual(legacy.coreOrders, { buy: 4, sell: 5 }, 'legacy activeOrders aliased to coreOrders');
+    assert.strictEqual(legacy.edgeOrders, 2, 'legacy numeric reserveOrders aliased to edgeOrders');
+    assert.ok(!('activeOrders' in legacy), 'legacy activeOrders dropped on normalize');
+    assert.ok(!('reserveOrders' in legacy), 'legacy reserveOrders dropped on normalize');
 }
 
 function testManagerConfigShape() {
@@ -254,7 +278,7 @@ function testManagerConfigShape() {
     // Phase 3: absent nested keys are deep CLONES — never shared references
     // with the global DEFAULT_CONFIG (the historical shallow spread aliased
     // them, so mutating manager.config.botFunds corrupted the default).
-    for (const key of [...COUNT_OBJECT_KEYS, 'reserveOrders']) {
+    for (const key of [...COUNT_OBJECT_KEYS, 'edgeOrders']) {
         assert.notStrictEqual(mgr.config[key], DEFAULT_CONFIG[key],
             `mgr.config.${key} must be a clone, not an alias of DEFAULT_CONFIG.${key}`);
     }
@@ -264,15 +288,15 @@ function testManagerConfigShape() {
         'mutating manager config must not leak into the global DEFAULT_CONFIG');
 
     // Provided values replace wholesale — no deep-merge of partial objects.
-    const providedActiveOrders = { buy: 3 };
-    const mgr2 = new OrderManager({ activeOrders: providedActiveOrders, minPrice: '4x' });
+    const providedCoreOrders = { buy: 3 };
+    const mgr2 = new OrderManager({ coreOrders: providedCoreOrders, minPrice: '4x' });
     assert.deepStrictEqual(
         mgr2.config,
-        { ...DEFAULT_CONFIG, activeOrders: providedActiveOrders, minPrice: '4x' },
+        { ...DEFAULT_CONFIG, coreOrders: providedCoreOrders, minPrice: '4x' },
         'provided keys replace defaults wholesale; everything else equals DEFAULT_CONFIG'
     );
-    assert.deepStrictEqual(mgr2.config.activeOrders, { buy: 3 }, 'partial provided activeOrders NOT deep-filled');
-    assert.strictEqual(mgr2.config.activeOrders, providedActiveOrders,
+    assert.deepStrictEqual(mgr2.config.coreOrders, { buy: 3 }, 'partial provided coreOrders NOT deep-filled');
+    assert.strictEqual(mgr2.config.coreOrders, providedCoreOrders,
         'provided nested object keeps its reference (spread semantics callers may rely on)');
 
     // Spread-equivalence: an explicit undefined value overrides the default
@@ -316,6 +340,7 @@ function main() {
     testDraftDoesNotMutateInputAndPassesThroughExtraKeys();
     testDraftPreservesNullsAndPartials();
     testDraftReserveOrdersMigrations();
+    testDraftLegacyKeyAliases();
     testDraftGridPriceFollowsDefaultConfig();
     testDraftGridPriceUnsetNormalization();
     testDraftStartPriceFalsyFallsBackToPool();

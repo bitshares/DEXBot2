@@ -1877,27 +1877,27 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
                 .sort((a, b) => sideName === 'buy' ? b.price - a.price : a.price - b.price);
 
             // Calculate target count
-            const activeOrdersCfg = manager.config.activeOrders;
-            const baseTargetCount = (activeOrdersCfg && typeof activeOrdersCfg === 'object' && Number.isFinite(Number(activeOrdersCfg[sideName])))
-                ? Math.max(1, Number(activeOrdersCfg[sideName]))
+            const coreOrdersCfg = manager.config.coreOrders;
+            const baseTargetCount = (coreOrdersCfg && typeof coreOrdersCfg === 'object' && Number.isFinite(Number(coreOrdersCfg[sideName])))
+                ? Math.max(1, Number(coreOrdersCfg[sideName]))
                 : currentOnChainOrders.length;
             const targetCount = baseTargetCount;
 
-            // Determine desired slots (closest to market) + edge-pinned reserves.
-            // Buys pin at the floor, sells at the ceiling. Reserves rest live
+            // Determine desired slots (closest to market) + edge-pinned orders.
+            // Buys pin at the floor, sells at the ceiling. Edge orders rest live
             // without consuming the window: the middle stays undesired and gets
             // cancelled as surplus.
             const windowSlots = allSideSlots.slice(0, targetCount);
             let desiredSlots = windowSlots;
-            const reserveCount = OrderUtils.resolveReserveCount(manager.config, sideName);
-            if (reserveCount > 0) {
+            const edgeCount = OrderUtils.resolveEdgeCount(manager.config, sideName);
+            if (edgeCount > 0) {
                 const asc = allSideSlots.slice().sort((a, b) => a.price - b.price);
                 const edge = sideName === 'sell' ? 'ceiling' : 'floor';
                 // Both edges anchor at the live grid's own edge (single source).
-                const edgeAnchor = OrderUtils.resolveLiveReserveEdgeAnchorPrice(manager, sideName);
-                const edgeSlots = OrderUtils.selectReserveEdgeSlots(
+                const edgeAnchor = OrderUtils.resolveLiveEdgeAnchorPrice(manager, sideName);
+                const edgeSlots = OrderUtils.selectEdgeSlots(
                     asc,
-                    reserveCount,
+                    edgeCount,
                     new Set(windowSlots.map((s) => s.id)),
                     edge,
                     edgeAnchor
@@ -2039,14 +2039,14 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
         // Refill-slot wire (boundary-hold): unpairable hole-CREATEs surviving
         // the fold above justify the pending boundary shift. The executor
         // holds the committed boundary when a listed refill is guard-skipped.
-        // Reserve-ladder CREATEs are excluded by collectRefillSlotIds — static
+        // Edge-ladder CREATEs are excluded by collectRefillSlotIds — static
         // edge insurance, never a justification for a boundary shift.
         const refillSlotIds = OrderUtils.collectRefillSlotIds(actions, {
             config: manager.config,
             slots: manager.orders,
             edgeAnchors: {
-                buy: OrderUtils.resolveLiveReserveEdgeAnchorPrice(manager, 'buy'),
-                sell: OrderUtils.resolveLiveReserveEdgeAnchorPrice(manager, 'sell')
+                buy: OrderUtils.resolveLiveEdgeAnchorPrice(manager, 'buy'),
+                sell: OrderUtils.resolveLiveEdgeAnchorPrice(manager, 'sell')
             },
             manager
         });

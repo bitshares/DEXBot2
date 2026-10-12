@@ -49,7 +49,7 @@ function makeManager() {
         assetB: 'QUOTE',
         startPrice: 1052.06,
         botFunds: { buy: 20000, sell: 20000 },
-        activeOrders: { buy: 20, sell: 20 },
+        coreOrders: { buy: 20, sell: 20 },
         incrementPercent: INCREMENT,
         targetSpreadPercent: 1.5,
     });

@@ -77,7 +77,7 @@ const require = createRequire(import.meta.url);
 
 import { ORDER_TYPES, ORDER_STATES, PIPELINE_TIMING, TIMING, FEE_PARAMETERS, GRID_LIMITS } from '../constants.js';
 import { resolveAccountRef } from './utils/system.js';
-import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, applyChainSizeToGridOrder, convertToSpreadPlaceholder, resolveReserveCount } from './utils/order.js';
+import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, applyChainSizeToGridOrder, convertToSpreadPlaceholder, resolveEdgeCount } from './utils/order.js';
 import { isSlotInRail, floatToBlockchainInt } from './utils/math.js';
 import * as Format from './format.js';
 import * as fundRegistry from '../fund_registry.js';
@@ -478,19 +478,19 @@ class Accountant {
 
          // STEP 6: Calculate available funds (what we can spend right now)
           // Uses utils::calculateAvailableFundsValue which deducts committe amounts
-          // Reserve ladder rides on the side counts for fee reservation: reserves
+          // Edge ladder rides on the side counts for fee reservation: edge orders
           // rest live on-chain and pay creation fees like window orders.
-          const reserveBuy = resolveReserveCount(mgr.config, 'buy');
-          const reserveSell = resolveReserveCount(mgr.config, 'sell');
-          const feeActiveOrders = mgr.config.activeOrders && typeof mgr.config.activeOrders === 'object'
+          const edgeBuy = resolveEdgeCount(mgr.config, 'buy');
+          const edgeSell = resolveEdgeCount(mgr.config, 'sell');
+          const feeCoreOrders = mgr.config.coreOrders && typeof mgr.config.coreOrders === 'object'
               ? {
-                  ...mgr.config.activeOrders,
-                  buy: Math.max(0, Number(mgr.config.activeOrders.buy) || 0) + reserveBuy,
-                  sell: Math.max(0, Number(mgr.config.activeOrders.sell) || 0) + reserveSell,
+                  ...mgr.config.coreOrders,
+                  buy: Math.max(0, Number(mgr.config.coreOrders.buy) || 0) + edgeBuy,
+                  sell: Math.max(0, Number(mgr.config.coreOrders.sell) || 0) + edgeSell,
               }
-              : mgr.config.activeOrders;
-          mgr.funds.available.buy = calculateAvailableFundsValue('buy', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, feeActiveOrders, mgr.config.min_BTS_value, mgr.config?.feeParams ?? null);
-          mgr.funds.available.sell = calculateAvailableFundsValue('sell', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, feeActiveOrders, mgr.config.min_BTS_value, mgr.config?.feeParams ?? null);
+              : mgr.config.coreOrders;
+          mgr.funds.available.buy = calculateAvailableFundsValue('buy', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, feeCoreOrders, mgr.config.min_BTS_value, mgr.config?.feeParams ?? null);
+          mgr.funds.available.sell = calculateAvailableFundsValue('sell', mgr.accountTotals, mgr.funds, mgr.config.assetA, mgr.config.assetB, feeCoreOrders, mgr.config.min_BTS_value, mgr.config?.feeParams ?? null);
 
          // Ensure percentage-based allocations are applied to the newly calculated totals
          if (typeof mgr.applyBotFundsAllocation === 'function') {

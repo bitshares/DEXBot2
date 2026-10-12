@@ -41,7 +41,7 @@ async function testFeeAccounting() {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1
     });
 
@@ -150,7 +150,7 @@ async function testFeeSettlementCorrectness() {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1
     });
 
@@ -198,7 +198,7 @@ async function testInsufficientFundsDeferral() {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1
     });
 

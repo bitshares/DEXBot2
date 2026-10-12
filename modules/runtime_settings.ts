@@ -58,7 +58,7 @@ export const RUNTIME_SETTINGS_KEYS: readonly string[] = [
  * process restart (Issue #27 follow-up). Single source of truth — consumed
  * by the live bot-config check (dexbot_maintenance_runtime.ts) and the
  * `dexbot bot` editor hint (account_bots.ts) so the two can never drift.
- * activeOrders/reserveOrders are re-read via the targeted-reconcile path,
+ * coreOrders/edgeOrders are re-read via the targeted-reconcile path,
  * botFunds via recalculateFunds, weightDistribution base via
  * refreshDynamicWeightDistribution, min_BTS_value via the fee/acquisition
  * reads, and debtPolicy via the credit runtime's live getter (next credit
@@ -66,8 +66,8 @@ export const RUNTIME_SETTINGS_KEYS: readonly string[] = [
  * (re)starts the credit watchdog, removal stops it).
  */
 export const BOT_LIVE_CONFIG_KEYS: readonly string[] = [
-    'activeOrders',
-    'reserveOrders',
+    'coreOrders',
+    'edgeOrders',
     'botFunds',
     'weightDistribution',
     'min_BTS_value',

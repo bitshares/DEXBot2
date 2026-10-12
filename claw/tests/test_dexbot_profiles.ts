@@ -148,7 +148,7 @@ async function testApplyBotSettingsPatchAcceptsNumericStringBounds() {
         targetSpreadPercent: 1.6,
         weightDistribution: { sell: 0.5, buy: 0.5 },
         botFunds: { sell: '100%', buy: '100%' },
-        activeOrders: { sell: 20, buy: 20 }
+        coreOrders: { sell: 20, buy: 20 }
       }
     ]
   }, null, 2));
@@ -188,7 +188,7 @@ async function testApplyBotSettingsPatchRejectsUnknownNestedPatchKeys() {
         targetSpreadPercent: 1.6,
         weightDistribution: { sell: 0.5, buy: 0.5 },
         botFunds: { sell: '100%', buy: '100%' },
-        activeOrders: { sell: 20, buy: 20 }
+        coreOrders: { sell: 20, buy: 20 }
       }
     ]
   }, null, 2));
@@ -224,7 +224,7 @@ async function testApplyBotSettingsPatchWritesTriggerAtomically() {
         name: 'solo',
         assetA: 'USD',
         assetB: 'BTS',
-        activeOrders: { sell: 20, buy: 20 },
+        coreOrders: { sell: 20, buy: 20 },
         botFunds: { sell: '100%', buy: '100%' },
         weightDistribution: { sell: 0.5, buy: 0.5 }
       }
@@ -307,7 +307,7 @@ async function testInvalidPersistedOffsetPolicyBlocksUnrelatedPatch() {
         incrementPercent: -1,
         weightDistribution: { sell: 0.5, buy: 0.5 },
         botFunds: { sell: '100%', buy: '100%' },
-        activeOrders: { sell: 20, buy: 20 }
+        coreOrders: { sell: 20, buy: 20 }
       }
     ]
   }, null, 2));
@@ -411,7 +411,7 @@ async function testWeightDistributionRejectsNullAndFalseValues() {
         targetSpreadPercent: 1.6,
         weightDistribution: { sell: 0.5, buy: 0.5 },
         botFunds: { sell: '100%', buy: '100%' },
-        activeOrders: { sell: 20, buy: 20 }
+        coreOrders: { sell: 20, buy: 20 }
       }
     ]
   }, null, 2));
@@ -447,7 +447,7 @@ async function testNestedPatchValidationDoesNotDuplicateErrors() {
         targetSpreadPercent: 1.6,
         weightDistribution: { sell: 0.5, buy: 0.5 },
         botFunds: { sell: '100%', buy: '100%' },
-        activeOrders: { sell: 20, buy: 20 }
+        coreOrders: { sell: 20, buy: 20 }
       }
     ]
   }, null, 2));
@@ -476,7 +476,7 @@ async function testNestedStateValidationRejectsWrongContainerTypes() {
         assetA: 'USD',
         assetB: 'BTS',
         weightDistribution: 'oops',
-        activeOrders: 0,
+        coreOrders: 0,
         botFunds: true
       }
     ]
@@ -487,7 +487,7 @@ async function testNestedStateValidationRejectsWrongContainerTypes() {
 
   assert.strictEqual(view.rawValidation.valid, false);
   assert.match(view.rawValidation.errors.join('\n'), /weightDistribution must be an object with sell and buy/);
-  assert.match(view.rawValidation.errors.join('\n'), /activeOrders must be an object with sell and buy/);
+  assert.match(view.rawValidation.errors.join('\n'), /coreOrders must be an object with sell and buy/);
   assert.match(view.rawValidation.errors.join('\n'), /botFunds must be an object with sell and buy/);
 }
 
@@ -546,7 +546,7 @@ async function testMatchBotIdentifierHandlesIdOnlyBots() {
 }
 
 async function testLiveOnlyPatchSkipsTriggerByDefault() {
-  // Live-pickup keys (activeOrders/reserveOrders/botFunds/weightDistribution/
+  // Live-pickup keys (coreOrders/edgeOrders/botFunds/weightDistribution/
   // min_BTS_value/debtPolicy) are applied by the running bot within ~1min,
   // so a patch touching only them must not force a full grid-resync trigger.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dexbot-profiles-live-'));
@@ -560,23 +560,23 @@ async function testLiveOnlyPatchSkipsTriggerByDefault() {
         name: 'live',
         assetA: 'USD',
         assetB: 'BTS',
-        activeOrders: { sell: 15, buy: 15 }
+        coreOrders: { sell: 15, buy: 15 }
       }
     ]
   }, null, 2));
 
   const adapter = createDexbotProfileAdapter(profilesDir);
   const preview = await adapter.previewBotSettingsUpdate('live', {
-    activeOrders: { buy: 20 }
+    coreOrders: { buy: 20 }
   });
   assert.strictEqual(preview.triggerRequired, false, 'live-only patch must not require a trigger');
   const result = await adapter.applyBotSettingsPatch('live', {
-    activeOrders: { buy: 20 }
+    coreOrders: { buy: 20 }
   });
   const written = JSON.parse(await fs.readFile(botsFile, 'utf8'));
-  assert.strictEqual(written.bots[0].activeOrders.buy, 20, 'patch must still be saved');
+  assert.strictEqual(written.bots[0].coreOrders.buy, 20, 'patch must still be saved');
   assert.strictEqual(result.triggerPath, null, 'live-only patch must not write a trigger');
-  assert.ok(result.next.mutability.livePickupOnChange.includes('activeOrders'), 'catalog must list live-pickup keys');
+  assert.ok(result.next.mutability.livePickupOnChange.includes('coreOrders'), 'catalog must list live-pickup keys');
   assert.ok(result.next.mutability.triggerOnChange.includes('incrementPercent'), 'catalog keeps full trigger set');
   const files = await fs.readdir(profilesDir);
   assert.ok(!files.some((f: string) => f.startsWith('recalculate.')), 'no recalculate trigger file may exist');

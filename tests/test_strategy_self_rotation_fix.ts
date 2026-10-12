@@ -7,7 +7,7 @@ function createManager(slots) {
         orders: new Map(slots.map(s => [s.id, { ...s }])),
         config: {
             incrementPercent: 1,
-            activeOrders: { buy: 2, sell: 2 },
+            coreOrders: { buy: 2, sell: 2 },
             weightDistribution: { buy: 0.5, sell: 0.5 }
         },
         assets: {

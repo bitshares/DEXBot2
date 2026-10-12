@@ -75,7 +75,7 @@ These should stay static unless you intentionally retune the bot for a different
 
 - `incrementPercent`
 - `targetSpreadPercent`
-- `activeOrders`
+- `coreOrders`
 
 These settings define the ladder geometry:
 

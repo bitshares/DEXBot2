@@ -16,7 +16,7 @@ async function runTests() {
         const mgr = new OrderManager({
             market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
             startPrice: 1.0, botFunds: { buy: 10000, sell: 1000 },
-            activeOrders: { buy: 5, sell: 5 }, incrementPercent: 1
+            coreOrders: { buy: 5, sell: 5 }, incrementPercent: 1
         });
         mgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.121', precision: 5 } };
         await mgr.setAccountTotals({ buy: 10000, sell: 1000, buyFree: 10000, sellFree: 1000 });

@@ -14,7 +14,7 @@ const cfg = {
     incrementPercent: 10,
     targetSpreadPercent: 10,
     botFunds: { buy: 1000, sell: 10 },
-    activeOrders: { buy: 2, sell: 2 },
+    coreOrders: { buy: 2, sell: 2 },
 };
 
 const mgr = new OrderManager(cfg);
@@ -129,7 +129,7 @@ assert(mgr.funds && typeof mgr.funds.available.buy === 'number', 'manager should
         targetSpreadPercent: 5,
         botFunds: { buy: 1000, sell: 1000 },
         weightDistribution: { buy: 1.0, sell: 1.0 }, 
-        activeOrders: { buy: 1, sell: 1 }
+        coreOrders: { buy: 1, sell: 1 }
     });
 
     rotateMgr.assets = { assetA: { id: '1.3.0', precision: 5 }, assetB: { id: '1.3.1', precision: 5 } };

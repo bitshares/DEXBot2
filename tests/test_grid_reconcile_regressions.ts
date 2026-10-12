@@ -81,7 +81,7 @@ async function testUnmatchedCancelReleasesFundsAndHandlesNullEntries() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 0, buy: 0 } },
+        config: { coreOrders: { sell: 0, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -133,7 +133,7 @@ async function testVerifiedAfterFailureWithEmptyRefetchDefersSync() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 0, buy: 0 } },
+        config: { coreOrders: { sell: 0, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -203,7 +203,7 @@ async function testSkipUpdateWhenSlotAlreadyMapped() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 1, buy: 0 } },
+        config: { coreOrders: { sell: 1, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -319,7 +319,7 @@ async function testPhase3CancelsStaleSurplusUntrackedByGrid() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 5, buy: 0 } },
+        config: { coreOrders: { sell: 5, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -424,7 +424,7 @@ async function testNoExcessCancelWhenMatchedOnGridIsZero() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 5, buy: 5 } },
+        config: { coreOrders: { sell: 5, buy: 5 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -479,7 +479,7 @@ async function testPhantomCleanupDefersFreshlyAssignedOrderIds() {
     // Snapshot does NOT include 1.7.500 — absent from the (lagging/truncated) read.
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 0, buy: 1 } },
+        config: { coreOrders: { sell: 0, buy: 1 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -626,7 +626,7 @@ async function testQueuedDuplicateDefersCancelButReleasesFunds() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 1, buy: 0 } },
+        config: { coreOrders: { sell: 1, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -649,7 +649,7 @@ async function testOwnCancelledDuplicateDefersCancelButReleasesFunds() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 1, buy: 0 } },
+        config: { coreOrders: { sell: 1, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -669,7 +669,7 @@ async function testUntrackedDuplicateStillCancelledAndReleasesFunds() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 1, buy: 0 } },
+        config: { coreOrders: { sell: 1, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -699,7 +699,7 @@ async function testOrderGoneCancelStillReleasesFunds() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 1, buy: 0 } },
+        config: { coreOrders: { sell: 1, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -741,7 +741,7 @@ async function testStartupRejectsChangedCancellationSnapshot() {
 
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 0, buy: 0 } },
+        config: { coreOrders: { sell: 0, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -782,7 +782,7 @@ async function testStartupAllowsUntouchedPlanAfterEarlierCorrectionCancel() {
     // order, while reconcile still receives the pre-drain Phase-1 snapshot.
     await reconcileGridOrders({
         manager,
-        config: { activeOrders: { sell: 0, buy: 0 } },
+        config: { coreOrders: { sell: 0, buy: 0 } },
         account: 'acct',
         privateKey: 'pk',
         chainOrders,
@@ -833,7 +833,7 @@ async function testStartupAmbiguousReadSkipsCancellations() {
 
         await reconcileGridOrders({
             manager,
-            config: { activeOrders: { sell: 0, buy: 0 } },
+            config: { coreOrders: { sell: 0, buy: 0 } },
             account: 'acct',
             privateKey: 'pk',
             chainOrders,
@@ -862,7 +862,7 @@ async function testPersistentDuplicateEscalatesToWarn() {
     });
     const logs = [];
     manager.logger = { log: (msg: any, level: any) => { logs.push({ msg: String(msg), level }); } } as any;
-    const cfg = { activeOrders: { sell: 1, buy: 0 } };
+    const cfg = { coreOrders: { sell: 1, buy: 0 } };
 
     try {
         await reconcileGridOrders({ manager, config: cfg, account: 'acct', privateKey: 'pk', chainOrders, chainOpenOrders });

@@ -41,7 +41,7 @@ function buildSlots(startPrice = 100, incrementPercent = 1) {
     return slots;
 }
 
-function createManager(slots, { gapSlots = 2, activeOrders = { buy: 6, sell: 6 } } = {}) {
+function createManager(slots, { gapSlots = 2, coreOrders = { buy: 6, sell: 6 } } = {}) {
     return {
         _gapSlots: gapSlots,
         _boundaryShiftBudget: null,
@@ -51,7 +51,7 @@ function createManager(slots, { gapSlots = 2, activeOrders = { buy: 6, sell: 6 }
             incrementPercent: 1,
             targetSpreadPercent: 2,
             gridLimits: { PARTIAL_DUST_THRESHOLD_PERCENTAGE: 5 },
-            activeOrders,
+            coreOrders,
             weightDistribution: { buy: 0.5, sell: 0.5 },
             feeParams: { BTS_RESERVATION_MULTIPLIER: 1.2 },
             min_BTS_value: 0,

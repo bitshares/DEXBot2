@@ -603,8 +603,8 @@ export interface ManagedOrder {
   [key: string]: unknown;
 }
 
-/** Active-order target counts. */
-export interface ActiveOrdersConfig extends UnknownRecord {
+/** Market-order target counts (core-order window). */
+export interface CoreOrdersConfig extends UnknownRecord {
   buy?: number;
   sell?: number;
 }
@@ -635,7 +635,7 @@ export interface GridConfig extends UnknownRecord {
   incrementPercent?: number;
   incrementBounds?: { MIN_PERCENT: number; MAX_PERCENT: number; [key: string]: unknown };
   targetSpreadPercent?: number;
-  activeOrders?: ActiveOrdersConfig;
+  coreOrders?: CoreOrdersConfig;
   assetA?: string;
   assetB?: string;
   botKey?: string;

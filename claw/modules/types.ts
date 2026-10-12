@@ -97,7 +97,8 @@ export interface ClawBridgeOptions {
 
 export interface BotSettings {
     active?: boolean;
-    activeOrders?: { sell?: number; buy?: number };
+    coreOrders?: { sell?: number; buy?: number };
+    edgeOrders?: number | { sell?: number; buy?: number };
     assetA?: string;
     assetAId?: string;
     assetB?: string;

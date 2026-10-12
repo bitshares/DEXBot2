@@ -30,7 +30,7 @@ async function testCompleteLifecycle() {
         assetB: 'USD',
         botKey,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 1, sell: 1 },
+        coreOrders: { buy: 1, sell: 1 },
         dryRun: false
     };
 

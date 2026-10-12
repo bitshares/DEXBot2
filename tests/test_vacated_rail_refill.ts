@@ -56,7 +56,7 @@ function createManager(overrides: any = {}) {
         accountTotals: { sellFree: 0, buyFree: 0 },
         boundaryIdx: BOUNDARY,
         _gapSlots: GAP,
-        config: { activeOrders: { buy: 20, sell: 20 }, assetA: 'AAA', assetB: 'BBB' },
+        config: { coreOrders: { buy: 20, sell: 20 }, assetA: 'AAA', assetB: 'BBB' },
         _gridLock: { acquire: async (fn: any) => await fn() },
         getOrdersByTypeAndState: (type: any, state: any) =>
             Array.from(orders.values()).filter((o: any) => o && o.type === type && o.state === state),

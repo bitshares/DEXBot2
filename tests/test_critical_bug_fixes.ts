@@ -17,7 +17,7 @@ async function setupManager() {
         minPrice: 0.1,
         maxPrice: 10.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 0.5, sell: 0.5 }
     };
@@ -62,7 +62,7 @@ async function testCOWRebalanceProducesValidActions() {
     await mgr._updateOrder({ ...((furthestSell as any)), state: ORDER_STATES.ACTIVE, orderId: 'chain-surplus', size: 100 });
 
     // Target count 1 ensures furthest is surplus
-    mgr.config.activeOrders.sell = 1;
+    mgr.config.coreOrders.sell = 1;
 
     // Rebalance with a fill to trigger boundary crawl
     const result = await mgr.performSafeRebalance([{ type: ORDER_TYPES.BUY, price: 0.95 }]);

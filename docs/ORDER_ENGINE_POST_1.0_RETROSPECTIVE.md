@@ -72,10 +72,10 @@ local state.
 | **Infinite loops** | grid-bloat → resync → bloat; plan→skip→restore holes; `NO_FEASIBLE_BOUNDARY` freeze | Cooldowns, grace windows, minimal cancel ladders |
 | **Silent hangs** | Retries that depended on a future event that never came | Level-triggered scheduling with time-based watchdogs |
 | **Stale queues** | Queued price corrections replayed onto a resynced grid, reverting good placements | Pre-broadcast validation against the live slot |
-| **Shelf / reserve orders** | Non-grid orders poisoning every "orders on grid" counter (issue #27) | Slot-N gating across all counters |
+| **Shelf / edge orders** | Non-grid orders poisoning every "orders on grid" counter (issue #27) | Slot-N gating across all counters |
 
 Families **not** detailed in Part II: silent hangs and stale correction queues are covered in
-`CHANGELOG.md` (v1.6.1 and v1.6.3 respectively); shelf/reserve orders in issue #27 and the v1.6.x
+`CHANGELOG.md` (v1.6.1 and v1.6.3 respectively); shelf/edge orders in issue #27 and the v1.6.x
 notes; the grid-price invariant has its own doc — [GRID_PRICE_INVARIANT.md](GRID_PRICE_INVARIANT.md).
 
 ### R3. Meta-patterns (the actual "madness")

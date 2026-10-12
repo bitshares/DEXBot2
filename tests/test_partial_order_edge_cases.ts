@@ -24,7 +24,7 @@ async function testPartialAtGridBoundary() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -126,7 +126,7 @@ async function testPartialOrdersCounting() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 3, sell: 3 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 3, sell: 3 }
     });
 
     mgr.assets = {
@@ -185,7 +185,7 @@ async function testMultiplePartialsOnSameSide() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 5, sell: 5 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 5, sell: 5 }
     });
 
     mgr.assets = {
@@ -253,7 +253,7 @@ async function testPartialStateTransitions() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -320,7 +320,7 @@ async function testPartialInSpreadCalculation() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -390,7 +390,7 @@ async function testSpreadConditionWithPartials() {
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 2, sell: 2 },
+        coreOrders: { buy: 2, sell: 2 },
         targetSpreadPercent: 1,
         incrementPercent: 0.5
     });

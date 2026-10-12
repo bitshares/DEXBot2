@@ -33,7 +33,7 @@ async function runTests() {
             config: {
                 botKey: 'targeted-drift-test',
                 dryRun: false,
-                activeOrders: { buy: 1, sell: 0 },
+                coreOrders: { buy: 1, sell: 0 },
                 assetA: 'TEST',
                 assetB: 'BTS',
             },
@@ -114,7 +114,7 @@ async function runTests() {
     console.log(' - Testing funds-exhausted spread fallback trigger...');
     {
         const makeBot = (exhausted: boolean, stall: string | null = null) => ({
-            config: { dryRun: false, activeOrders: { buy: 0, sell: 0 } },
+            config: { dryRun: false, coreOrders: { buy: 0, sell: 0 } },
             manager: { checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }) },
             _spreadFundsExhausted: exhausted,
             _spreadCorrectionStall: stall,
@@ -168,7 +168,7 @@ async function runTests() {
             const state = { syncCalls: 0 };
             const bot = {
                 accountId: '1.2.345',
-                config: { dryRun: false, activeOrders: { buy: 0, sell: 0 } },
+                config: { dryRun: false, coreOrders: { buy: 0, sell: 0 } },
                 manager: {
                     fetchAccountTotals: async () => {},
                     checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }),

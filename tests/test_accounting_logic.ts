@@ -42,7 +42,7 @@ async function runCoreTests() {
              assetA: 'TEST',
              assetB: 'BTS',
              weightDistribution: { sell: 0.5, buy: 0.5 },
-             activeOrders: { buy: 5, sell: 5 }
+             coreOrders: { buy: 5, sell: 5 }
          });
          mgr.logger = createSilentLogger();
          await mgr.setAccountTotals({
@@ -519,7 +519,7 @@ async function runRecoveryReadTests() {
             assetA: 'TEST',
             assetB: 'BTS',
             weightDistribution: { sell: 0.5, buy: 0.5 },
-            activeOrders: { buy: 5, sell: 5 }
+            coreOrders: { buy: 5, sell: 5 }
         });
         mgr.logger = createSilentLogger();
         await mgr.setAccountTotals({

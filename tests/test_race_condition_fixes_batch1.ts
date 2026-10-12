@@ -617,8 +617,8 @@ async function testWriteBotsFileWithLockUsesAtomic() {
     // Two concurrent writers, each writing a different config. The in-process
     // semaphore must serialize them, and the atomic write must prevent torn
     // content. After both complete, the file must parse cleanly.
-    const cfgA = { bots: [{ name: 'a', assetA: 'BTS', assetB: 'CNY', activeOrders: { buy: 1, sell: 1 }, botFunds: { buy: 100, sell: 100 }, active: true, botIndex: 0 }] };
-    const cfgB = { bots: [{ name: 'b', assetA: 'BTS', assetB: 'USD', activeOrders: { buy: 2, sell: 2 }, botFunds: { buy: 200, sell: 200 }, active: true, botIndex: 0 }] };
+    const cfgA = { bots: [{ name: 'a', assetA: 'BTS', assetB: 'CNY', coreOrders: { buy: 1, sell: 1 }, botFunds: { buy: 100, sell: 100 }, active: true, botIndex: 0 }] };
+    const cfgB = { bots: [{ name: 'b', assetA: 'BTS', assetB: 'USD', coreOrders: { buy: 2, sell: 2 }, botFunds: { buy: 200, sell: 200 }, active: true, botIndex: 0 }] };
 
     await Promise.all([
         writeBotsFileWithLock(botsFile, cfgA),

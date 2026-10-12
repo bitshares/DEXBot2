@@ -185,17 +185,17 @@ async function testHOLD009_ReserveSkipNeverPins() {
         { type: COW_ACTIONS.CREATE, id: 'slot-13' },
     ];
     const wire = collectRefillSlotIds(actions, {
-        config: { reserveOrders: { buy: 2, sell: 1 } },
+        config: { edgeOrders: { buy: 2, sell: 1 } },
         slots,
         edgeAnchors: { buy: 80, sell: 93 },
     });
     assert.deepStrictEqual(wire, ['slot-8'], 'wire carries the hole refill only');
 
-    const reserveSkip = resolveRefillBoundaryHold(
+    const edgeSkip = resolveRefillBoundaryHold(
         94, 91, new Set(), new Set(), wire, new Set(['slot-0', 'slot-1'])
     );
-    assert.strictEqual(reserveSkip.effectiveBoundary, 94, 'skipped reserve must not pin geometry');
-    assert.deepStrictEqual(reserveSkip.heldRefillSlotIds, []);
+    assert.strictEqual(edgeSkip.effectiveBoundary, 94, 'skipped reserve must not pin geometry');
+    assert.deepStrictEqual(edgeSkip.heldRefillSlotIds, []);
 
     const refillSkip = resolveRefillBoundaryHold(
         94, 91, new Set(), new Set(), wire, new Set(['slot-8'])

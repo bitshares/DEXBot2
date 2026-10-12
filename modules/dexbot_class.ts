@@ -1169,8 +1169,8 @@ class DEXBot implements BotLike {
         }
         let anyDeferred = false;
         try {
-            const activeSell = this.manager?.config?.activeOrders?.sell ?? 1;
-            const activeBuy = this.manager?.config?.activeOrders?.buy ?? 1;
+            const activeSell = this.manager?.config?.coreOrders?.sell ?? 1;
+            const activeBuy = this.manager?.config?.coreOrders?.buy ?? 1;
             const legacyCap = Math.max(Math.floor(activeSell / 2), Math.floor(activeBuy / 2), 1);
             const shiftBudget = legacyCap;
             this.manager._boundaryShiftBudget = shiftBudget;

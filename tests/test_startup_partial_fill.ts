@@ -9,7 +9,7 @@ console.log('Running offline partial-fill unit test (syncing startup orders)...'
         // Create manager with a minimal config and mocked assets
         const cfg = {
             assetA: 'ASSTA', assetB: 'ASSTB', startPrice: 2,
-            activeOrders: { buy: 1, sell: 1 },
+            coreOrders: { buy: 1, sell: 1 },
             botFunds: { buy: 1000, sell: 1000 }
         };
         const mgr = new OrderManager(cfg);

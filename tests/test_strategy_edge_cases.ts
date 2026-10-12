@@ -46,7 +46,7 @@ function createManagerWithGridSize(gridSize = 14, budgetBuy = 1000, budgetSell =
         incrementPercent: 5,
         targetSpreadPercent: 2,
         botFunds: { buy: budgetBuy, sell: budgetSell },
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         weightDistribution: { buy: 1.0, sell: 1.0 }
     };
 
@@ -84,7 +84,7 @@ function createManagerWithGridSize(gridSize = 14, budgetBuy = 1000, budgetSell =
 
 async function testCase1() {
     const mgr = createManagerWithGridSize(6, 1000, 10);
-    mgr.config.activeOrders.buy = 3; // targetCount > available buy slots (2)
+    mgr.config.coreOrders.buy = 3; // targetCount > available buy slots (2)
 
     const result = mgr.strategy.calculateTargetGrid({
         frozenMasterGrid: mgr.orders,

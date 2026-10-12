@@ -43,7 +43,7 @@ function makeManager(slots, configOverrides = {}) {
         config: {
             incrementPercent: 1,
             targetSpreadPercent: 2,
-            activeOrders: { buy: 5, sell: 5 },
+            coreOrders: { buy: 5, sell: 5 },
             weightDistribution: { buy: 0.5, sell: 0.5 },
             gridLimits: {},
             ...configOverrides
@@ -113,7 +113,7 @@ async function run() {
             mkSlot('slot-13', 925.0, ORDER_TYPES.SELL),
             mkSlot('slot-14', 930.0, ORDER_TYPES.SELL)
         ];
-        const manager = makeManager([...buys, ...sells], { activeOrders: { buy: 8, sell: 5 } });
+        const manager = makeManager([...buys, ...sells], { coreOrders: { buy: 8, sell: 5 } });
         manager._gapSlots = 2;
         const strategy = new StrategyEngine(manager);
 
@@ -153,7 +153,7 @@ async function run() {
             mkSlot('slot-12', 905.0, ORDER_TYPES.SELL),
             mkSlot('slot-13', 910.0, ORDER_TYPES.SELL)
         ];
-        const manager = makeManager([...buys, ...sells], { activeOrders: { buy: 3, sell: 4 } });
+        const manager = makeManager([...buys, ...sells], { coreOrders: { buy: 3, sell: 4 } });
         manager._gapSlots = 2;
         const strategy = new StrategyEngine(manager);
 
@@ -183,7 +183,7 @@ async function run() {
             mkSlot('slot-10', 920.0, ORDER_TYPES.SELL),
             mkSlot('slot-11', 925.0, ORDER_TYPES.SELL)
         ];
-        const manager = makeManager([...buys, ...sells], { activeOrders: { buy: 5, sell: 2 } });
+        const manager = makeManager([...buys, ...sells], { coreOrders: { buy: 5, sell: 2 } });
         manager._gapSlots = 2;
         const strategy = new StrategyEngine(manager);
 
@@ -216,7 +216,7 @@ async function run() {
             live('slot-4', 900.0, ORDER_TYPES.BUY)
         ];
         const sells = [live('slot-10', 910.0, ORDER_TYPES.SELL)];
-        const manager = makeManager([...buys, ...sells], { activeOrders: { buy: 5, sell: 1 } });
+        const manager = makeManager([...buys, ...sells], { coreOrders: { buy: 5, sell: 1 } });
         manager._gapSlots = 2;
         const strategy = new StrategyEngine(manager);
 
@@ -255,7 +255,7 @@ async function run() {
             mkSlot('slot-7', 920.0, ORDER_TYPES.SELL),
             mkSlot('slot-8', 930.0, ORDER_TYPES.SELL)
         ];
-        const manager = makeManager(slots, { activeOrders: { buy: 5, sell: 2 } });
+        const manager = makeManager(slots, { coreOrders: { buy: 5, sell: 2 } });
         const strategy = new StrategyEngine(manager);
 
         const { targetGrid, boundaryIdx } = strategy.calculateTargetGrid({

@@ -79,7 +79,7 @@ import Logger from '../../order/logger.js';
 import * as fundRegistry from '../../fund_registry.js';
 import { getErrorMessage } from '../../utils/errors.js';
 import { parseSlotIndex } from './slot.js';
-import type { OrderManagerLike, AccountTotals, ManagerFunds, ActiveOrdersConfig, GridFeeParams, ManagedOrder, AssetPair, GridConfig, GridLimitsLike, WeightDistributionConfig } from '../../types.js';
+import type { OrderManagerLike, AccountTotals, ManagerFunds, CoreOrdersConfig, GridFeeParams, ManagedOrder, AssetPair, GridConfig, GridLimitsLike, WeightDistributionConfig } from '../../types.js';
 const { isValidNumber, toFiniteNumber } = Format;
 const mathLogger = new Logger('Math');
 
@@ -486,10 +486,10 @@ function getAssetFeesSafe(assetSymbol: string, assetAmount: number | null = null
  * @param {Object} funds - Fund allocation object with virtual, btsFeesOwed properties
  * @param {string} assetA - First asset symbol
  * @param {string} assetB - Second asset symbol
- * @param {Object} [activeOrders=null] - Active order counts {buy, sell} for BTS reservation calculation
+ * @param {Object} [coreOrders=null] - Active order counts {buy, sell} for BTS reservation calculation
  * @returns {number} Available funds for the side (0 if side invalid or insufficient funds)
  */
-function calculateAvailableFundsValue(side: string, accountTotals: AccountTotals | null | undefined, funds: ManagerFunds, assetA: string | undefined, assetB: string | undefined, activeOrders: ActiveOrdersConfig | null = null, configMinBtsValue: number | null = null, feeParams: GridFeeParams | null = null) {
+function calculateAvailableFundsValue(side: string, accountTotals: AccountTotals | null | undefined, funds: ManagerFunds, assetA: string | undefined, assetB: string | undefined, coreOrders: CoreOrdersConfig | null = null, configMinBtsValue: number | null = null, feeParams: GridFeeParams | null = null) {
     if (side !== 'buy' && side !== 'sell') return 0;
 
     const chainFree = toFiniteNumber(side === 'buy' ? accountTotals?.buyFree : accountTotals?.sellFree);
@@ -500,9 +500,9 @@ function calculateAvailableFundsValue(side: string, accountTotals: AccountTotals
     const btsReservationMultiplier = feeParams?.BTS_RESERVATION_MULTIPLIER ?? FEE_PARAMETERS.BTS_RESERVATION_MULTIPLIER;
 
     let btsFeesReservation = 0;
-    if (btsSide === side && activeOrders) {
-        const targetBuy = Math.max(0, toFiniteNumber(activeOrders?.buy, 1));
-        const targetSell = Math.max(0, toFiniteNumber(activeOrders?.sell, 1));
+    if (btsSide === side && coreOrders) {
+        const targetBuy = Math.max(0, toFiniteNumber(coreOrders?.buy, 1));
+        const targetSell = Math.max(0, toFiniteNumber(coreOrders?.sell, 1));
         const totalTargetOrders = targetBuy + targetSell;
         btsFeesReservation = calculateOrderCreationFees(assetA, assetB, totalTargetOrders, btsReservationMultiplier);
     }
@@ -510,9 +510,9 @@ function calculateAvailableFundsValue(side: string, accountTotals: AccountTotals
     const currentFeesOwed = (btsSide === side) ? btsFeesOwed : 0;
 
     // Non-BTS pair: reserve proportional share for BTS fee budget
-    if (!btsSide && activeOrders && funds?.btsBalance != null) {
-        const targetBuy = Math.max(0, toFiniteNumber(activeOrders?.buy, 1));
-        const targetSell = Math.max(0, toFiniteNumber(activeOrders?.sell, 1));
+    if (!btsSide && coreOrders && funds?.btsBalance != null) {
+        const targetBuy = Math.max(0, toFiniteNumber(coreOrders?.buy, 1));
+        const targetSell = Math.max(0, toFiniteNumber(coreOrders?.sell, 1));
         const totalTargetOrders = targetBuy + targetSell;
         const formulaBudget = calculateOrderCreationFees(assetA, assetB, totalTargetOrders, btsReservationMultiplier);
         const btsFree = toFiniteNumber(funds?.btsBalance?.free, 0);

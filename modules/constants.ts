@@ -29,7 +29,7 @@
  *      Price: startPrice, minPrice, maxPrice, incrementPercent, targetSpreadPercent
  *      Control: active, dryRun
  *      Trading pair: assetA, assetB
- *      Allocation: weightDistribution, botFunds, activeOrders
+ *      Allocation: weightDistribution, botFunds, coreOrders
  *
  * TIMING PARAMETERS:
  *   4. TIMING - Operational timing constants
@@ -206,11 +206,11 @@ let DEFAULT_CONFIG = {
     // Fund allocation
     weightDistribution: { sell: 1, buy: 1 },  // Geometric weight for order sizing (1 = ~1:2 center/outer split, 0.5 = linear)
     botFunds: { sell: "100%", buy: "100%" },      // Percentage of wallet balance to allocate ("100%" or numeric value)
-    activeOrders: { sell: 20, buy: 20 },          // Number of orders to maintain closest to market on each side
-    reserveOrders: { buy: 0, sell: 0 },           // Edge-pinned insurance orders resting live outside the window (buy: grid floor, sell: grid ceiling; 0 disables)
+    coreOrders: { sell: 20, buy: 20 },          // Number of window orders to maintain closest to market on each side
+    edgeOrders: { buy: 0, sell: 0 },             // Edge-pinned insurance orders resting live outside the window (buy: grid floor, sell: grid ceiling; 0 disables)
 
     // BTS fee management for non-BTS pairs
-    min_BTS_value: null,          // Minimum BTS balance to maintain (null = auto from activeOrders × fees × multiplier)
+    min_BTS_value: null,          // Minimum BTS balance to maintain (null = auto from coreOrders × fees × multiplier)
 };
 
 // Range quality zones for price bounds (minPrice/maxPrice multipliers).
@@ -605,7 +605,7 @@ let GRID_LIMITS = {
     // to a price ladder ("no genesis" -- the genesis-less state analysed in
     // docs/GRID_PRICE_INVARIANT.md). A genesis-less grid is NOT repairable in
     // place: every consumer (nearest-slot adoption, the materialize
-    // descriptor-price fallback, reserve-edge anchoring) has no authority for a
+    // descriptor-price fallback, edge anchoring) has no authority for a
     // slot's price, which is exactly how an off-grid price became grid evidence
     // and was re-emitted. The load and sync gates refuse that state outright —
     // no tolerance matcher remains.

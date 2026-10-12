@@ -70,7 +70,7 @@ async function testDustTrigger() {
         assetB: 'TESTB',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 }
     });
@@ -511,7 +511,7 @@ async function testDustThresholdUsesConfiguredPercentage() {
             assetB: 'TESTB',
             startPrice: 1.0,
             botFunds: { buy: 1000, sell: 1000 },
-            activeOrders: { buy: 5, sell: 5 },
+            coreOrders: { buy: 5, sell: 5 },
             incrementPercent: 1,
             weightDistribution: { buy: 1, sell: 1 },
             gridLimits: { PARTIAL_DUST_THRESHOLD_PERCENTAGE: 10 }
@@ -585,7 +585,7 @@ async function testDustTrackingEligibleSetIncludesBelowThresholdInterior() {
         assetB: 'TESTB',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 }
     });
@@ -640,7 +640,7 @@ async function testDustTrackingEligibleSetIncludesBelowThresholdInterior() {
         assetB: 'TESTB',
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         botFunds: { buy: 1000, sell: 1000 }
     });
     bot.manager = manager;
@@ -740,7 +740,7 @@ async function testInteriorDustWithDuplicatePriceLevel() {
         assetB: 'TESTB',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 }
     });
@@ -779,7 +779,7 @@ async function testInteriorDustAboveThresholdNotEligible() {
         assetB: 'TESTB',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 }
     });
@@ -821,7 +821,7 @@ async function testNoBudgetReturnsEmptyDust() {
         assetB: 'TESTB',
         startPrice: 1.0,
         botFunds: { buy: 0, sell: 0 },
-        activeOrders: { buy: 5, sell: 5 },
+        coreOrders: { buy: 5, sell: 5 },
         incrementPercent: 1,
         weightDistribution: { buy: 1, sell: 1 }
     });

@@ -22,7 +22,7 @@ function buildSlots(count) {
     return slots;
 }
 
-const CONFIG = { activeOrders: { buy: 10, sell: 10 } };
+const CONFIG = { coreOrders: { buy: 10, sell: 10 } };
 const GAP = 1;
 const ALL_SLOTS = buildSlots(101);
 

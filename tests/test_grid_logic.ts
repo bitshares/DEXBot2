@@ -147,7 +147,7 @@ async function runTests() {
             incrementPercent: 5,
             weightDistribution: { buy: 1, sell: 1 },
             botFunds: { buy: '100%', sell: '100%' },
-            activeOrders: { buy: 6, sell: 6 }
+            coreOrders: { buy: 6, sell: 6 }
         });
 
         manager.assets = {
@@ -215,7 +215,7 @@ async function runTests() {
             config: {
                 assetA: 'BTS',
                 assetB: 'USDT',
-                activeOrders: { buy: 6, sell: 6 },
+                coreOrders: { buy: 6, sell: 6 },
                 min_BTS_value: null
             },
             funds: {
@@ -255,7 +255,7 @@ async function runTests() {
             config: {
                 assetA: 'HONEST',
                 assetB: 'USDT',
-                activeOrders: { buy: 6, sell: 6 },
+                coreOrders: { buy: 6, sell: 6 },
                 min_BTS_value: null
             },
             getChainFundsSnapshot() {
@@ -281,7 +281,7 @@ async function runTests() {
             config: {
                 assetA: 'USD',
                 assetB: 'EUR',
-                activeOrders: { buy: 10, sell: 10 },
+                coreOrders: { buy: 10, sell: 10 },
                 gridLimits: { GRID_REGENERATION_PERCENTAGE: 3 }
             },
             funds: {
@@ -320,7 +320,7 @@ async function runTests() {
             config: {
                 assetA: 'USD',
                 assetB: 'EUR',
-                activeOrders: { buy: 10, sell: 10 },
+                coreOrders: { buy: 10, sell: 10 },
                 gridLimits: { GRID_REGENERATION_PERCENTAGE: 3 }
             },
             funds: {
@@ -408,7 +408,7 @@ async function runTests() {
                 incrementPercent: 0.5,
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 1, sell: 1 },
-                activeOrders: { buy: 2, sell: 2 },
+                coreOrders: { buy: 2, sell: 2 },
                 min_BTS_value: null,
                 gridLimits: { GRID_REGENERATION_PERCENTAGE: 3 },
             };
@@ -563,7 +563,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -627,7 +627,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -704,7 +704,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -777,7 +777,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -859,7 +859,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -939,7 +939,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -1014,7 +1014,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {
@@ -1086,7 +1086,7 @@ async function runTests() {
                 targetSpreadPercent: 2,
                 weightDistribution: { buy: 0.5, sell: 0.5 },
                 botFunds: { buy: '100%', sell: '100%' },
-                activeOrders: { buy: 6, sell: 6 }
+                coreOrders: { buy: 6, sell: 6 }
             });
 
             manager.assets = {

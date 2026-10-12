@@ -14,7 +14,7 @@ import { getAssetFeesSafe, priceSlotEqual } from './utils/math.js';
 import {
     isOrderPlaced, parseChainOrder, isOrderOnChain, findLiveOrderOwnerByChainId,
     chainOrderMatchesSlotWithTolerance,
-    duplicateOrphanLogInfo, resolveReserveCount,
+    duplicateOrphanLogInfo, resolveEdgeCount,
 } from './utils/order.js';
 import * as Format from './format.js';
 import { getErrorMessage } from '../utils/errors.js';
@@ -200,7 +200,7 @@ export async function decideStartupGridAction({
  * - Then create missing orders if chain has fewer than target.
  * - Then cancel excess orders if chain has more than target.
  *
- * Targets are derived from config.activeOrders.{buy,sell} and chain counts are computed
+ * Targets are derived from config.coreOrders.{buy,sell} and chain counts are computed
  * from current on-chain open orders.
  * @param {Object} params - Destructured parameters
  * @param {Object} params.manager - OrderManager instance
@@ -255,11 +255,11 @@ export async function reconcileGridOrders({
         .map((co) => ({ chain: co, parsed: parseChainOrder(co, manager.assets) }))
         .filter((x): x is ParsedChainEntry => x.parsed !== null);
 
-    const activeCfg = (config && config.activeOrders) ? config.activeOrders : {};
+    const activeCfg = (config && config.coreOrders) ? config.coreOrders : {};
     let targetBuy = Math.max(0, Number.isFinite(Number(activeCfg.buy)) ? Number(activeCfg.buy) : 1)
-        + resolveReserveCount(config, 'buy');
+        + resolveEdgeCount(config, 'buy');
     let targetSell = Math.max(0, Number.isFinite(Number(activeCfg.sell)) ? Number(activeCfg.sell) : 1)
-        + resolveReserveCount(config, 'sell');
+        + resolveEdgeCount(config, 'sell');
 
     const chainBuys = parsedChain.filter((x) => x.parsed.type === ORDER_TYPES.BUY).map((x) => x.chain);
     const chainSells = parsedChain.filter((x) => x.parsed.type === ORDER_TYPES.SELL).map((x) => x.chain);

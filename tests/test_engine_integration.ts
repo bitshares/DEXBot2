@@ -46,7 +46,7 @@ async function setupManager() {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 50000, sell: 50000 },
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         incrementPercent: 1,
         weightDistribution: { buy: 0.5, sell: 0.5 }
     };

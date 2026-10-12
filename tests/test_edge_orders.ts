@@ -1,8 +1,8 @@
 /**
- * tests/test_reserve_orders.ts
+ * tests/test_edge_orders.ts
  *
  * Reserve ladder (edge-pinned fat-finger insurance): extra live orders resting
- * at the grid edges, outside activeOrders window accounting, no boundary crawl.
+ * at the grid edges, outside coreOrders window accounting, no boundary crawl.
  * Buys pin at the floor, sells at the ceiling.
  * Uses native assert to avoid Jest dependency.
  */
@@ -11,23 +11,23 @@ const assert = require('assert');
 const { OrderManager } = require('../modules/order/index').default;
 const { ORDER_TYPES, ORDER_STATES, DEFAULT_CONFIG, COW_ACTIONS } = require('../modules/constants');
 const {
-    resolveReserveCount,
-    resolveReserveOrders,
-    resolveReserveEdgeAnchorPrice,
-    resolveLiveReserveEdgeAnchorPrice,
-    reserveEdgeIdSet,
+    resolveEdgeCount,
+    resolveEdgeOrders,
+    resolveEdgeAnchorPrice,
+    resolveLiveEdgeAnchorPrice,
+    edgeOrderIdSet,
     liveWindowIdSet,
-    compareReserveEdge,
-    selectReserveEdgeSlots,
+    compareEdge,
+    selectEdgeSlots,
     deriveTargetBoundary,
-    getActiveOrdersTotal,
+    getCoreOrdersTotal,
     collectRefillSlotIds,
 } = require('../modules/order/utils/order');
 
 const { _setFeeCache } = require('../modules/order/utils/math');
 const { reconcileGrid, optimizeRebalanceActions } = require('../modules/order/utils/validate');
 const { _reconcileStartupSide, _countActiveOnGrid, _pickVirtualSlotsToActivate } = require('../modules/order/grid_reconcile_internal');
-const { countLiveReserveOrders, getTargetedSyncReason } = require('../modules/dexbot_maintenance_runtime');
+const { countLiveEdgeOrders, getTargetedSyncReason } = require('../modules/dexbot_maintenance_runtime');
 _setFeeCache({
     BTS: {
         limitOrderCreate: { bts: 0.1 },
@@ -37,21 +37,21 @@ _setFeeCache({
 });
 
 async function runTests() {
-    console.log('Running Reserve Orders Tests...');
+    console.log('Running Edge Orders Tests...');
 
-    console.log(' - resolveReserveCount clamps per-side config...');
+    console.log(' - resolveEdgeCount clamps per-side config...');
     {
-        assert.strictEqual(resolveReserveCount({}, 'buy'), 0, 'missing disables');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: { buy: 3 } }, 'buy'), 3, 'buy passes');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: { buy: 3 } }, 'sell'), 0, 'sell defaults 0');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: { sell: 2.9 } }, 'sell'), 0, 'non-integer disables (matches validation)');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: { buy: -1 } }, 'buy'), 0, 'negative disables');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: { buy: 'x' } }, 'buy'), 0, 'garbage disables');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: 3 }, 'buy'), 3, 'legacy numeric form migrates to buy');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: 3 }, 'sell'), 0, 'legacy numeric form has no sell side');
-        assert.strictEqual(resolveReserveCount({ reserveOrders: -2 }, 'buy'), 0, 'negative legacy numeric disables');
-        assert.strictEqual(resolveReserveOrders({ reserveOrders: { buy: 2, sell: 1 } }), 3, 'total sums sides');
-        assert.deepStrictEqual(DEFAULT_CONFIG.reserveOrders, { buy: 0, sell: 0 }, 'default off');
+        assert.strictEqual(resolveEdgeCount({}, 'buy'), 0, 'missing disables');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: { buy: 3 } }, 'buy'), 3, 'buy passes');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: { buy: 3 } }, 'sell'), 0, 'sell defaults 0');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: { sell: 2.9 } }, 'sell'), 0, 'non-integer disables (matches validation)');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: { buy: -1 } }, 'buy'), 0, 'negative disables');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: { buy: 'x' } }, 'buy'), 0, 'garbage disables');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: 3 }, 'buy'), 3, 'legacy numeric form migrates to buy');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: 3 }, 'sell'), 0, 'legacy numeric form has no sell side');
+        assert.strictEqual(resolveEdgeCount({ edgeOrders: -2 }, 'buy'), 0, 'negative legacy numeric disables');
+        assert.strictEqual(resolveEdgeOrders({ edgeOrders: { buy: 2, sell: 1 } }), 3, 'total sums sides');
+        assert.deepStrictEqual(DEFAULT_CONFIG.edgeOrders, { buy: 0, sell: 0 }, 'default off');
     }
 
     console.log(' - edge id sets anchor floor/ceiling...');
@@ -63,30 +63,30 @@ async function runTests() {
             { id: 'slot-1', price: 81, type: ORDER_TYPES.BUY },
             { id: 'slot-2', price: 82, type: ORDER_TYPES.BUY },
         ];
-        const floor = reserveEdgeIdSet(slots, { reserveOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY);
+        const floor = edgeOrderIdSet(slots, { edgeOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY);
         assert(floor.has('slot-0') && floor.has('slot-1') && floor.size === 2, 'floor: lowest buys');
-        const ceil = reserveEdgeIdSet(slots, { reserveOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL);
+        const ceil = edgeOrderIdSet(slots, { edgeOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL);
         assert(ceil.has('slot-9') && ceil.size === 1, 'ceiling: highest sells');
         const asc = slots.slice().sort((a, b) => a.price - b.price);
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(asc, 2, new Set(['slot-0']), 'floor').map((s) => s.id),
+            selectEdgeSlots(asc, 2, new Set(['slot-0']), 'floor').map((s) => s.id),
             ['slot-1', 'slot-2'],
             'selector skips windowed, floor first'
         );
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(asc, 1, new Set(), 'ceiling').map((s) => s.id),
+            selectEdgeSlots(asc, 1, new Set(), 'ceiling').map((s) => s.id),
             ['slot-9'],
             'selector takes ceiling last'
         );
     }
     console.log(' - edge anchors resolve bounds, selectors hold both insurance ends...');
     {
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({ minPrice: 80 }, 'buy'), 80, 'numeric minPrice anchors buys');
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({ maxPrice: 120 }, 'sell'), 120, 'numeric maxPrice anchors sells');
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({ minPrice: '2x', startPrice: 100 }, 'buy'), 50, 'relative minPrice resolves via startPrice');
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({ maxPrice: '2x', startPrice: 100 }, 'sell'), 200, 'relative maxPrice resolves via startPrice');
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({}, 'buy'), null, 'missing bound leaves legacy rank behavior');
-        assert.strictEqual(resolveReserveEdgeAnchorPrice({ minPrice: 'x' }, 'buy'), null, 'garbage bound leaves legacy rank behavior');
+        assert.strictEqual(resolveEdgeAnchorPrice({ minPrice: 80 }, 'buy'), 80, 'numeric minPrice anchors buys');
+        assert.strictEqual(resolveEdgeAnchorPrice({ maxPrice: 120 }, 'sell'), 120, 'numeric maxPrice anchors sells');
+        assert.strictEqual(resolveEdgeAnchorPrice({ minPrice: '2x', startPrice: 100 }, 'buy'), 50, 'relative minPrice resolves via startPrice');
+        assert.strictEqual(resolveEdgeAnchorPrice({ maxPrice: '2x', startPrice: 100 }, 'sell'), 200, 'relative maxPrice resolves via startPrice');
+        assert.strictEqual(resolveEdgeAnchorPrice({}, 'buy'), null, 'missing bound leaves legacy rank behavior');
+        assert.strictEqual(resolveEdgeAnchorPrice({ minPrice: 'x' }, 'buy'), null, 'garbage bound leaves legacy rank behavior');
         // Stale sub-anchor BUY (price 79 below the 80 anchor): anchored floor
         // picks hold the dip-insurance end instead of the stale rank-lowest slot.
         const stale = [
@@ -96,23 +96,23 @@ async function runTests() {
             { id: 'slot-1', price: 81, type: ORDER_TYPES.BUY },
             { id: 'slot-2', price: 82, type: ORDER_TYPES.BUY },
         ];
-        const anchoredFloor = reserveEdgeIdSet(stale, { reserveOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY, 80);
+        const anchoredFloor = edgeOrderIdSet(stale, { edgeOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY, 80);
         assert(anchoredFloor.has('slot-0') && anchoredFloor.has('slot-1') && anchoredFloor.size === 2, 'floor ids anchor at/above the threshold');
-        const legacyFloor = reserveEdgeIdSet(stale, { reserveOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY);
+        const legacyFloor = edgeOrderIdSet(stale, { edgeOrders: { buy: 2, sell: 0 } }, ORDER_TYPES.BUY);
         assert(legacyFloor.has('slot-7') && legacyFloor.has('slot-0'), 'no anchor keeps legacy rank-lowest');
         const staleAsc = stale.slice().sort((a, b) => a.price - b.price);
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(staleAsc, 2, new Set(), 'floor', 80).map((s) => s.id),
+            selectEdgeSlots(staleAsc, 2, new Set(), 'floor', 80).map((s) => s.id),
             ['slot-0', 'slot-1'],
             'anchored floor selector skips stale sub-anchor slots'
         );
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(staleAsc, 2, new Set(), 'floor').map((s) => s.id),
+            selectEdgeSlots(staleAsc, 2, new Set(), 'floor').map((s) => s.id),
             ['slot-7', 'slot-0'],
             'unanchored floor selector keeps legacy behavior'
         );
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(staleAsc, 2, new Set(['slot-0']), 'floor', 80).map((s) => s.id),
+            selectEdgeSlots(staleAsc, 2, new Set(['slot-0']), 'floor', 80).map((s) => s.id),
             ['slot-1', 'slot-2'],
             'anchored floor selector still skips windowed ids'
         );
@@ -123,23 +123,23 @@ async function runTests() {
             { id: 'slot-9', price: 109, type: ORDER_TYPES.SELL },
             { id: 'slot-6', price: 111, type: ORDER_TYPES.SELL },
         ];
-        const anchoredCeil = reserveEdgeIdSet(staleSell, { reserveOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL, 109);
+        const anchoredCeil = edgeOrderIdSet(staleSell, { edgeOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL, 109);
         assert(anchoredCeil.has('slot-9') && anchoredCeil.size === 1, 'ceiling ids anchor at/below the threshold');
-        const legacyCeil = reserveEdgeIdSet(staleSell, { reserveOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL);
+        const legacyCeil = edgeOrderIdSet(staleSell, { edgeOrders: { buy: 0, sell: 1 } }, ORDER_TYPES.SELL);
         assert(legacyCeil.has('slot-6'), 'no anchor keeps legacy rank-highest');
         const sellAsc = staleSell.slice().sort((a, b) => a.price - b.price);
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(sellAsc, 2, new Set(), 'ceiling', 109).map((s) => s.id),
+            selectEdgeSlots(sellAsc, 2, new Set(), 'ceiling', 109).map((s) => s.id),
             ['slot-9', 'slot-8'],
             'anchored ceiling selector skips stale supra-anchor slots'
         );
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(sellAsc, 2, new Set(), 'ceiling').map((s) => s.id),
+            selectEdgeSlots(sellAsc, 2, new Set(), 'ceiling').map((s) => s.id),
             ['slot-6', 'slot-9'],
             'unanchored ceiling selector keeps legacy behavior'
         );
     }
-    console.log(' - compareReserveEdge shared comparator (single source)...');
+    console.log(' - compareEdge shared comparator (single source)...');
     {
         const rows = [
             { id: 'sub', price: 79, type: ORDER_TYPES.BUY },
@@ -147,13 +147,13 @@ async function runTests() {
             { id: 'far-in', price: 82, type: ORDER_TYPES.BUY },
             { id: 'far-out', price: 78, type: ORDER_TYPES.BUY },
         ];
-        const sortedFloor = rows.slice().sort((a, b) => compareReserveEdge(a, b, 'floor', 80));
+        const sortedFloor = rows.slice().sort((a, b) => compareEdge(a, b, 'floor', 80));
         assert.deepStrictEqual(
             sortedFloor.map((s) => s.id),
             ['near-in', 'far-in', 'sub', 'far-out'],
             'floor comparator: in-bound nearest first, out-of-bound nearest last'
         );
-        const sortedNoAnchor = rows.slice().sort((a, b) => compareReserveEdge(a, b, 'floor', null));
+        const sortedNoAnchor = rows.slice().sort((a, b) => compareEdge(a, b, 'floor', null));
         assert.deepStrictEqual(
             sortedNoAnchor.map((s) => s.id),
             ['far-out', 'sub', 'near-in', 'far-in'],
@@ -165,13 +165,13 @@ async function runTests() {
             { id: 'far-in', price: 107, type: ORDER_TYPES.SELL },
             { id: 'far-out', price: 112, type: ORDER_TYPES.SELL },
         ];
-        const sortedCeil = sellRows.slice().sort((a, b) => compareReserveEdge(a, b, 'ceiling', 109));
+        const sortedCeil = sellRows.slice().sort((a, b) => compareEdge(a, b, 'ceiling', 109));
         assert.deepStrictEqual(
             sortedCeil.map((s) => s.id),
             ['near-in', 'far-in', 'supra', 'far-out'],
             'ceiling comparator mirrors floor toward maxPrice'
         );
-        const sortedNoAnchorCeil = sellRows.slice().sort((a, b) => compareReserveEdge(a, b, 'ceiling', null));
+        const sortedNoAnchorCeil = sellRows.slice().sort((a, b) => compareEdge(a, b, 'ceiling', null));
         assert.deepStrictEqual(
             sortedNoAnchorCeil.map((s) => s.id),
             ['far-out', 'supra', 'near-in', 'far-in'],
@@ -183,7 +183,7 @@ async function runTests() {
     console.log(' - live edge anchors come from the grid geometry (ladder first)...');
     {
         const levels = [80, 81, 82, 83, 84, 85, 86, 87, 88, 89];
-        const poolCfg = { startPrice: 'pool', minPrice: '3x', maxPrice: '3x', reserveOrders: { buy: 2, sell: 1 } };
+        const poolCfg = { startPrice: 'pool', minPrice: '3x', maxPrice: '3x', edgeOrders: { buy: 2, sell: 1 } };
         const genManager = {
             config: poolCfg,
             _genesis: { priceLevels: levels, startPrice: 84 },
@@ -191,14 +191,14 @@ async function runTests() {
             boundaryIdx: 4,
             _gapSlots: 2,
         };
-        assert.strictEqual(resolveReserveEdgeAnchorPrice(poolCfg, 'buy'), null, 'config-only anchor stays null for pool + relative bounds');
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(genManager, 'buy'), 80, 'ladder floor anchors the buy edge');
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(genManager, 'sell'), 89, 'ladder ceiling anchors the sell edge');
+        assert.strictEqual(resolveEdgeAnchorPrice(poolCfg, 'buy'), null, 'config-only anchor stays null for pool + relative bounds');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(genManager, 'buy'), 80, 'ladder floor anchors the buy edge');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(genManager, 'sell'), 89, 'ladder ceiling anchors the sell edge');
 
         // The live ladder beats a divergent/stale configured bound.
         const divergent = { ...genManager, config: { ...poolCfg, minPrice: 120, maxPrice: 200 } };
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(divergent, 'buy'), 80, 'live ladder beats the configured floor');
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(divergent, 'sell'), 89, 'live ladder beats the configured ceiling');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(divergent, 'buy'), 80, 'live ladder beats the configured floor');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(divergent, 'sell'), 89, 'live ladder beats the configured ceiling');
 
         // A leftover slot below the live floor ranks last, so the reserve stays
         // on live-rail slots — the behavior the null config anchor could not
@@ -207,14 +207,14 @@ async function runTests() {
             { id: 'slot-x', price: 79, type: ORDER_TYPES.BUY },
             ...levels.slice(0, 5).map((price, i) => ({ id: `slot-${i}`, price, type: ORDER_TYPES.BUY })),
         ].sort((a, b) => a.price - b.price);
-        const liveFloorAnchor = resolveLiveReserveEdgeAnchorPrice(genManager, 'buy');
+        const liveFloorAnchor = resolveLiveEdgeAnchorPrice(genManager, 'buy');
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(rail, 2, new Set(), 'floor', liveFloorAnchor).map((s) => s.id),
+            selectEdgeSlots(rail, 2, new Set(), 'floor', liveFloorAnchor).map((s) => s.id),
             ['slot-0', 'slot-1'],
             'live-anchored floor skips the sub-floor leftover'
         );
         assert.deepStrictEqual(
-            selectReserveEdgeSlots(rail, 2, new Set(), 'floor', null).map((s) => s.id),
+            selectEdgeSlots(rail, 2, new Set(), 'floor', null).map((s) => s.id),
             ['slot-x', 'slot-0'],
             'null anchor keeps the leftover first (legacy)'
         );
@@ -224,7 +224,7 @@ async function runTests() {
         // grid (INV-GRID-004, refused at load/sync), so the rank fallback is
         // all that is left and it must not pretend the grid is priced.
         assert.strictEqual(
-            resolveLiveReserveEdgeAnchorPrice({
+            resolveLiveEdgeAnchorPrice({
                 config: poolCfg,
                 _genesis: null,
                 orders: new Map(rail.map((s) => [s.id, { ...s }])),
@@ -234,13 +234,13 @@ async function runTests() {
             null,
             'no ladder yields no anchor (the undefined grid is not priced from slot prices)'
         );
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice({ config: poolCfg }, 'buy'), null, 'unresolvable config cannot invent an anchor');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice({ config: poolCfg }, 'buy'), null, 'unresolvable config cannot invent an anchor');
         assert.strictEqual(
-            resolveLiveReserveEdgeAnchorPrice({ config: { minPrice: 80, startPrice: 'pool' } }, 'buy'),
+            resolveLiveEdgeAnchorPrice({ config: { minPrice: 80, startPrice: 'pool' } }, 'buy'),
             null,
             'a config bound is not a live anchor any more'
         );
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(null, 'buy'), null, 'missing manager keeps rank fallback');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(null, 'buy'), null, 'missing manager keeps rank fallback');
     }
 
     console.log(' - no-crawl classification follows the live edge anchor...');
@@ -251,9 +251,9 @@ async function runTests() {
             { id: 'slot-1', price: 81, type: ORDER_TYPES.BUY },
             { id: 'slot-2', price: 82, type: ORDER_TYPES.BUY },
         ];
-        const cfg = { startPrice: 'pool', minPrice: '3x', maxPrice: '3x', reserveOrders: { buy: 2, sell: 0 } };
-        const configAnchored = reserveEdgeIdSet(slots, cfg, ORDER_TYPES.BUY);
-        const liveAnchored = reserveEdgeIdSet(slots, cfg, ORDER_TYPES.BUY, 80);
+        const cfg = { startPrice: 'pool', minPrice: '3x', maxPrice: '3x', edgeOrders: { buy: 2, sell: 0 } };
+        const configAnchored = edgeOrderIdSet(slots, cfg, ORDER_TYPES.BUY);
+        const liveAnchored = edgeOrderIdSet(slots, cfg, ORDER_TYPES.BUY, 80);
         assert(configAnchored && configAnchored.has('slot-7'), 'unresolved config anchor classifies the leftover as a reserve');
         assert(liveAnchored && liveAnchored.has('slot-0') && liveAnchored.has('slot-1') && !liveAnchored.has('slot-7'), 'live anchor keeps classification inside the live rail');
     }
@@ -271,13 +271,13 @@ async function runTests() {
             { id: 'slot-1', price: 81, type: ORDER_TYPES.BUY },
             { id: 'slot-2', price: 82, type: ORDER_TYPES.BUY },
         ];
-        const shelfCfg = { reserveOrders: { buy: 2, sell: 0 } };
-        const rankFallback = reserveEdgeIdSet(shelfSlots, shelfCfg, ORDER_TYPES.BUY);
+        const shelfCfg = { edgeOrders: { buy: 2, sell: 0 } };
+        const rankFallback = edgeOrderIdSet(shelfSlots, shelfCfg, ORDER_TYPES.BUY);
         assert(rankFallback && rankFallback.has('slot-0') && rankFallback.has('slot-1') && rankFallback.size === 2, 'rank fallback skips shelf ids');
-        const anchored = reserveEdgeIdSet(shelfSlots, shelfCfg, ORDER_TYPES.BUY, 80);
+        const anchored = edgeOrderIdSet(shelfSlots, shelfCfg, ORDER_TYPES.BUY, 80);
         assert(anchored && anchored.has('slot-0') && anchored.has('slot-1') && anchored.size === 2, 'finite anchor skips shelf ids');
         // Shelf-only grid: empty edge set, so the deficit (0/2) can fire.
-        const shelfOnly = reserveEdgeIdSet(shelfSlots.slice(0, 2), shelfCfg, ORDER_TYPES.BUY, 80);
+        const shelfOnly = edgeOrderIdSet(shelfSlots.slice(0, 2), shelfCfg, ORDER_TYPES.BUY, 80);
         assert(shelfOnly && shelfOnly.size === 0, 'no rail slots means no live reserves');
         // A ladder-less grid has no anchor at all: slot prices are not a
         // pricing authority (INV-GRID-004), so nothing can be derived from
@@ -290,18 +290,18 @@ async function runTests() {
             boundaryIdx: 4,
             _gapSlots: 2,
         };
-        assert.strictEqual(resolveLiveReserveEdgeAnchorPrice(shelfManager, 'buy'), null, 'a ladder-less grid has no live anchor');
+        assert.strictEqual(resolveLiveEdgeAnchorPrice(shelfManager, 'buy'), null, 'a ladder-less grid has no live anchor');
     }
 
-    console.log(' - getActiveOrdersTotal includes both sides...');
+    console.log(' - getCoreOrdersTotal includes both sides...');
     {
         assert.strictEqual(
-            getActiveOrdersTotal({ activeOrders: { buy: 5, sell: 5 }, reserveOrders: { buy: 2, sell: 1 } }),
+            getCoreOrdersTotal({ coreOrders: { buy: 5, sell: 5 }, edgeOrders: { buy: 2, sell: 1 } }),
             13,
             'buy+sell+reserves'
         );
         assert.strictEqual(
-            getActiveOrdersTotal({ activeOrders: { buy: 5, sell: 5 } }),
+            getCoreOrdersTotal({ coreOrders: { buy: 5, sell: 5 } }),
             10,
             'no reserve unchanged'
         );
@@ -320,8 +320,8 @@ async function runTests() {
         }
         const cfg = {
             startPrice: 100,
-            activeOrders: { buy: 3, sell: 3 },
-            reserveOrders: { buy: 2, sell: 1 },
+            coreOrders: { buy: 3, sell: 3 },
+            edgeOrders: { buy: 2, sell: 1 },
         };
         const floorFill = [{ id: 'slot-0', type: ORDER_TYPES.BUY }];
         const ceilFill = [{ id: 'slot-11', type: ORDER_TYPES.SELL }];
@@ -357,8 +357,8 @@ async function runTests() {
         ];
         const cfg = {
             startPrice: 'pool', minPrice: '3x', maxPrice: '3x',
-            activeOrders: { buy: 2, sell: 1 },
-            reserveOrders: { buy: 2, sell: 0 },
+            coreOrders: { buy: 2, sell: 1 },
+            edgeOrders: { buy: 2, sell: 0 },
         };
         const strayFill = [{ id: 'slot-7', type: ORDER_TYPES.BUY }];
         const liveAnchors = { buy: 80, sell: 91 };
@@ -382,8 +382,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
-                reserveOrders: { buy: 2, sell: 1 },
+                coreOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
+                edgeOrders: { buy: 2, sell: 1 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = {
@@ -451,7 +451,7 @@ async function runTests() {
         // fork-injected deep-*) is never activated as a reserve, in both
         // the anchored case (gated live-edge anchor keeps it out-of-bound
         // and ranks it last) and the rank-fallback case (slot-N gate in
-        // _pickEdgeReserveSlots, since isSlotInRail is fail-open for
+        // _pickEdgeSlots, since isSlotInRail is fail-open for
         // unparseable ids) — issue #27 follow-up.
         const shelfMgr = await makeMgr(100, ORDER_TYPES.BUY);
         await shelfMgr._updateOrder({
@@ -468,8 +468,8 @@ async function runTests() {
         const mgr = new OrderManager({
             market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
             startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-            activeOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
-            reserveOrders: { buy: 2, sell: 1 },
+            coreOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
+            edgeOrders: { buy: 2, sell: 1 },
         });
         mgr.logger.level = 'silent';
         mgr.assets = { assetA: { id: '1.3.0', precision: 8 }, assetB: { id: '1.3.1', precision: 5 } };
@@ -518,7 +518,7 @@ async function runTests() {
         // Same grid, reserves off: windows only.
         const plain = strategy.calculateTargetGrid({
             frozenMasterGrid: mgr.orders,
-            config: { ...mgr.config, reserveOrders: { buy: 0, sell: 0 } },
+            config: { ...mgr.config, edgeOrders: { buy: 0, sell: 0 } },
             accountAssets: mgr.assets,
             funds,
             fills: [],
@@ -547,7 +547,7 @@ async function runTests() {
             { type: COW_ACTIONS.CREATE, id: 'slot-13' },
             { type: COW_ACTIONS.UPDATE, id: 'slot-9', newGridId: 'slot-2' },
         ];
-        const cfg = { reserveOrders: { buy: 2, sell: 1 } };
+        const cfg = { edgeOrders: { buy: 2, sell: 1 } };
         const anchors = { buy: 80, sell: 93 };
         const wire = collectRefillSlotIds(actions, { config: cfg, slots, edgeAnchors: anchors });
         assert.deepStrictEqual(wire, ['slot-8'],
@@ -559,7 +559,7 @@ async function runTests() {
         );
         const plainWire = ['slot-0', 'slot-1', 'slot-8', 'slot-13'];
         assert.deepStrictEqual(
-            collectRefillSlotIds(actions, { config: { reserveOrders: { buy: 0, sell: 0 } }, slots }),
+            collectRefillSlotIds(actions, { config: { edgeOrders: { buy: 0, sell: 0 } }, slots }),
             plainWire,
             'disabled reserves keep the plain CREATE wire'
         );
@@ -580,8 +580,8 @@ async function runTests() {
         const mgr: any = new OrderManager({
             market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
             startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-            activeOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
-            reserveOrders: { buy: 2, sell: 1 },
+            coreOrders: { buy: 3, sell: 2 }, weightDistribution: { sell: 0.5, buy: 0.5 },
+            edgeOrders: { buy: 2, sell: 1 },
         });
         mgr.logger.level = 'silent';
         mgr.assets = { assetA: { id: '1.3.0', precision: 8 }, assetB: { id: '1.3.1', precision: 5 } };
@@ -621,8 +621,8 @@ async function runTests() {
             gapSlots: mgr._gapSlots,
         });
         const edgeAnchors = {
-            buy: resolveLiveReserveEdgeAnchorPrice(mgr, 'buy'),
-            sell: resolveLiveReserveEdgeAnchorPrice(mgr, 'sell'),
+            buy: resolveLiveEdgeAnchorPrice(mgr, 'buy'),
+            sell: resolveLiveEdgeAnchorPrice(mgr, 'sell'),
         };
         const createIds = optimized
             .filter((a: any) => a?.type === COW_ACTIONS.CREATE && typeof a?.id === 'string')
@@ -651,12 +651,12 @@ async function runTests() {
             { id: 'slot-2', price: 82, type: ORDER_TYPES.BUY },
             { id: 'slot-3', price: 83, type: ORDER_TYPES.BUY },
         ];
-        const cfg = { reserveOrders: { buy: 2, sell: 0 } };
-        const ids = reserveEdgeIdSet(slots, cfg, ORDER_TYPES.BUY);
+        const cfg = { edgeOrders: { buy: 2, sell: 0 } };
+        const ids = edgeOrderIdSet(slots, cfg, ORDER_TYPES.BUY);
         assert.deepStrictEqual([...(ids || [])].sort(), ['slot-0', 'slot-1'], 'plain pick pins the floor edge');
-        const excluded = reserveEdgeIdSet(slots, cfg, ORDER_TYPES.BUY, null, new Set(['slot-0', 'slot-1', 'slot-2', 'slot-3']));
+        const excluded = edgeOrderIdSet(slots, cfg, ORDER_TYPES.BUY, null, new Set(['slot-0', 'slot-1', 'slot-2', 'slot-3']));
         assert.strictEqual(excluded && excluded.size, 0, 'windowed ids are skipped, overlapping edge pick is empty');
-        const partial = reserveEdgeIdSet(slots, cfg, ORDER_TYPES.BUY, null, new Set(['slot-0']));
+        const partial = edgeOrderIdSet(slots, cfg, ORDER_TYPES.BUY, null, new Set(['slot-0']));
         assert.deepStrictEqual([...(partial || [])].sort(), ['slot-1', 'slot-2'], 'partially windowed edge refills the count from the next floor slots');
     }
 
@@ -673,8 +673,8 @@ async function runTests() {
             allSlots.push({ id: `slot-${i}`, price: 100 + i, type: i < 6 ? ORDER_TYPES.BUY : ORDER_TYPES.SELL });
         }
         const config = {
-            activeOrders: { buy: 6, sell: 3 },
-            reserveOrders: { buy: 2, sell: 0 },
+            coreOrders: { buy: 6, sell: 3 },
+            edgeOrders: { buy: 2, sell: 0 },
             startPrice: 105.5,
         };
         const fill = [{ id: 'slot-0', type: ORDER_TYPES.BUY, price: 100, size: 10, isPartial: false }];
@@ -684,15 +684,15 @@ async function runTests() {
         const withReserves = deriveTargetBoundary(fill, 6, allSlots, config, 0, 10, [], { buy: null, sell: null });
         assert.strictEqual(withReserves.boundaryIdx, 5, 'window overlap fill still crawls the boundary');
         const noReserves = deriveTargetBoundary(
-            fill, 6, allSlots, { ...config, reserveOrders: { buy: 0, sell: 0 } }, 0, 10, [], { buy: null, sell: null }
+            fill, 6, allSlots, { ...config, edgeOrders: { buy: 0, sell: 0 } }, 0, 10, [], { buy: null, sell: null }
         );
         assert.strictEqual(noReserves.boundaryIdx, 5, 'no-reserve control crawls the same fill');
 
         // A genuine reserve BEYOND the window still does not crawl.
-        const windowCfg = { activeOrders: { buy: 4, sell: 3 }, reserveOrders: { buy: 2, sell: 0 }, startPrice: 106 };
-        const reserveFill = [{ id: 'slot-0', type: ORDER_TYPES.BUY, price: 100, size: 10, isPartial: false }];
-        const reserveResult = deriveTargetBoundary(reserveFill, 6, allSlots, windowCfg, 0, 10, [], { buy: null, sell: null });
-        assert.strictEqual(reserveResult.boundaryIdx, 6, 'genuine floor reserve fill does not crawl');
+        const windowCfg = { coreOrders: { buy: 4, sell: 3 }, edgeOrders: { buy: 2, sell: 0 }, startPrice: 106 };
+        const edgeFill = [{ id: 'slot-0', type: ORDER_TYPES.BUY, price: 100, size: 10, isPartial: false }];
+        const edgeResult = deriveTargetBoundary(edgeFill, 6, allSlots, windowCfg, 0, 10, [], { buy: null, sell: null });
+        assert.strictEqual(edgeResult.boundaryIdx, 6, 'genuine floor reserve fill does not crawl');
 
         // Refill wire: the window floor hole CREATE stays in the wire; a
         // genuine reserve CREATE is excluded. Both need the live window set,
@@ -705,13 +705,13 @@ async function runTests() {
         assert(overlapWire.includes('slot-0'), `window floor CREATE stays in the refill wire (wire: ${overlapWire.join(', ')})`);
         assert(overlapWire.includes('slot-7'), 'window sell CREATE remains in the wire');
 
-        const reserveMgrMock = { orders: new Map(allSlots.map((s) => [s.id, s])), config: windowCfg, boundaryIdx: 6, _gapSlots: 0 };
-        const reserveWire = collectRefillSlotIds(
+        const edgeMgrMock = { orders: new Map(allSlots.map((s) => [s.id, s])), config: windowCfg, boundaryIdx: 6, _gapSlots: 0 };
+        const edgeWire = collectRefillSlotIds(
             [{ type: COW_ACTIONS.CREATE, id: 'slot-0' }, { type: COW_ACTIONS.CREATE, id: 'slot-4' }],
-            { config: windowCfg, slots: allSlots, edgeAnchors: { buy: null, sell: null }, manager: reserveMgrMock }
+            { config: windowCfg, slots: allSlots, edgeAnchors: { buy: null, sell: null }, manager: edgeMgrMock }
         );
-        assert(!reserveWire.includes('slot-0'), 'genuine reserve CREATE is excluded from the wire');
-        assert(reserveWire.includes('slot-4'), 'window CREATE stays in the wire alongside a reserve');
+        assert(!edgeWire.includes('slot-0'), 'genuine reserve CREATE is excluded from the wire');
+        assert(edgeWire.includes('slot-4'), 'window CREATE stays in the wire alongside a reserve');
     }
 
     console.log(' - liveWindowIdSet mirrors the picker window slice...');
@@ -720,8 +720,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: opts.window, sell: 3 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: opts.window, sell: 3 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -763,8 +763,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: opts.window, sell: 3 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: opts.window, sell: 3 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -792,7 +792,7 @@ async function runTests() {
         // dedicated reserves — the deficit never fires.
         const overlap = await makeMgr({ boundary: 6, window: 6, live: [0, 1, 2, 3, 4, 5] });
         assert.strictEqual(
-            countLiveReserveOrders(overlap, overlap.config, ORDER_TYPES.BUY), 0,
+            countLiveEdgeOrders(overlap, overlap.config, ORDER_TYPES.BUY), 0,
             'window covering the floor edge counts zero dedicated reserves'
         );
 
@@ -800,7 +800,7 @@ async function runTests() {
         // of the buy rail, dedicated reserves live at the floor.
         const control = await makeMgr({ boundary: 10, window: 6, live: [0, 1, 4, 5, 6, 7, 8, 9] });
         assert.strictEqual(
-            countLiveReserveOrders(control, control.config, ORDER_TYPES.BUY), 2,
+            countLiveEdgeOrders(control, control.config, ORDER_TYPES.BUY), 2,
             'dedicated floor reserves still count under a closest window'
         );
 
@@ -808,7 +808,7 @@ async function runTests() {
         // runs over the full rail, so floor reserves keep their identity).
         const partial = await makeMgr({ boundary: 10, window: 6, live: [0, 1, 8, 9] });
         assert.strictEqual(
-            countLiveReserveOrders(partial, partial.config, ORDER_TYPES.BUY), 2,
+            countLiveEdgeOrders(partial, partial.config, ORDER_TYPES.BUY), 2,
             'live reserves count even when the window itself is under-filled'
         );
     }
@@ -822,8 +822,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: 6, sell: 0 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: 6, sell: 0 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -850,13 +850,13 @@ async function runTests() {
         // slot-0/1 virtual. Window shortfall silent (12 >= 8), reserve fires.
         const deficitMgr = await makeTriggerMgr([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
         assert.strictEqual(
-            countLiveReserveOrders(deficitMgr, deficitMgr.config, ORDER_TYPES.BUY), 0,
+            countLiveEdgeOrders(deficitMgr, deficitMgr.config, ORDER_TYPES.BUY), 0,
             'floor reserves virtual while rail carries surplus'
         );
         const deficitReason: any = getTargetedSyncReason({ manager: deficitMgr, config: deficitMgr.config });
         assert(deficitReason && typeof deficitReason.reason === 'string', 'reserve deficit returns a reason');
         assert(
-            deficitReason.reason.includes('buy reserves 0/2'),
+            deficitReason.reason.includes('buy edges 0/2'),
             `reserve reason names the deficit (got: ${deficitReason.reason})`
         );
         assert(
@@ -866,7 +866,7 @@ async function runTests() {
         // Filled clears: floor reserves live + window live (8 >= 8) => null.
         const filledMgr = await makeTriggerMgr([0, 1, 8, 9, 10, 11, 12, 13]);
         assert.strictEqual(
-            countLiveReserveOrders(filledMgr, filledMgr.config, ORDER_TYPES.BUY), 2,
+            countLiveEdgeOrders(filledMgr, filledMgr.config, ORDER_TYPES.BUY), 2,
             'floor reserves live once filled'
         );
         assert.strictEqual(
@@ -877,7 +877,7 @@ async function runTests() {
         // Disabled reserves stay silent despite the same surplus.
         const disabledReason: any = getTargetedSyncReason({
             manager: deficitMgr,
-            config: { ...deficitMgr.config, reserveOrders: { buy: 0, sell: 0 } },
+            config: { ...deficitMgr.config, edgeOrders: { buy: 0, sell: 0 } },
         });
         assert.strictEqual(disabledReason, null, 'disabled reserves never fire');
         // Budget gate: no allocated funds suppresses the reserve reason.
@@ -903,8 +903,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: 6, sell: 3 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: 6, sell: 3 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -1016,14 +1016,14 @@ async function runTests() {
         // Fork-kept shelf (non-slot-N ids, live below the rail with real manual
         // sizes) heads the cheapest-first matched sort — without the slot-N gate
         // the new matched-excess plan leg wipes it on the next boot. Shelf ids
-        // must never appear in planned cancels (same gate as reserveEdgeIdSet).
+        // must never appear in planned cancels (same gate as edgeOrderIdSet).
         // No-op upstream (grids only mint slot-N).
         const makeShelfMgr = async (liveCount: number) => {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: 6, sell: 3 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: 6, sell: 3 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -1146,8 +1146,8 @@ async function runTests() {
             const mgr = new OrderManager({
                 market: 'TEST/BTS', assetA: 'TEST', assetB: 'BTS',
                 startPrice: 100, incrementPercent: 1, targetSpreadPercent: 0,
-                activeOrders: { buy: 6, sell: 3 },
-                reserveOrders: { buy: 2, sell: 0 },
+                coreOrders: { buy: 6, sell: 3 },
+                edgeOrders: { buy: 2, sell: 0 },
             });
             mgr.logger.level = 'silent';
             mgr.assets = { assetA: { id: '1.3.0', precision: 8, symbol: 'TEST' }, assetB: { id: '1.3.1', precision: 5, symbol: 'BTS' } };
@@ -1204,7 +1204,7 @@ async function runTests() {
         assert(plannedCreates.length >= 3, `window shortfall creates 3 (got ${plannedCreates.length})`);
         // Targeted sync: 5 rail live + 2 shelf vs target 6+2=8 => the window
         // shortfall (5 < 8) must fire; shelf must not mask it to 7-8.
-        (mgr as any).config = { ...(mgr as any).config, activeOrders: { buy: 6, sell: 0 }, reserveOrders: { buy: 2, sell: 0 } };
+        (mgr as any).config = { ...(mgr as any).config, coreOrders: { buy: 6, sell: 0 }, edgeOrders: { buy: 2, sell: 0 } };
         (mgr as any).checkFundDriftAfterFills = () => null;
         const reason: any = getTargetedSyncReason({ manager: mgr, config: (mgr as any).config });
         assert(reason && typeof reason.reason === 'string', 'window shortfall returns a reason despite shelf');

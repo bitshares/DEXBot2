@@ -23,7 +23,7 @@ async function testStartupAfterDivergenceWithPartial() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 3, sell: 3 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 3, sell: 3 }
     });
 
     mgr.assets = {
@@ -60,7 +60,7 @@ async function testStartupAfterDivergenceWithPartial() {
     assert.strictEqual(totalBuyCount, 3, 'Total should be 3 (2 ACTIVE + 1 PARTIAL)');
     console.log(`  ✓ BUY order count correct: ${activeBuyCount} ACTIVE + ${partialBuyCount} PARTIAL = ${totalBuyCount} total`);
 
-    const targetBuys = mgr.config.activeOrders.buy;
+    const targetBuys = mgr.config.coreOrders.buy;
     const belowTarget = totalBuyCount < targetBuys;
     assert(!belowTarget, `At target (${totalBuyCount} >= ${targetBuys}), should not create new orders`);
     console.log(`  ✓ Rebalancing recognizes: at target (${totalBuyCount}/${targetBuys}), no creation needed\n`);
@@ -74,7 +74,7 @@ async function testFundCyclingWithPartialFills() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -104,7 +104,7 @@ async function testRebalancingWithExistingPartial() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 3, sell: 3 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 3, sell: 3 }
     });
 
     mgr.assets = {
@@ -125,7 +125,7 @@ async function testRebalancingWithExistingPartial() {
     }
 
     const buyCount = countOrders(ORDER_TYPES.BUY, mgr.orders);
-    const targetBuys = mgr.config.activeOrders.buy;
+    const targetBuys = mgr.config.coreOrders.buy;
     const buyBelowTarget = buyCount < targetBuys;
 
     assert.strictEqual(buyCount, 3, 'Should count 3 BUYs (2 ACTIVE + 1 PARTIAL)');
@@ -146,7 +146,7 @@ async function testGridNavigationWithPartials() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -194,7 +194,7 @@ async function testEdgeBoundGridWithPartial() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {
@@ -218,7 +218,7 @@ async function testEdgeBoundGridWithPartial() {
     console.log(`  ✓ STEP 2.5 handles in-place: not moved despite being at boundary`);
 
     const buyCount = countOrders(ORDER_TYPES.BUY, mgr.orders);
-    const targetBuys = mgr.config.activeOrders.buy;
+    const targetBuys = mgr.config.coreOrders.buy;
     const belowTarget = buyCount < targetBuys;
     console.log(`  ✓ BUY count (${buyCount}) vs target (${targetBuys}): Below=${belowTarget}`);
     if (belowTarget) {
@@ -235,7 +235,7 @@ async function testStartupDustNoForcedRebalance() {
 
     const mgr = new OrderManager({
         assetA: 'IOB.XRP', assetB: 'BTS', startPrice: 1800,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 2, sell: 2 }
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 2, sell: 2 }
     });
 
     mgr.assets = {

@@ -40,7 +40,7 @@ function makeEngine(targetGrid: Map<string, any>, boundaryIdx: number) {
         config: {
             incrementPercent: 1,
             gridLimits: {},
-            activeOrders: { buy: 0, sell: 0 }
+            coreOrders: { buy: 0, sell: 0 }
         } as any
     });
 }
@@ -161,7 +161,7 @@ async function testDivergencePath() {
             startPrice: 100,
             incrementPercent: 1,
             targetSpreadPercent: 2,
-            activeOrders: { buy: 3, sell: 3 },
+            coreOrders: { buy: 3, sell: 3 },
             botFunds: { buy: 1000, sell: 1000 }
         });
         manager.assets = {

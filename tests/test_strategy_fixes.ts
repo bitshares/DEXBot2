@@ -23,7 +23,7 @@ function createMockManager(slots = []) {
             startPrice: 1.0,
             incrementPercent: 1,
             targetSpreadPercent: 2,
-            activeOrders: { buy: 5, sell: 5 },
+            coreOrders: { buy: 5, sell: 5 },
             weightDistribution: { buy: 0.5, sell: 0.5 }
         },
         assets: {

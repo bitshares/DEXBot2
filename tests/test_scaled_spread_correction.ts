@@ -8,7 +8,7 @@ async function testScaledSpreadCorrection() {
 
     const mgr = new OrderManager({
         assetA: 'BASE', assetB: 'QUOTE', startPrice: 1,
-        botFunds: { buy: 1000, sell: 1000 }, activeOrders: { buy: 1, sell: 1 },
+        botFunds: { buy: 1000, sell: 1000 }, coreOrders: { buy: 1, sell: 1 },
         incrementPercent: 1, targetSpreadPercent: 1
     });
 

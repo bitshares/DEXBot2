@@ -338,7 +338,7 @@ function testOutOfRailCenterFallsBackToRailCenter() {
 
     const stale = deriveTargetBoundary([], null, slots, {
         startPrice: 1e9,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
     }, GAP);
     assert.strictEqual(stale.boundaryIdx, railCenterBoundary,
         'an out-of-rail numeric center must not pin the boundary to the top edge');
@@ -347,7 +347,7 @@ function testOutOfRailCenterFallsBackToRailCenter() {
     // Control: an in-rail numeric center keeps the honest boundary math.
     const honest = deriveTargetBoundary([], null, slots, {
         startPrice: slots[10].price,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
     }, GAP);
     assert.strictEqual(honest.boundaryIdx, 10 - Math.floor(GAP / 2) - 1,
         'an in-rail center still resolves the honest boundary');
@@ -361,7 +361,7 @@ function testOutOfRailGenesisFallsBackToRailCenter() {
     const res = deriveTargetBoundary([], null, slots, {
         startPrice: 'pool',
         genesisStartPrice: 1e9,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
     }, GAP);
     assert.strictEqual(res.boundaryIdx, railCenterBoundary,
         'an out-of-rail genesis center must not pin the boundary to an edge');
@@ -377,7 +377,7 @@ function testOutOfRailFillAnchorStillWins() {
         { id: 'slot-x', type: ORDER_TYPES.SELL, price: 1e9, isPartial: false },
     ], null, slots, {
         startPrice: 'pool',
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
     }, GAP);
     assert.ok(res.boundaryIdx > CENTER_IDX,
         `out-of-rail fill anchor must still drive the boundary high (got ${res.boundaryIdx})`);
@@ -435,7 +435,7 @@ async function testRebuildFoldsOwedCrawlsIntoStaticCenter() {
         maxPrice: 200,
         incrementPercent: 1,
         targetSpreadPercent: 4,
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         logging: { level: 'error' },
     };
 
@@ -533,7 +533,7 @@ async function testInitialActivationRailGate() {
         minPrice: 50,
         maxPrice: 200,
         incrementPercent: 1,
-        activeOrders: { buy: 2, sell: 2 },
+        coreOrders: { buy: 2, sell: 2 },
         logging: { level: 'error' },
     });
     manager.assets = {

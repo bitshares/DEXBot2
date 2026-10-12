@@ -80,7 +80,7 @@ interface BotConfig {
   targetSpreadPercent?: unknown;
   incrementPercent?: unknown;
   gridPrice?: unknown;
-  activeOrders?: unknown;
+  coreOrders?: unknown;
   botFunds?: JsonObj;
   weightDistribution?: JsonObj;
   [key: string]: unknown;
@@ -128,7 +128,7 @@ interface AnalysisResult {
   increment: IncrementAnalysis;
   slots: SlotCounts;
   funds: FundsBreakdown;
-  activeOrdersTarget: { buy: number; sell: number } | null;
+  coreOrdersTarget: { buy: number; sell: number } | null;
   botFunds: { buy: string; sell: string } | null;
   weightDistribution: JsonObj | null;
   dynamicWeight: DynamicWeightInfo | null;
@@ -700,7 +700,7 @@ function analyzeOrder(botData: GridSnapshot, config: BotConfig, botKey: string):
       sell: sellSlots
     },
     // Target active orders from config
-    activeOrdersTarget: config ? config.activeOrders : null,
+    coreOrdersTarget: config ? config.coreOrders : null,
     // Bot fund allocation settings from config (normalized to strings for
     // the display paths; bots.json allows percentage strings or numbers)
     botFunds: config && config.botFunds
@@ -1354,9 +1354,9 @@ function formatAnalysis(analysisInput: JsonObj): string {
   }
 
   // Active orders comparison
-  if (analysis.hasConfig && analysis.activeOrdersTarget) {
-    const buyTarget = analysis.activeOrdersTarget.buy;
-    const sellTarget = analysis.activeOrdersTarget.sell;
+  if (analysis.hasConfig && analysis.coreOrdersTarget) {
+    const buyTarget = analysis.coreOrdersTarget.buy;
+    const sellTarget = analysis.coreOrdersTarget.sell;
     const buyActual = analysis.slots.activeBuy;
     const sellActual = analysis.slots.activeSell;
 

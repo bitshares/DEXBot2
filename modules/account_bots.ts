@@ -64,8 +64,8 @@
  *       "targetSpreadPercent": 2,
  *       "weightDistribution": { "sell": 1, "buy": 1 },
  *       "botFunds": { "sell": "100%", "buy": "100%" },
- *       "activeOrders": { "sell": 20, "buy": 20 },
- *       "reserveOrders": { "buy": 0, "sell": 0 },  // Edge reserves: extra live orders (buy: floor, sell: ceiling)
+ *       "coreOrders": { "sell": 20, "buy": 20 },
+ *       "edgeOrders": { "buy": 0, "sell": 0 },  // Edge orders: extra live orders (buy: floor, sell: ceiling)
  *       "poolRef": null,              // Optional pinned pool ID for startPrice "pool"
  *       "debtPolicy": { ... },        // MPA/credit lending policy — docs/MPA_CREDIT_USAGE.md
  *       "min_BTS_value": 0,           // Minimum BTS value threshold for operations
@@ -1141,7 +1141,7 @@ async function askGridPriceMode(promptText: string, defaultValue?: string | numb
 interface BotDraft extends UnknownRecord {
     accountId?: string;
     active?: boolean;
-    activeOrders: { sell?: number; buy?: number };
+    coreOrders: { sell?: number; buy?: number };
     assetA?: string;
     assetB?: string;
     botFunds: { sell?: number | string; buy?: number | string };
@@ -1153,7 +1153,7 @@ interface BotDraft extends UnknownRecord {
     name?: string;
     poolRef?: string | null;
     preferredAccount?: string;
-    reserveOrders?: { sell?: number; buy?: number };
+    edgeOrders?: { sell?: number; buy?: number };
     startPrice?: number | string;
     targetSpreadPercent?: number;
     weightDistribution: { sell: number; buy: number };
@@ -1316,7 +1316,7 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
              console.log(`${COLORS.yellowBold}2) Identity:${COLORS.reset}  ${COLORS.orange}Name:${COLORS.reset} ${data.name || '?'}, ${COLORS.orange}Account:${COLORS.reset} ${data.preferredAccount || '?'} | ${COLORS.orange}Active:${COLORS.reset} ${colorBooleanFlag(data.active, true)}, ${COLORS.orange}DryRun:${COLORS.reset} ${colorBooleanFlag(data.dryRun, false)}`);
              console.log(`${COLORS.yellowBold}3) Price:${COLORS.reset}     ${COLORS.orange}Range:${COLORS.reset} [${colorPriceRangeValue(data.minPrice)} - ${colorPriceRangeValue(data.maxPrice)}] | ${COLORS.orange}Start:${COLORS.reset} ${colorStartPriceValue(data.startPrice)}, ${COLORS.orange}Pool:${COLORS.reset} ${formatPoolRefLabel(data)} | ${COLORS.orange}GridPrice:${COLORS.reset} ${colorGridPriceValue(data.gridPrice)}`);
              console.log(`${COLORS.yellowBold}4) Grid:${COLORS.reset}      ${COLORS.orange}Weights:${COLORS.reset} (S:${data.weightDistribution.sell}, B:${data.weightDistribution.buy}) | ${COLORS.orange}Increment:${COLORS.reset} ${data.incrementPercent}%, ${COLORS.orange}Spread:${COLORS.reset} ${data.targetSpreadPercent}%`);
-             console.log(`${COLORS.yellowBold}5) Inventory:${COLORS.reset} ${COLORS.orange}Sell:${COLORS.reset} ${colorPercentageInput(data.botFunds.sell)}, ${COLORS.orange}Buy:${COLORS.reset} ${colorPercentageInput(data.botFunds.buy)} | ${COLORS.orange}MarketOrder:${COLORS.reset} (S:${data.activeOrders.sell}, B:${data.activeOrders.buy}) | ${COLORS.orange}EdgeOrder:${COLORS.reset} (S:${data.reserveOrders?.sell ?? 0}, B:${data.reserveOrders?.buy ?? 0})`);
+             console.log(`${COLORS.yellowBold}5) Inventory:${COLORS.reset} ${COLORS.orange}Sell:${COLORS.reset} ${colorPercentageInput(data.botFunds.sell)}, ${COLORS.orange}Buy:${COLORS.reset} ${colorPercentageInput(data.botFunds.buy)} | ${COLORS.orange}CoreOrder:${COLORS.reset} (S:${data.coreOrders.sell}, B:${data.coreOrders.buy}) | ${COLORS.orange}EdgeOrder:${COLORS.reset} (S:${data.edgeOrders?.sell ?? 0}, B:${data.edgeOrders?.buy ?? 0})`);
              {
                  const flags = adapterFlags();
                  const inert = !isAmaGridPriceDraft() && (flags.ama || flags.dynamicWeight || flags.asymmetricBounds);
@@ -1441,19 +1441,19 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
                 if (fSell === undefined || fSell === '\x1b') break;
                 const fBuy = await askNumberOrPercentage('botFunds buy amount', data.botFunds.buy);
                 if (fBuy === undefined || fBuy === '\x1b') break;
-                const oSell = await askIntegerInRange('activeOrders sell count', data.activeOrders.sell, 1, 100);
+                const oSell = await askIntegerInRange('coreOrders sell count', data.coreOrders.sell, 1, 100);
                 if (typeof oSell !== 'number') break;
-                const oBuy = await askIntegerInRange('activeOrders buy count', data.activeOrders.buy, 1, 100);
+                const oBuy = await askIntegerInRange('coreOrders buy count', data.coreOrders.buy, 1, 100);
                 if (typeof oBuy !== 'number') break;
-                const rBuy = await askIntegerInRange('reserveOrders buy floor count (0 disables)', data.reserveOrders?.buy ?? 0, 0, 100);
+                const rBuy = await askIntegerInRange('edgeOrders buy floor count (0 disables)', data.edgeOrders?.buy ?? 0, 0, 100);
                 if (typeof rBuy !== 'number') break;
-                const rSell = await askIntegerInRange('reserveOrders sell ceiling count (0 disables)', data.reserveOrders?.sell ?? 0, 0, 100);
+                const rSell = await askIntegerInRange('edgeOrders sell ceiling count (0 disables)', data.edgeOrders?.sell ?? 0, 0, 100);
                 if (typeof rSell !== 'number') break;
                 data.botFunds.sell = fSell;
                 data.botFunds.buy = fBuy;
-                data.activeOrders.sell = oSell;
-                data.activeOrders.buy = oBuy;
-                data.reserveOrders = { buy: rBuy, sell: rSell };
+                data.coreOrders.sell = oSell;
+                data.coreOrders.buy = oBuy;
+                data.edgeOrders = { buy: rBuy, sell: rSell };
                 showMenu = true;
                 break;
             case '6': {

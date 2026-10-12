@@ -782,8 +782,8 @@ async function testLiveBotConfigAppliesAllowlistedKeys() {
             name: 'Live Bot',
             active: true,
             gridPrice: 'book',
-            activeOrders: { buy: 5, sell: 5 },
-            reserveOrders: { buy: 0, sell: 0 },
+            coreOrders: { buy: 5, sell: 5 },
+            edgeOrders: { buy: 0, sell: 0 },
             botFunds: { buy: '100%', sell: '100%' },
             weightDistribution: { sell: 1, buy: 1 },
         };
@@ -791,8 +791,8 @@ async function testLiveBotConfigAppliesAllowlistedKeys() {
             config: {
                 name: 'Live Bot',
                 gridPrice: 'book',
-                activeOrders: { buy: 5, sell: 5 },
-                reserveOrders: { buy: 0, sell: 0 },
+                coreOrders: { buy: 5, sell: 5 },
+                edgeOrders: { buy: 0, sell: 0 },
                 botFunds: { buy: '100%', sell: '100%' },
                 weightDistribution: { sell: 1, buy: 1 },
             },
@@ -815,14 +815,14 @@ async function testLiveBotConfigAppliesAllowlistedKeys() {
         assert.strictEqual(typeof self._appliedBotConfigFingerprint, 'string', 'baseline fingerprint stored');
 
         // Simulate a user edit: buy-window 5->7, reserve sell 0->2.
-        fileEntry.activeOrders.buy = 7;
-        fileEntry.reserveOrders.sell = 2;
+        fileEntry.coreOrders.buy = 7;
+        fileEntry.edgeOrders.sell = 2;
         const applied = await checkAndApplyBotConfigChanges(self, 'unit-test');
         assert.strictEqual(applied.applied, true, 'allowlisted edits must apply live');
-        assert.deepStrictEqual(applied.liveChanges.sort(), ['activeOrders', 'reserveOrders'], 'changed keys reported');
-        assert.strictEqual(self.config.activeOrders.buy, 7, 'bot.config merged');
-        assert.strictEqual(self.manager.config.activeOrders.buy, 7, 'manager.config merged');
-        assert.strictEqual(self.manager.config.reserveOrders.sell, 2, 'reserve toggle merged');
+        assert.deepStrictEqual(applied.liveChanges.sort(), ['coreOrders', 'edgeOrders'], 'changed keys reported');
+        assert.strictEqual(self.config.coreOrders.buy, 7, 'bot.config merged');
+        assert.strictEqual(self.manager.config.coreOrders.buy, 7, 'manager.config merged');
+        assert.strictEqual(self.manager.config.edgeOrders.sell, 2, 'reserve toggle merged');
         assert.ok(
             logs.some((msg) => msg.includes('no restart needed') && msg.includes('Live Bot')),
             'live apply must log what changed with a no-restart note'
@@ -850,10 +850,10 @@ async function testLiveBotConfigHintsNonLiveChanges() {
             active: true,
             gridPrice: 'book',
             incrementPercent: 0.3,
-            activeOrders: { buy: 5, sell: 5 },
+            coreOrders: { buy: 5, sell: 5 },
         };
         const self: any = {
-            config: { name: 'Geo Bot', gridPrice: 'book', incrementPercent: 0.3, activeOrders: { buy: 5, sell: 5 } },
+            config: { name: 'Geo Bot', gridPrice: 'book', incrementPercent: 0.3, coreOrders: { buy: 5, sell: 5 } },
             manager: { config: { name: 'Geo Bot' } },
             _appliedBotConfigFingerprint: null,
             _appliedBotConfigEntry: null,
@@ -885,9 +885,16 @@ async function testLiveBotConfigHintsNonLiveChanges() {
         // fingerprint stays put (documents why the 1min adapter check alone
         // could never pick them up).
         assert.notStrictEqual(
-            buildBotConfigFingerprint({ ...fileEntry, activeOrders: { buy: 9, sell: 5 } }),
-            buildBotConfigFingerprint({ ...fileEntry, activeOrders: { buy: 5, sell: 5 } }),
+            buildBotConfigFingerprint({ ...fileEntry, coreOrders: { buy: 9, sell: 5 } }),
+            buildBotConfigFingerprint({ ...fileEntry, coreOrders: { buy: 5, sell: 5 } }),
             'live fingerprint must cover buy-window counts'
+        );
+        // Legacy keys canonicalize before hashing, so a pre-rename bots.json
+        // fingerprints identically to its rewritten form (no spurious resync).
+        assert.strictEqual(
+            buildBotConfigFingerprint({ name: 'L', activeOrders: { buy: 5, sell: 5 }, reserveOrders: 1 }),
+            buildBotConfigFingerprint({ name: 'L', coreOrders: { buy: 5, sell: 5 }, edgeOrders: 1 }),
+            'legacy activeOrders/reserveOrders fingerprint identically to canonical keys'
         );
     } finally {
         if (previousOwner === undefined) delete process.env.DEXBOT_ADAPTER_OWNER;
@@ -902,10 +909,10 @@ async function testLiveBotConfigSkipsCorruptWithoutClobbering() {
     try {
         const { checkAndApplyBotConfigChanges } = loadRuntimeWithStubs();
         const self: any = {
-            config: { name: 'Live Bot', activeOrders: { buy: 5, sell: 5 } },
+            config: { name: 'Live Bot', coreOrders: { buy: 5, sell: 5 } },
             manager: { config: {} },
             _appliedBotConfigFingerprint: 'good-fingerprint',
-            _appliedBotConfigEntry: { name: 'Live Bot', activeOrders: { buy: 5, sell: 5 } },
+            _appliedBotConfigEntry: { name: 'Live Bot', coreOrders: { buy: 5, sell: 5 } },
             _loadBotsConfigSnapshot: async () => ({ corrupt: true }),
             _log: () => {},
             _warn: () => {},
@@ -913,7 +920,7 @@ async function testLiveBotConfigSkipsCorruptWithoutClobbering() {
         const result = await checkAndApplyBotConfigChanges(self, 'unit-test');
         assert.strictEqual(result.skipped, true, 'corrupt file must skip');
         assert.strictEqual(self._appliedBotConfigFingerprint, 'good-fingerprint', 'stored fingerprint preserved');
-        assert.strictEqual(self.config.activeOrders.buy, 5, 'running config untouched');
+        assert.strictEqual(self.config.coreOrders.buy, 5, 'running config untouched');
     } finally {
         if (previousOwner === undefined) delete process.env.DEXBOT_ADAPTER_OWNER;
         else process.env.DEXBOT_ADAPTER_OWNER = previousOwner;
@@ -930,14 +937,14 @@ async function testLiveBotConfigBaselineConvergesStartupRace() {
         const { checkAndApplyBotConfigChanges } = loadRuntimeWithStubs();
         const logs: string[] = [];
         const self: any = {
-            config: { name: 'Race Bot', activeOrders: { buy: 15, sell: 15 } },
-            manager: { config: { name: 'Race Bot', activeOrders: { buy: 15, sell: 15 } } },
+            config: { name: 'Race Bot', coreOrders: { buy: 15, sell: 15 } },
+            manager: { config: { name: 'Race Bot', coreOrders: { buy: 15, sell: 15 } } },
             _appliedBotConfigFingerprint: null,
             _appliedBotConfigEntry: null,
             _loadBotsConfigSnapshot: async () => ({
                 exists: true,
                 fingerprint: '',
-                activeBots: [{ name: 'Race Bot', active: true, activeOrders: { buy: 20, sell: 20 } }],
+                activeBots: [{ name: 'Race Bot', active: true, coreOrders: { buy: 20, sell: 20 } }],
                 needsMarketAdapter: false,
             }),
             _log: (msg: any) => logs.push(String(msg)),
@@ -946,8 +953,8 @@ async function testLiveBotConfigBaselineConvergesStartupRace() {
         const result = await checkAndApplyBotConfigChanges(self, 'unit-test');
         assert.strictEqual(result.reason, 'baseline', 'first check still reports baseline');
         assert.strictEqual(result.applied, true, 'startup race edit must converge');
-        assert.strictEqual(self.config.activeOrders.buy, 20, 'bot.config converged to file');
-        assert.strictEqual(self.manager.config.activeOrders.sell, 20, 'manager.config converged to file');
+        assert.strictEqual(self.config.coreOrders.buy, 20, 'bot.config converged to file');
+        assert.strictEqual(self.manager.config.coreOrders.sell, 20, 'manager.config converged to file');
         assert.ok(
             logs.some((msg) => msg.includes('startup check')),
             'race convergence must be logged'

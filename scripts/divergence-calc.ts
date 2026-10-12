@@ -82,17 +82,17 @@ lines.forEach((line: string) => {
 // Filter out partial orders from divergence calculation
 // Include: 'active' and 'virtual' orders - these represent the intended grid structure
 // Exclude: 'partial' orders - these are temporarily filled and in transition
-const activeOrders = orders.filter((o) => o.state !== 'partial');
-const partialOrdersCount = orders.length - activeOrders.length;
+const nonPartialOrders = orders.filter((o) => o.state !== 'partial');
+const partialOrdersCount = orders.length - nonPartialOrders.length;
 
 // Calculate divergence metric: sum of ((calculated - persisted) / persisted)^2 / count
 let sumSquaredDiff = 0;
-activeOrders.forEach((order) => {
+nonPartialOrders.forEach((order) => {
   const relativeError = (order.calculated - order.persisted) / order.persisted;
   sumSquaredDiff += relativeError * relativeError;
 });
 
-const normalizedMetric = activeOrders.length > 0 ? sumSquaredDiff / activeOrders.length : 0;
+const normalizedMetric = nonPartialOrders.length > 0 ? sumSquaredDiff / nonPartialOrders.length : 0;
 const promille = normalizedMetric * 1000;
 
 // Calculate real error as √(promille / 1000)
@@ -100,7 +100,7 @@ const realErrorPercent = Math.sqrt(promille / 1000) * 100;
 
 console.log('=== QUADRATIC DIVERGENCE ANALYSIS ===\n');
 console.log(`Total orders in input: ${orders.length}`);
-console.log(`Orders analyzed: ${activeOrders.length}`);
+console.log(`Orders analyzed: ${nonPartialOrders.length}`);
 if (partialOrdersCount > 0) {
   console.log(`Partial orders excluded: ${partialOrdersCount}`);
 }
@@ -116,7 +116,7 @@ console.log(`  Status: ${promille <= 1 ? '✓ WITHIN THRESHOLD' : '✗ EXCEEDS T
 // Show min/max errors
 let minError = Infinity, maxError = -Infinity;
 let minErrorOrder: (DivergenceOrder & { idx: number }) | null = null, maxErrorOrder: (DivergenceOrder & { idx: number }) | null = null;
-activeOrders.forEach((order, idx) => {
+nonPartialOrders.forEach((order, idx) => {
   const absError = Math.abs((order.calculated - order.persisted) / order.persisted);
   if (absError < minError) { minError = absError; minErrorOrder = { ...order, idx }; }
   if (absError > maxError) { maxError = absError; maxErrorOrder = { ...order, idx }; }

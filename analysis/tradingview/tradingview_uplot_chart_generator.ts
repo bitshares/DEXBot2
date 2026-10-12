@@ -2696,8 +2696,8 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         // Spread = best buy/best sell gap.
         // Pair-aware: order prices invert (1/p) with the candles so B/A shows
         // the same levels in display units (side colors preserved).
-        let reserveLine = null;
-        let reserveLabel = null;
+        let edgeLine = null;
+        let edgeLabel = null;
         let ceilingLine = null;
         let ceilingLabel = null;
         let spreadMidLabel = null;
@@ -2729,7 +2729,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             return (overRect.top - rootRect.top) + (1 - frac) * overRect.height;
         }
         function hideOverlayNodes() {
-            [reserveLine, reserveLabel, ceilingLine, ceilingLabel, spreadMidLabel, orderBuyLabel, orderSellLabel].forEach((n) => { if (n) n.style.display = 'none'; });
+            [edgeLine, edgeLabel, ceilingLine, ceilingLabel, spreadMidLabel, orderBuyLabel, orderSellLabel].forEach((n) => { if (n) n.style.display = 'none'; });
             orderLineDivs.forEach((d) => { d.style.display = 'none'; });
             orderPriceTags.forEach((t) => { t.style.display = 'none'; });
         }
@@ -2737,15 +2737,15 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             if (!u || !u.over || !currentCandles.length) return;
             if (!currentOrdersVisible || (!hasOrders && !hasBounds)) { hideOverlayNodes(); return; }
             try { if (getComputedStyle(u.root).position === 'static') u.root.style.position = 'relative'; } catch (e) {}
-            if (!reserveLine || reserveLine.parentNode !== u.root) {
-                if (reserveLine && reserveLine.parentNode) reserveLine.parentNode.removeChild(reserveLine);
-                if (reserveLabel && reserveLabel.parentNode) reserveLabel.parentNode.removeChild(reserveLabel);
-                reserveLine = document.createElement('div');
-                reserveLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:2px dashed #f97316;opacity:0.7;left:0;right:0;display:none;';
-                reserveLabel = document.createElement('div');
-                reserveLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#f97316;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
-                u.root.appendChild(reserveLine);
-                u.root.appendChild(reserveLabel);
+            if (!edgeLine || edgeLine.parentNode !== u.root) {
+                if (edgeLine && edgeLine.parentNode) edgeLine.parentNode.removeChild(edgeLine);
+                if (edgeLabel && edgeLabel.parentNode) edgeLabel.parentNode.removeChild(edgeLabel);
+                edgeLine = document.createElement('div');
+                edgeLine.style.cssText = 'position:absolute;z-index:1;pointer-events:none;height:0;border-top:2px dashed #f97316;opacity:0.7;left:0;right:0;display:none;';
+                edgeLabel = document.createElement('div');
+                edgeLabel.style.cssText = 'position:absolute;z-index:25;pointer-events:none;font:600 10px Segoe UI, sans-serif;line-height:15px;height:15px;padding:0 5px;border-radius:3px;color:#f97316;background:rgba(30,41,59,0.9);white-space:nowrap;display:none;';
+                u.root.appendChild(edgeLine);
+                u.root.appendChild(edgeLabel);
             }
             // Grid bounds span the full DEXBot grid (live + virtual slots
             // in base units), never calculated: bottom = lowest grid buy,
@@ -2758,7 +2758,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             const gridLow = Number.isFinite(rawLow) && rawLow > 0 ? rawLow : null;
             const gridHigh = Number.isFinite(rawHigh) && rawHigh > 0 ? rawHigh : null;
             const inversePairs = normalizePairMode(currentPairMode) === 'inverse';
-            const reservePrice = inversePairs
+            const edgePrice = inversePairs
                 ? (gridHigh != null ? 1 / gridHigh : null)
                 : gridLow;
             const ceilingPrice = inversePairs
@@ -2767,20 +2767,20 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             const ys = u.scales.y || {};
             const rootRect = u.root.getBoundingClientRect();
             const overRect = u.over.getBoundingClientRect();
-            const y = reservePrice != null ? yForPriceCached(ys, overRect, rootRect, reservePrice) : null;
+            const y = edgePrice != null ? yForPriceCached(ys, overRect, rootRect, edgePrice) : null;
             if (y == null) {
-                reserveLine.style.display = 'none';
-                reserveLabel.style.display = 'none';
+                edgeLine.style.display = 'none';
+                edgeLabel.style.display = 'none';
             } else {
-                reserveLine.style.display = 'block';
-                reserveLine.style.top = y + 'px';
+                edgeLine.style.display = 'block';
+                edgeLine.style.top = y + 'px';
                 const lastClose = currentCandles[currentCandles.length - 1].close;
-                const dipRaw = Number.isFinite(lastClose) && lastClose > 0 ? (lastClose - reservePrice) / lastClose * 100 : NaN;
+                const dipRaw = Number.isFinite(lastClose) && lastClose > 0 ? (lastClose - edgePrice) / lastClose * 100 : NaN;
                 const dipTxt = Number.isFinite(dipRaw) ? (dipRaw >= 0 ? '-' : '+') + Math.abs(Math.round(dipRaw)) + '%' : '-';
-                reserveLabel.style.display = 'block';
-                reserveLabel.textContent = 'reserve ' + fmtPriceLabel(reservePrice) + ' (' + dipTxt + ')';
-                reserveLabel.style.left = '8px';
-                reserveLabel.style.top = (y - 16) + 'px';
+                edgeLabel.style.display = 'block';
+                edgeLabel.textContent = 'reserve ' + fmtPriceLabel(edgePrice) + ' (' + dipTxt + ')';
+                edgeLabel.style.left = '8px';
+                edgeLabel.style.top = (y - 16) + 'px';
             }
             if (!ceilingLine || ceilingLine.parentNode !== u.root) {
                 if (ceilingLine && ceilingLine.parentNode) ceilingLine.parentNode.removeChild(ceilingLine);
@@ -2937,8 +2937,8 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             }
         }
         function resetOverlayNodes() {
-            reserveLine = null;
-            reserveLabel = null;
+            edgeLine = null;
+            edgeLabel = null;
             ceilingLine = null;
             ceilingLabel = null;
             spreadMidLabel = null;

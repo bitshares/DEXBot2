@@ -66,7 +66,7 @@ import {
     buildSuccessResult,
     evaluateCommit
 } from './utils/validate.js';
-import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, geometryTypeForSlotIndex, isOrderOnChain, resolveReserveCount, resolveLiveReserveEdgeAnchorPrice, compareReserveEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder } from './utils/order.js';
+import { resolveSpreadOrderSide, parseSlotIndex, parseChainOrder, geometryTypeForSlotIndex, isOrderOnChain, resolveEdgeCount, resolveLiveEdgeAnchorPrice, compareEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder } from './utils/order.js';
 import { getErrorMessage, getErrorCode } from '../utils/errors.js';
 import type { GridGenesis } from './utils/math.js';
 import type {
@@ -167,7 +167,7 @@ interface COWExecuteParams {
     excludeIds?: Set<string>;
     gapSlots?: number | null;
     evacStreaks?: Map<string, number> | null;
-    reserveEdgeAnchors?: { buy?: number | null; sell?: number | null } | null;
+    edgeAnchors?: { buy?: number | null; sell?: number | null } | null;
 }
 
 function stalePlacementDropReason(action: CowAction, planBoundary: number): string | null {
@@ -247,7 +247,7 @@ class COWRebalanceEngine {
         excludeIds = new Set(),
         gapSlots = null,
         evacStreaks = null,
-        reserveEdgeAnchors = null
+        edgeAnchors = null
     }: COWExecuteParams): Promise<RebalanceResult> {
         const startTime = Date.now();
 
@@ -397,13 +397,13 @@ class COWRebalanceEngine {
         // stamped UPDATEs above; stale-dropped placements are excluded — a
         // deferred placement justifies nothing). The executor holds the
         // committed boundary when a listed refill is guard-skipped.
-        // Reserve-ladder CREATEs are excluded (collectRefillSlotIds): reserves
+        // Edge-ladder CREATEs are excluded (collectRefillSlotIds): edge orders
         // are static edge insurance and their fills never crawl, so a skipped
-        // reserve must not pin geometry either.
+        // edge order must not pin geometry either.
         const refillSlotIds = collectRefillSlotIds(optimizedActions, {
             config: this.config,
             slots: masterGrid,
-            edgeAnchors: reserveEdgeAnchors,
+            edgeAnchors: edgeAnchors,
             manager: this as unknown as OrderManagerLike
         });
 
@@ -1847,9 +1847,9 @@ class OrderManager implements OrderManagerLike {
      * @returns {Array<import('./types').Order>}
      */
     getInitialOrdersToActivate() {
-        // Apply activeOrders limit from config
-        const sellCount = Math.max(0, toFiniteNumber(this.config.activeOrders?.sell, 1));
-        const buyCount = Math.max(0, toFiniteNumber(this.config.activeOrders?.buy, 1));
+        // Apply coreOrders limit from config
+        const sellCount = Math.max(0, toFiniteNumber(this.config.coreOrders?.sell, 1));
+        const buyCount = Math.max(0, toFiniteNumber(this.config.coreOrders?.buy, 1));
 
         // Get minimum sizes for validation
         const minOrderSizeFactor = this.config?.gridLimits?.MIN_ORDER_SIZE_FACTOR;
@@ -1863,7 +1863,7 @@ class OrderManager implements OrderManagerLike {
         const minBuySizeInt = floatToBlockchainInt(minBuySize, buyPrecision);
 
         // Rail membership by geometry (shared isSlotInRail), mirroring the
-        // reconcile pickers (_pickVirtualSlotsToActivate / _pickEdgeReserveSlots).
+        // reconcile pickers (_pickVirtualSlotsToActivate / _pickEdgeSlots).
         // A freshly generated grid's roles never need this, but the gate keeps
         // the startup placement path and the runtime activation path from
         // diverging: a slot whose stored type is stale relative to the current
@@ -1906,20 +1906,20 @@ class OrderManager implements OrderManagerLike {
         // Reverse for placement order (lowest first)
         validBuys.sort((a, b) => a.price - b.price);
 
-        // Reserve ladder: edge-pinned orders activate alongside the window
+        // Edge ladder: edge-pinned orders activate alongside the window
         // without consuming its budget. Buys pin at the floor (lowest first),
         // sells at the ceiling (highest first). Same min-size gate as the window.
-        const pickEdgeReserves = (orderType: OrderType, count: number, windowed: ManagedOrder[], precision: number, minSizeInt: number, ascending: boolean): ManagedOrder[] => {
+        const pickEdgeSlots = (orderType: OrderType, count: number, windowed: ManagedOrder[], precision: number, minSizeInt: number, ascending: boolean): ManagedOrder[] => {
             const picked: ManagedOrder[] = [];
             if (count <= 0) return picked;
             const windowedIds = new Set(windowed.map((o) => o.id));
             // Both edges anchor at the live grid's own edge (ladder/rail extreme).
-            const edgeAnchor = resolveLiveReserveEdgeAnchorPrice(this, ascending ? 'buy' : 'sell');
+            const edgeAnchor = resolveLiveEdgeAnchorPrice(this, ascending ? 'buy' : 'sell');
             const edge = ascending ? 'floor' : 'ceiling';
             const edgeFirst = this.getOrdersByTypeAndState(orderType, ORDER_STATES.VIRTUAL)
                 .filter((o) => inRailFor(orderType, o))
                 .filter((o) => parseSlotIndex(o.id) !== null)
-                .sort((a, b) => compareReserveEdge(a, b, edge, edgeAnchor));
+                .sort((a, b) => compareEdge(a, b, edge, edgeAnchor));
             for (const o of edgeFirst) {
                 if (picked.length >= count) break;
                 if (windowedIds.has(o.id)) continue;
@@ -1931,10 +1931,10 @@ class OrderManager implements OrderManagerLike {
             picked.sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
             return picked;
         };
-        const reserveBuys = pickEdgeReserves(ORDER_TYPES.BUY, resolveReserveCount(this.config, 'buy'), validBuys, buyPrecision, minBuySizeInt, true);
-        const reserveSells = pickEdgeReserves(ORDER_TYPES.SELL, resolveReserveCount(this.config, 'sell'), validSells, sellPrecision, minSellSizeInt, false);
+        const edgeBuys = pickEdgeSlots(ORDER_TYPES.BUY, resolveEdgeCount(this.config, 'buy'), validBuys, buyPrecision, minBuySizeInt, true);
+        const edgeSells = pickEdgeSlots(ORDER_TYPES.SELL, resolveEdgeCount(this.config, 'sell'), validSells, sellPrecision, minSellSizeInt, false);
 
-        return [...validSells, ...reserveSells, ...validBuys, ...reserveBuys];
+        return [...validSells, ...edgeSells, ...validBuys, ...edgeBuys];
     }
 
     /**
@@ -2574,12 +2574,12 @@ class OrderManager implements OrderManagerLike {
         this._setRebalanceState(REBALANCE_STATES.REBALANCING);
         if (!(this._gapEvacStreaks instanceof Map)) this._gapEvacStreaks = new Map();
         if (!(this._gapEvacCancelQueued instanceof Set)) this._gapEvacCancelQueued = new Set();
-        // Live reserve edge anchors, resolved once and shared with the engine's
-        // refill wire so a reserve-ladder CREATE can never be classified as a
-        // hole refill (which would let a skipped reserve pin the boundary).
-        const reserveEdgeAnchors = {
-            buy: resolveLiveReserveEdgeAnchorPrice(this, 'buy'),
-            sell: resolveLiveReserveEdgeAnchorPrice(this, 'sell')
+        // Live edge order anchors, resolved once and shared with the engine's
+        // refill wire so an edge-ladder CREATE can never be classified as a
+        // hole refill (which would let a skipped edge order pin the boundary).
+        const edgeAnchors = {
+            buy: resolveLiveEdgeAnchorPrice(this, 'buy'),
+            sell: resolveLiveEdgeAnchorPrice(this, 'sell')
         };
         const result = await cowEngine.execute({
             masterGrid: this.orders,
@@ -2591,7 +2591,7 @@ class OrderManager implements OrderManagerLike {
             excludeIds,
             gapSlots: this._gapSlots,
             evacStreaks: this._gapEvacStreaks,
-            reserveEdgeAnchors
+            edgeAnchors
         });
 
         // Phase 3 safety net: act on stuck in-band orders regardless of the

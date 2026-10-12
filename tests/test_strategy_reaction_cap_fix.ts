@@ -28,7 +28,7 @@ function createManager(slots) {
             startPrice: 105,
             incrementPercent: 1,
             targetSpreadPercent: 2,
-            activeOrders: { buy: 2, sell: 2 },
+            coreOrders: { buy: 2, sell: 2 },
             weightDistribution: { buy: 0.5, sell: 0.5 }
         },
         assets: {

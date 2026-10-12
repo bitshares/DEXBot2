@@ -413,7 +413,7 @@ is divergence telemetry built on `calculateGridSideDivergenceMetric`.
 **A grid with no price ladder is not a degraded grid — it is an undefined one.**
 Every consumer of the invariant reads `priceForSlot(idx, genesis)`, and each one
 silently degrades without it: nearest-slot adoption, `computeOutOfToleranceDriftTag`,
-the materialize descriptor-price fallback, `resolveLiveReserveEdgeAnchorPrice`
+the materialize descriptor-price fallback, `resolveLiveEdgeAnchorPrice`
 tiers 3/4, and the `isSlotInRail` fail-open. That degradation is the tolerance
 matcher, which is exactly the path on which an off-grid price becomes grid
 evidence. So the ladder is treated as a **required** part of a snapshot, not a
@@ -489,7 +489,7 @@ degrade *into*:
 | correction-queue staleness matched by tolerance | `priceSlotEqual` against the slot's own level, and a ladder-less entry is dropped |
 | `computeOutOfToleranceDriftTag` + `price-drift-orphan` auto-cancel (`PRICE_DRIFT_TOLERANCE_MULTIPLIER`) | removed — an off-grid order is HELD (`out-of-grid-deferred`) and resolved structurally, never cancelled off a fuzzy price diff |
 | `findMatchingGridOrderByOpenOrder` | removed (its last production caller was the pass-2 legacy block; the cancelOrder linkage matches by `orderId`) |
-| `resolveLiveReserveEdgeAnchorPrice` tiers 2/3 (live slot extreme, config bound) | ladder extreme only; a ladder-less manager returns `null` (the live resolver no longer computes a config bound — consumers that want one, e.g. `reserveEdgeIdSet`, resolve it themselves) |
+| `resolveLiveEdgeAnchorPrice` tiers 2/3 (live slot extreme, config bound) | ladder extreme only; a ladder-less manager returns `null` (the live resolver no longer computes a config bound — consumers that want one, e.g. `edgeOrderIdSet`, resolve it themselves) |
 | materialize descriptor-price fallback for a `slot-N` id | kept only for an unparseable id; a `slot-N` id with no ladder logs `error` and requests a structural resync |
 
 **E2 is fail-closed.** `syncFromOpenOrders` calls `_assertGenesisInvariant`

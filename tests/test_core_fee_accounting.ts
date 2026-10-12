@@ -30,7 +30,7 @@ async function createManager() {
         assetB: 'USD',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 1, sell: 1 },
+        coreOrders: { buy: 1, sell: 1 },
         incrementPercent: 1,
     });
     mgr.assets = {

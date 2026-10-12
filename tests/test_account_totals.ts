@@ -47,7 +47,7 @@ const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
     assert(elapsed3 < 260, `concurrent waiters should not serialize (elapsed=${elapsed3}ms)`);
 
     // Test: explicit zero allocation should cap available funds to zero
-    const mgr4 = new OrderManager({ botFunds: { buy: 0, sell: '0%' }, activeOrders: { buy: 1, sell: 1 } });
+    const mgr4 = new OrderManager({ botFunds: { buy: 0, sell: '0%' }, coreOrders: { buy: 1, sell: 1 } });
     await mgr4.setAccountTotals({ buy: 100, sell: 50, buyFree: 100, sellFree: 50 });
     assert.strictEqual(mgr4.funds.available.buy, 0, 'numeric zero allocation must cap buy availability to 0');
     assert.strictEqual(mgr4.funds.available.sell, 0, 'percentage zero allocation must cap sell availability to 0');
@@ -62,7 +62,7 @@ const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
     assert.strictEqual(mgr5.orders.has('accepts-invalid-type'), true, 'non-fatal invalid type order must still be accepted with warning');
 
     // Test: debt collateral is not part of botFunds percentage resolution
-    const mgr6 = new OrderManager({ botFunds: { buy: '50%', sell: '50%' }, activeOrders: { buy: 1, sell: 1 } });
+    const mgr6 = new OrderManager({ botFunds: { buy: '50%', sell: '50%' }, coreOrders: { buy: 1, sell: 1 } });
     await mgr6.setAccountTotals({ buy: 100, sell: 100, buyFree: 100, sellFree: 100 });
     assert.strictEqual(mgr6.funds.allocated.buy, 50, 'without collateral offset, 50% of 100 should allocate 50');
     assert.strictEqual(mgr6.funds.allocated.sell, 50, 'without collateral offset, 50% of 100 should allocate 50');

@@ -527,7 +527,7 @@ BitShares charges fees for `limit_order_create` and `limit_order_cancel`.
 
 -   **Reservation** (`BTS_RESERVATION_MULTIPLIER` in `constants.ts::FEE_PARAMETERS`):
     $$Reserve = N_{active} \times BTS\_RESERVATION\_MULTIPLIER$$
-    *(Default: 5× per order — covers create, rotate (cancel+place), update, and cancel over the order's lifetime. $N_{active}$ counts window orders plus the `reserveOrders` edge ladder — reserves rest live on-chain and pay fees like window orders)*
+    *(Default: 5× per order — covers create, rotate (cancel+place), update, and cancel over the order's lifetime. $N_{active}$ counts window orders plus the `edgeOrders` edge ladder — reserves rest live on-chain and pay fees like window orders)*
 
 -   **Settlement (`deductBtsFees`):**
     1.  Check `Funds.btsFeesOwed`.

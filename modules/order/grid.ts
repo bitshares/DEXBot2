@@ -248,9 +248,9 @@ import {
     calculateIdealBoundary,
     assignGridRoles,
     resolveOnChainRetypeType,
-    resolveReserveCount,
-    reserveEdgeIdSet,
-    resolveLiveReserveEdgeAnchorPrice,
+    resolveEdgeCount,
+    edgeOrderIdSet,
+    resolveLiveEdgeAnchorPrice,
     liveWindowIdSet,
     getOrderTypeFromUpdatedFlags
 } from './utils/order.js';
@@ -387,8 +387,8 @@ function _computeSizingContextSync(manager: OrderManagerLike, side: string): { b
         // BTS fees are paid for ALL order operations regardless of side, so the
         // BTS-holding side reserves fees for both buy and sell target counts.
         if (budget > 0) {
-            const targetBuy = Math.max(0, manager.config.activeOrders?.buy ?? 1) + resolveReserveCount(manager.config, 'buy');
-            const targetSell = Math.max(0, manager.config.activeOrders?.sell ?? 1) + resolveReserveCount(manager.config, 'sell');
+            const targetBuy = Math.max(0, manager.config.coreOrders?.buy ?? 1) + resolveEdgeCount(manager.config, 'buy');
+            const targetSell = Math.max(0, manager.config.coreOrders?.sell ?? 1) + resolveEdgeCount(manager.config, 'sell');
             const totalTarget = targetBuy + targetSell;
             const btsOrderType = getBtsSide(manager.config?.assetA, manager.config?.assetB);
             const isBtsSide = isBuy ? (btsOrderType === ORDER_TYPES.BUY) : (btsOrderType === ORDER_TYPES.SELL);
@@ -1397,21 +1397,21 @@ export async function initializeGrid(manager: OrderManagerLike): Promise<void> {
         const startPriceWasDerived = typeof mpRaw !== 'number' || Number.isNaN(Number(mpRaw));
         const centerIsLive = startPriceWasDerived || gpSource === 'ama';
         if (owedCrawls.length > 0 && !centerIsLive) {
-            // Reserve fills never crawl (static insurance). Classify them
+            // Edge fills never crawl (static insurance). Classify them
             // against the OLD generation (manager.orders is replaced below)
             // with the same live anchors the runtime derivation uses, so the
-            // fold can never be driven by a reserve fill.
+            // fold can never be driven by an edge fill.
             const oldSlots: ManagedOrder[] = Array.from(manager.orders.values());
             const edgeAnchors = {
-                buy: resolveLiveReserveEdgeAnchorPrice(manager, 'buy'),
-                sell: resolveLiveReserveEdgeAnchorPrice(manager, 'sell')
+                buy: resolveLiveEdgeAnchorPrice(manager, 'buy'),
+                sell: resolveLiveEdgeAnchorPrice(manager, 'sell')
             };
-            const reserveBuyIds = reserveEdgeIdSet(oldSlots, manager.config, ORDER_TYPES.BUY, edgeAnchors.buy, liveWindowIdSet(manager, ORDER_TYPES.BUY));
-            const reserveSellIds = reserveEdgeIdSet(oldSlots, manager.config, ORDER_TYPES.SELL, edgeAnchors.sell, liveWindowIdSet(manager, ORDER_TYPES.SELL));
+            const edgeBuyIds = edgeOrderIdSet(oldSlots, manager.config, ORDER_TYPES.BUY, edgeAnchors.buy, liveWindowIdSet(manager, ORDER_TYPES.BUY));
+            const edgeSellIds = edgeOrderIdSet(oldSlots, manager.config, ORDER_TYPES.SELL, edgeAnchors.sell, liveWindowIdSet(manager, ORDER_TYPES.SELL));
             let netShift = 0;
             for (const e of owedCrawls) {
-                if (e?.side === ORDER_TYPES.BUY && reserveBuyIds?.has(e.slotId)) continue;
-                if (e?.side === ORDER_TYPES.SELL && reserveSellIds?.has(e.slotId)) continue;
+                if (e?.side === ORDER_TYPES.BUY && edgeBuyIds?.has(e.slotId)) continue;
+                if (e?.side === ORDER_TYPES.SELL && edgeSellIds?.has(e.slotId)) continue;
                 if (e?.side === ORDER_TYPES.SELL) netShift++;
                 else if (e?.side === ORDER_TYPES.BUY) netShift--;
             }
@@ -1750,20 +1750,20 @@ export function checkAndUpdateGridIfNeeded(manager: OrderManagerLike): { buyUpda
         for (const s of sides) {
             if (s.grid <= 0) continue;
 
-            const feeActiveOrders = manager.config.activeOrders && typeof manager.config.activeOrders === 'object'
+            const feeCoreOrders = manager.config.coreOrders && typeof manager.config.coreOrders === 'object'
                 ? {
-                    ...manager.config.activeOrders,
-                    buy: Math.max(0, Number(manager.config.activeOrders.buy) || 0) + resolveReserveCount(manager.config, 'buy'),
-                    sell: Math.max(0, Number(manager.config.activeOrders.sell) || 0) + resolveReserveCount(manager.config, 'sell'),
+                    ...manager.config.coreOrders,
+                    buy: Math.max(0, Number(manager.config.coreOrders.buy) || 0) + resolveEdgeCount(manager.config, 'buy'),
+                    sell: Math.max(0, Number(manager.config.coreOrders.sell) || 0) + resolveEdgeCount(manager.config, 'sell'),
                 }
-                : manager.config.activeOrders;
+                : manager.config.coreOrders;
             const availableFunds = calculateAvailableFundsValue(
                 s.name,
                 manager.accountTotals,
                 manager.funds,
                 manager.config.assetA,
                 manager.config.assetB,
-                feeActiveOrders,
+                feeCoreOrders,
                 manager.config.min_BTS_value,
                 manager.config.feeParams ?? null
             );
@@ -2082,11 +2082,11 @@ export async function _recalculateGridOrderSizesFromBlockchain(manager: OrderMan
         // geometric progression including empties, then re-type the picked slot
         // to BUY/SELL before placement.  The COW boundary-shift path re-types
         // the working grid by geometry first, so crossers stay in the correct
-        // side's denominator.  Reserve edge slots are included here like any
+        // side's denominator.  Edge order slots are included here like any
         // other slot-N side slot: this geometric curve sizes them too, and the
-        // activation picker (_pickEdgeReserveSlots) only ever places a reserve
+        // activation picker (_pickEdgeSlots) only ever places an edge order
         // with the stored size the target-grid sizing pipeline already wrote
-        // (exact values, one sizing rule). Skipping reserves in this pass
+        // (exact values, one sizing rule). Skipping edge orders in this pass
         // would make the divergence resize disagree with that pipeline. Only
         // non-slot-N shelf/manual ids are skipped below.
         const orderSource = collectActions ? workingGrid : manager.orders;
@@ -2120,7 +2120,7 @@ export async function _recalculateGridOrderSizesFromBlockchain(manager: OrderMan
                 const slot = allSideSlots[i];
                 // Shelf/manual orders (non-slot-N ids, e.g. fork-kept deep-*
                 // below the rail) sit outside window accounting: geometric
-                // ideals must never resize them on-chain. Same gate as reserve
+                // ideals must never resize them on-chain. Same gate as edge
                 // classification and startup cancel candidates (issue #27
                 // follow-up). No-op upstream (grids only mint slot-N).
                 // NB: they stay in the denominator above (budget math
@@ -2516,7 +2516,7 @@ export async function monitorDivergence(manager: OrderManagerLike, calculatedGri
      */
 function _getOnChainOrders(manager: OrderManagerLike): { onChainBuys: ManagedOrder[]; onChainSells: ManagedOrder[] } {
         // Slot-N gated: fork-kept shelf/manual orders (non-slot-N ids, e.g.
-        // deep-*) sit outside window accounting — same gate as reserve
+        // deep-*) sit outside window accounting — same gate as edge
         // classification and startup cancel candidates (issue #27 follow-up).
         // Without this, a live shelf masks an empty window side (oneSideEmpty
         // stays false) and skews the spread inputs. No-op on grids that only
@@ -3216,7 +3216,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
     // DEFENSE-IN-DEPTH WALK BOUNDS: the loop itself also stops
     // MIN_SPREAD_ORDERS short of the opposite rail edge (idx <= sellStartIdx−1−
     // reserve for BUY / idx >= buyEndIdx+1+reserve for SELL), so even if the
-    // cap above is ever miscomputed the walk cannot consume the reserved gap.
+    // cap above is ever miscomputed the walk cannot consume the edged gap.
     // When bandSize <= reserve the bound disables promotion entirely.
     function _collectPromotableBoundarySlots(
         allSlotsByPrice: ManagedOrder[],
@@ -3871,7 +3871,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 // inside the implied band.  All real constraints — the
                 // MIN_SPREAD_ORDERS reserve and opposite-rail stranding — are
                 // enforced UPSTREAM as walk-depth caps.  This backstop only
-                // verifies array limits plus the reserve ceiling; any
+                // verifies array limits plus the edge ceiling; any
                 // violation signals an internal inconsistency, so promotion is
                 // refused loudly instead of silently re-geometried.
                 const maxIdx = allSlotsByPrice.length - 1;

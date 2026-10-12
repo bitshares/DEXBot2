@@ -51,7 +51,7 @@
 import { ORDER_TYPES, ORDER_STATES } from '../constants.js';
 import { calculateGapSlots } from './grid.js';
 import { isSlotInRail } from './utils/math.js';
-import { deriveTargetBoundary, getSideBudget, calculateBudgetedSizes, getActiveOrdersTotal, resolveReserveCount, resolveLiveReserveEdgeAnchorPrice, selectReserveEdgeSlots, isShiftEligibleFill } from './utils/order.js';
+import { deriveTargetBoundary, getSideBudget, calculateBudgetedSizes, getCoreOrdersTotal, resolveEdgeCount, resolveLiveEdgeAnchorPrice, selectEdgeSlots, isShiftEligibleFill } from './utils/order.js';
 import { assignGridRoles } from './utils/order.js';
 import {
     convertToSpreadPlaceholder,
@@ -225,7 +225,7 @@ class StrategyEngine {
      * 1. Derive new boundary index based on fills (boundary crawl)
      * 2. Assign grid roles (BUY/SELL/SPREAD) based on boundary position
      * 3. Calculate budget allocation for each side
-     * 4. Apply window discipline (activeOrders count limits)
+     * 4. Apply window discipline (coreOrders count limits)
      * 5. Calculate ideal order sizes based on budgets and weights
      * 6. Build target grid map representing desired state
      *
@@ -244,7 +244,7 @@ class StrategyEngine {
      * @param {Object} params.config - Bot configuration
      *   - targetSpreadPercent {number}: Width of spread zone
      *   - incrementPercent {number}: Price step between orders
-     *   - activeOrders {Object}: Target active order counts
+     *   - coreOrders {Object}: Target active order counts
      *   - weightDistribution {Object}: Size weighting for each side
      * @param {Object} params.accountAssets - Asset metadata (precision, IDs)
      * @param {Object} params.funds - Current fund state
@@ -304,16 +304,16 @@ class StrategyEngine {
         const boundaryConfig = (!Number.isFinite(Number(config?.startPrice)) && Number.isFinite(genesisStart))
             ? { ...config, genesisStartPrice: genesisStart }
             : config;
-        // Live reserve edge anchors (single source): the ladder extremes of the
-        // grid actually being traded. Resolved once and shared by the reserve
+        // Live edge order anchors (single source): the ladder extremes of the
+        // grid actually being traded. Resolved once and shared by the edge
         // selection below and the no-crawl classification inside
         // deriveTargetBoundary, so placement and fill classification can never
-        // disagree about which slots are reserves.
-        const reserveEdgeAnchors = {
-            buy: resolveLiveReserveEdgeAnchorPrice(this.manager, 'buy'),
-            sell: resolveLiveReserveEdgeAnchorPrice(this.manager, 'sell'),
+        // disagree about which slots are edge orders.
+        const edgeAnchors = {
+            buy: resolveLiveEdgeAnchorPrice(this.manager, 'buy'),
+            sell: resolveLiveEdgeAnchorPrice(this.manager, 'sell'),
         };
-        const { boundaryIdx: newBoundaryIdx, remainingBudget } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, reserveEdgeAnchors);
+        const { boundaryIdx: newBoundaryIdx, remainingBudget } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, edgeAnchors);
         if (crossChunkBudget != null) {
             this.manager._boundaryShiftBudget = remainingBudget;
         }
@@ -335,8 +335,8 @@ class StrategyEngine {
         try {
             const activeWindow = Math.max(
                 1,
-                Number(config?.activeOrders?.buy) || 1,
-                Number(config?.activeOrders?.sell) || 1
+                Number(config?.coreOrders?.buy) || 1,
+                Number(config?.coreOrders?.sell) || 1
             );
             const driftSlots = Math.abs(Number(newBoundaryIdx) - Number(currentBoundaryIdx));
             if (Number.isFinite(driftSlots) && driftSlots > activeWindow) {
@@ -365,7 +365,7 @@ class StrategyEngine {
         updatedSlots.forEach((s) => this.manager.logger.log(`  Slot ${s.id}: price=${s.price}, size=${s.size ?? 'n/a'}, type=${s.type}`, 'debug'));
 
         // 3. Calculate Ideal Sizes (Budgeting)
-        const totalTarget = getActiveOrdersTotal(config);
+        const totalTarget = getCoreOrdersTotal(config);
         const budgetBuy = getSideBudget('buy', funds, config, totalTarget);
         const budgetSell = getSideBudget('sell', funds, config, totalTarget);
         
@@ -373,9 +373,9 @@ class StrategyEngine {
         const allBuySlots = updatedSlots.filter((o) => o.type === ORDER_TYPES.BUY);
         const allSellSlots = updatedSlots.filter((o) => o.type === ORDER_TYPES.SELL);
 
-        // Apply Window Discipline (activeOrders count)
-        const targetCountBuy = Math.max(1, (config.activeOrders?.buy ?? 1));
-        const targetCountSell = Math.max(1, (config.activeOrders?.sell ?? 1));
+        // Apply Window Discipline (coreOrders count)
+        const targetCountBuy = Math.max(1, (config.coreOrders?.buy ?? 1));
+        const targetCountSell = Math.max(1, (config.coreOrders?.sell ?? 1));
 
         // The SPREAD GUARD (assignGridRoles) keeps a live on-chain order typed
         // BUY/SELL even when a boundary crawl moves its slot into the spread
@@ -443,29 +443,29 @@ class StrategyEngine {
         const buySizeById = new Map(allBuySortedForSizing.map((slot, i) => [slot.id, fullBuySizes[i] || 0]));
         const sellSizeById = new Map(allSellSortedForSizing.map((slot, i) => [slot.id, fullSellSizes[i] || 0]));
 
-        // Reserve ladder: edge-pinned insurance orders stay live alongside the
+        // Edge ladder: edge-pinned insurance orders stay live alongside the
         // window. Buys pin at the floor (lowest prices), sells at the ceiling
         // (highest prices). Discontiguous by design — the middle stays VIRTUAL.
-        // Sizes come from the same full-rail curves; reserve fills never crawl
+        // Sizes come from the same full-rail curves; edge fills never crawl
         // (filtered in deriveTargetBoundary).
-        // Both edges anchor at the live grid's own edge (reserveEdgeAnchors),
+        // Both edges anchor at the live grid's own edge (edgeAnchors),
         // which is the same pair deriveTargetBoundary classified against.
-        const reserveBuySlots = selectReserveEdgeSlots(
+        const edgeBuySlots = selectEdgeSlots(
             allBuySortedForSizing.filter((s) => inBuyRail(s)),
-            resolveReserveCount(config, 'buy'),
+            resolveEdgeCount(config, 'buy'),
             new Set(buySlots.map((s) => s.id)),
             'floor',
-            reserveEdgeAnchors.buy
+            edgeAnchors.buy
         );
-        const reserveSellSlots = selectReserveEdgeSlots(
+        const edgeSellSlots = selectEdgeSlots(
             allSellSortedForSizing.filter((s) => inSellRail(s)),
-            resolveReserveCount(config, 'sell'),
+            resolveEdgeCount(config, 'sell'),
             new Set(sellSlots.map((s) => s.id)),
             'ceiling',
-            reserveEdgeAnchors.sell
+            edgeAnchors.sell
         );
-        const buySlotsAll = [...buySlots, ...reserveBuySlots];
-        const sellSlotsAll = [...sellSlots, ...reserveSellSlots];
+        const buySlotsAll = [...buySlots, ...edgeBuySlots];
+        const sellSlotsAll = [...sellSlots, ...edgeSellSlots];
 
         const buySizes = buySlotsAll.map((slot) => buySizeById.get(slot.id) || 0);
         const sellSizes = sellSlotsAll.map((slot) => sellSizeById.get(slot.id) || 0);

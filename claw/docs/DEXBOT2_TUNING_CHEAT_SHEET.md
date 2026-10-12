@@ -15,7 +15,7 @@ Keep these structural settings static in normal operation:
 
 - `incrementPercent`
 - `targetSpreadPercent`
-- `activeOrders`
+- `coreOrders`
 
 These settings define ladder geometry and order-size distribution, so changing them is a retune, not a tactical response.
 
@@ -99,7 +99,7 @@ This is how much of each side's available balance gets committed.
 - leaving reserve gives you flexibility for fees, manual intervention, and regime changes
 - if orders get too small, reduce commitment or reduce order count
 
-### `activeOrders`
+### `coreOrders`
 
 This is the number of live orders kept near the market on each side.
 
@@ -147,7 +147,7 @@ The clean mental model is:
 - `targetSpreadPercent` controls the empty buffer
 - `weightDistribution` controls size concentration
 - `botFunds` controls risk budget
-- `activeOrders` controls depth
+- `coreOrders` controls depth
 
 ## When to adjust
 
@@ -210,7 +210,7 @@ For a conservative starting point:
 
 - `incrementPercent: 0.5`
 - `targetSpreadPercent: 2.0`
-- `activeOrders: 20 / 20`
+- `coreOrders: 20 / 20`
 - `weightDistribution: 0.5 / 0.5`
 - `minPrice` and `maxPrice`: as narrow as the expected drift allows, not blindly `3x`
 

@@ -15,6 +15,7 @@ import * as chainOrders from './chain_orders.js';
 import * as grid from './order/grid.js';
 import { ORDER_STATES, ORDER_TYPES, TIMING, BTS_PRECISION, NATIVE_CLIENT } from './constants.js';
 import { BOT_LIVE_CONFIG_KEYS } from './runtime_settings.js';
+import { migrateLegacyOrderKeys } from './bot_defaults.js';
 import { acquireIfNotHeld } from './order/async_lock.js';
 const { readOpenOrdersGuarded } = chainOrders;
 import { PATHS } from './paths.js';
@@ -104,15 +105,15 @@ const updateDynamicGridSnapshotSync = lazyShim('../market_adapter/utils/dynamic_
 // would be circular; at call time both modules are fully loaded.
 const scheduleFillConsumerRestartFn = lazyShim('./dexbot_fill_runtime', 'scheduleFillConsumerRestart');
 const reconcileGridOrders = lazyShim('./order/grid_reconcile', 'reconcileGridOrders');
-const resolveReserveCount = lazyShim('./order/utils/order', 'resolveReserveCount');
-const reserveEdgeIdSet = lazyShim('./order/utils/order', 'reserveEdgeIdSet');
+const resolveEdgeCount = lazyShim('./order/utils/order', 'resolveEdgeCount');
+const edgeOrderIdSet = lazyShim('./order/utils/order', 'edgeOrderIdSet');
 const liveWindowIdSet = lazyShim('./order/utils/order', 'liveWindowIdSet');
-const resolveLiveReserveEdgeAnchorPrice = lazyShim('./order/utils/order', 'resolveLiveReserveEdgeAnchorPrice');
+const resolveLiveEdgeAnchorPrice = lazyShim('./order/utils/order', 'resolveLiveEdgeAnchorPrice');
 const formatUnmatchedChainOrder = lazyShim('./order/utils/order', 'formatUnmatchedChainOrder');
 const isNonBlockingUnmatchedOrder = lazyShim('./order/utils/order', 'isNonBlockingUnmatchedOrder');
 const isStrandedHoldOrder = lazyShim('./order/utils/order', 'isStrandedHoldOrder');
 const getSideBudget = lazyShim('./order/utils/order', 'getSideBudget');
-function getActiveOrdersTotal(config: unknown) { return require('./order/utils/order').getActiveOrdersTotal(config); }
+function getCoreOrdersTotal(config: unknown) { return require('./order/utils/order').getCoreOrdersTotal(config); }
 const correctAllPriceMismatches = lazyShim('./order/utils/order', 'correctAllPriceMismatches');
 const isOrderOnChain = lazyShim('./order/utils/order', 'isOrderOnChain');
 const parseChainOrder = lazyShim('./order/utils/order', 'parseChainOrder');
@@ -255,7 +256,10 @@ function normalizeBotEntryForFingerprint(entry: unknown): Record<string, unknown
         if ((BOT_CONFIG_FINGERPRINT_IGNORED_KEYS as readonly string[]).includes(key)) continue;
         out[key] = e[key];
     }
-    return out;
+    // Canonicalize legacy order-count keys so the fingerprint and the merged
+    // entry agree with the allowlist (`coreOrders`/`edgeOrders`) even when the
+    // on-disk bots.json still carries `activeOrders`/`reserveOrders`.
+    return migrateLegacyOrderKeys(out);
 }
 
 /**
@@ -300,7 +304,7 @@ function cloneJsonValue<T>(value: T): T {
 function mergeBotConfigKeysIntoRuntime(bot: BotLike, entry: unknown, keys: string[]): string[] {
     const applied: string[] = [];
     if (!bot?.config || !entry || typeof entry !== 'object') return applied;
-    const e = entry as Record<string, unknown>;
+    const e = migrateLegacyOrderKeys({ ...(entry as Record<string, unknown>) });
     for (const key of keys) {
         // A deleted key applies as null (mirrors the former ?? null diff
         // semantics) so the running config can never keep a stale value.
@@ -332,7 +336,7 @@ function mergeBotConfigKeysIntoRuntime(bot: BotLike, entry: unknown, keys: strin
 function replaceBotConfigFromEntryPreservingRuntime(bot: BotLike, updatedBot: unknown, contextLabel: string) {
     const oldKey = bot.config.botKey;
     const oldIndex = bot.config.botIndex;
-    const u = updatedBot as Record<string, unknown>;
+    const u = migrateLegacyOrderKeys({ ...(updatedBot as Record<string, unknown>) });
     // Preserve runtime-only properties set by the constructor
     // (timing, gridLimits, feeParams, etc.) that are not present
     // in the raw profile from bots.json.
@@ -608,52 +612,52 @@ function countLiveGridOrders(manager: OrderManagerLike, type: unknown) {
     const active = manager.getOrdersByTypeAndState?.(type as OrderType | null | undefined, ORDER_STATES.ACTIVE) || [];
     const partial = manager.getOrdersByTypeAndState?.(type as OrderType | null | undefined, ORDER_STATES.PARTIAL) || [];
     // Slot-N gated: fork-kept shelf/manual orders (non-slot-N ids, e.g.
-    // deep-*) sit outside window accounting — same gate as reserve
+    // deep-*) sit outside window accounting — same gate as edge
     // classification and startup cancel candidates (issue #27 follow-up).
-    // Without this, a live shelf inflates the live window+reserves count and
-    // masks a real window/reserve shortfall, so targeted sync never fires.
+    // Without this, a live shelf inflates the live window+edges count and
+    // masks a real window/edge shortfall, so targeted sync never fires.
     // No-op on grids that only mint slot-N ids.
     return active.concat(partial).filter((o) => o?.orderId && parseSlotIndex(o?.id) !== null).length;
 }
 
-function getTargetActiveOrders(config: JsonObj, side: unknown) {
-    const configured = Number((config?.activeOrders as JsonObj | undefined)?.[side as string]);
-    // Reserve ladder rests live on-chain: countLiveGridOrders sees window +
-    // edge orders, so the shortfall target must include reserves too —
-    // otherwise live reserves mask window shortfalls and a filled/cancelled
-    // reserve order never triggers targeted reconciliation.
-    const reserves = resolveReserveCount(config, side);
-    return Math.max(0, Number.isFinite(configured) ? configured : 1) + reserves;
+function getTargetCoreOrders(config: JsonObj, side: unknown) {
+    const configured = Number((config?.coreOrders as JsonObj | undefined)?.[side as string]);
+    // Edge ladder rests live on-chain: countLiveGridOrders sees window +
+    // edge orders, so the shortfall target must include edge orders too —
+    // otherwise live edge orders mask window shortfalls and a filled/cancelled
+    // edge order never triggers targeted reconciliation.
+    const edgeCount = resolveEdgeCount(config, side);
+    return Math.max(0, Number.isFinite(configured) ? configured : 1) + edgeCount;
 }
 
 /**
- * Count live on-chain reserve orders for one side (issue #27 follow-up).
+ * Count live on-chain edge orders for one side (issue #27 follow-up).
  *
- * The window shortfall check above compares live window+reserves against
- * window+reserves, so a pre-existing window surplus masks a reserve deficit
- * (e.g. target 6+2=8 vs 12 live after reserveOrders 0→2: no shortfall, no
- * sync, zero reserve placements). Reserves get their own independent reason
- * below — the mirror of the masking case getTargetActiveOrders handles.
+ * The window shortfall check above compares live window+edges against
+ * window+edges, so a pre-existing window surplus masks an edge deficit
+ * (e.g. target 6+2=8 vs 12 live after edgeOrders 0→2: no shortfall, no
+ * sync, zero edge placements). Edge orders get their own independent reason
+ * below — the mirror of the masking case getTargetCoreOrders handles.
  *
- * Classification reuses the single source of truth (reserveEdgeIdSet +
- * resolveLiveReserveEdgeAnchorPrice, same anchor the placement pickers use)
+ * Classification reuses the single source of truth (edgeOrderIdSet +
+ * resolveLiveEdgeAnchorPrice, same anchor the placement pickers use)
  * over the full master grid, intersected with live ACTIVE/PARTIAL orderIds
  * (same live definition as countLiveGridOrders). The edge pick excludes the
  * window (liveWindowIdSet — the same exclusion every placement picker
  * applies): window + edge are additive in targets/fees/hold-back, but
  * without the exclusion a window that reaches the grid edge (keep-low
  * window = bottom slots = floor edge) makes the edge pick land on window
- * members and the count reads N/N with zero dedicated reserves, so the
+ * members and the count reads N/N with zero dedicated edge orders, so the
  * deficit never fires (issue #27 follow-up).
  * @param {unknown} manager - OrderManager
- * @param {unknown} config - Bot configuration (reserve count source)
+ * @param {unknown} config - Bot configuration (edge count source)
  * @param {unknown} type - ORDER_TYPES.BUY or ORDER_TYPES.SELL
- * @returns {number|null} Live reserve count, or null when unclassifiable
+ * @returns {number|null} Live edge count, or null when unclassifiable
  */
-function countLiveReserveOrders(manager: OrderManagerLike, config: JsonObj, type: unknown): number | null {
+function countLiveEdgeOrders(manager: OrderManagerLike, config: JsonObj, type: unknown): number | null {
     try {
         const side = type === ORDER_TYPES.SELL ? 'sell' : 'buy';
-        const required = resolveReserveCount(config, side);
+        const required = resolveEdgeCount(config, side);
         if (!(required > 0)) return 0;
         if (!manager) return null;
         // Full master grid only: classifying from live-only indexed lookups
@@ -662,13 +666,13 @@ function countLiveReserveOrders(manager: OrderManagerLike, config: JsonObj, type
         if (!manager.orders || typeof manager.orders.values !== 'function') return null;
         const allSlots: ManagedOrder[] = Array.from(manager.orders.values());
         if (allSlots.length === 0) return null;
-        const anchor = resolveLiveReserveEdgeAnchorPrice(manager, side);
+        const anchor = resolveLiveEdgeAnchorPrice(manager, side);
         // Fail open on unknown window geometry (null): without a boundary the
-        // pickers cannot place reserves either, so keep the previous
+        // pickers cannot place edge orders either, so keep the previous
         // (exclusion-free) classification instead of guessing.
         const windowIds = liveWindowIdSet(manager, type);
-        const reserveIds = reserveEdgeIdSet(allSlots, config, type, anchor, windowIds);
-        if (!reserveIds || reserveIds.size === 0) return 0;
+        const edgeIds = edgeOrderIdSet(allSlots, config, type, anchor, windowIds);
+        if (!edgeIds || edgeIds.size === 0) return 0;
         const liveIds = new Set<string>();
         if (typeof manager.getOrdersByTypeAndState === 'function') {
             for (const state of [ORDER_STATES.ACTIVE, ORDER_STATES.PARTIAL]) {
@@ -682,7 +686,7 @@ function countLiveReserveOrders(manager: OrderManagerLike, config: JsonObj, type
             }
         }
         let live = 0;
-        for (const id of reserveIds) {
+        for (const id of edgeIds) {
             if (liveIds.has(String(id))) live++;
         }
         return live;
@@ -695,7 +699,7 @@ function _hasBudgetForSide(manager: OrderManagerLike, config: JsonObj, side: unk
         if (!funds) return true;
         const allocated = side === 'buy' ? (funds.allocatedBuy || 0) : (funds.allocatedSell || 0);
         if (allocated <= 0) return false;
-        const totalTarget = getActiveOrdersTotal(config);
+        const totalTarget = getCoreOrdersTotal(config);
         const budget = getSideBudget(side, funds, config, totalTarget);
         return budget > 0;
     } catch { return true; }
@@ -724,8 +728,8 @@ export function mirrorSpreadStall(bot: BotLike, stall: SpreadCorrectionStall | n
 function getTargetedSyncReason(bot: BotLike) {
     if (!bot.manager || bot.config?.dryRun) return null;
 
-    const targetBuy = getTargetActiveOrders(bot.config, 'buy');
-    const targetSell = getTargetActiveOrders(bot.config, 'sell');
+    const targetBuy = getTargetCoreOrders(bot.config, 'buy');
+    const targetSell = getTargetCoreOrders(bot.config, 'sell');
     const liveBuy = countLiveGridOrders(bot.manager, ORDER_TYPES.BUY);
     const liveSell = countLiveGridOrders(bot.manager, ORDER_TYPES.SELL);
     const shortfalls: string[] = [];
@@ -741,17 +745,17 @@ function getTargetedSyncReason(bot: BotLike) {
         }
     }
 
-    // Reserve deficit is independent of window surplus: a bot carrying extra
-    // rail/stranded orders can sit above target while its reserve edge is
-    // empty (live-applied reserveOrders 0→N, filled/cancelled reserve).
+    // Edge deficit is independent of window surplus: a bot carrying extra
+    // rail/stranded orders can sit above target while its edge order is
+    // empty (live-applied edgeOrders 0→N, filled/cancelled edge order).
     // Without this, placement waits for fills or the 4h fetch (issue #27).
     for (const [type, side] of [[ORDER_TYPES.BUY, 'buy'], [ORDER_TYPES.SELL, 'sell']] as const) {
-        const required = resolveReserveCount(bot.config, side);
+        const required = resolveEdgeCount(bot.config, side);
         if (!(required > 0)) continue;
-        const liveReserves = countLiveReserveOrders(bot.manager, bot.config, type);
-        if (liveReserves !== null && liveReserves < required) {
+        const liveEdges = countLiveEdgeOrders(bot.manager, bot.config, type);
+        if (liveEdges !== null && liveEdges < required) {
             if (_hasBudgetForSide(bot.manager, bot.config, side)) {
-                shortfalls.push(`${side} reserves ${liveReserves}/${required}`);
+                shortfalls.push(`${side} edges ${liveEdges}/${required}`);
             }
         }
     }
@@ -3020,7 +3024,7 @@ async function checkBtsBalanceAndAcquire(bot: BotLike) {
 
     if (!bot.manager || !bot.manager.btsBalance) return;
 
-    const totalTarget = getActiveOrdersTotal(bot.config);
+    const totalTarget = getCoreOrdersTotal(bot.config);
 
     const btsReservationMultiplier = bot.config?.feeParams?.BTS_RESERVATION_MULTIPLIER;
     const minBtsVal = calculateOrderCreationFees(
@@ -3549,7 +3553,7 @@ async function syncOpenOrdersAndProcessFillsImpl(bot: BotLike, tag: string) {
         return { syncResult: null, aborted: true, hasUnmatched: -1, openOrders: null };
     }
 }
-export { loadBotsConfigSnapshot, isWrapperAdapterOwner, checkAndApplyBotConfigChanges, buildBotConfigFingerprint, refreshDynamicWeightDistribution, performGridResync, updateBotGridResetMetadata, handlePendingTriggerReset, setupTriggerFileDetection, performPeriodicGridChecks, isOpenOrdersSyncLoopEnabled, startOpenOrdersSyncLoop, stopOpenOrdersSyncLoop, setupBlockchainFetchInterval, stopBlockchainFetchInterval, setupBotsConfigPollInterval, stopBotsConfigPollInterval, executeMaintenanceLogic, getTargetedSyncReason, maybeRunTargetedDriftReconciliation, countLiveReserveOrders, cancelDustOrders, isOrderDoesNotExistError, runGridMaintenance, releaseMarketAdapterRuntime, syncMarketAdapterOnPeriodicConfigCheck, usesAmaGridPrice, runDustHealthCheck, setupDustHealthCheckInterval, requestGridReset, wireStructuralGridResyncRequest, getPipelineSignals, markGridActivity, getMetrics, syncOpenOrdersAndProcessFills, shouldDeferMaintenanceForBroadcast, checkGridLockHoldDuration };
+export { loadBotsConfigSnapshot, isWrapperAdapterOwner, checkAndApplyBotConfigChanges, buildBotConfigFingerprint, refreshDynamicWeightDistribution, performGridResync, updateBotGridResetMetadata, handlePendingTriggerReset, setupTriggerFileDetection, performPeriodicGridChecks, isOpenOrdersSyncLoopEnabled, startOpenOrdersSyncLoop, stopOpenOrdersSyncLoop, setupBlockchainFetchInterval, stopBlockchainFetchInterval, setupBotsConfigPollInterval, stopBotsConfigPollInterval, executeMaintenanceLogic, getTargetedSyncReason, maybeRunTargetedDriftReconciliation, countLiveEdgeOrders, cancelDustOrders, isOrderDoesNotExistError, runGridMaintenance, releaseMarketAdapterRuntime, syncMarketAdapterOnPeriodicConfigCheck, usesAmaGridPrice, runDustHealthCheck, setupDustHealthCheckInterval, requestGridReset, wireStructuralGridResyncRequest, getPipelineSignals, markGridActivity, getMetrics, syncOpenOrdersAndProcessFills, shouldDeferMaintenanceForBroadcast, checkGridLockHoldDuration };
 
 
 export default {
@@ -3573,7 +3577,7 @@ export default {
     executeMaintenanceLogic,
     getTargetedSyncReason,
     mirrorSpreadStall,
-    countLiveReserveOrders,
+    countLiveEdgeOrders,
     maybeRunTargetedDriftReconciliation,
     cancelDustOrders,
     isOrderDoesNotExistError,

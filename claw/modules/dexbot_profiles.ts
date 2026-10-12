@@ -8,6 +8,7 @@ import { PATHS } from '../../modules/paths.js';
 import { writeJsonFileAtomic as baseWriteJsonFileAtomic } from '../../modules/bots_file_lock.js';
 import { acquireFileLock } from '../../market_adapter/utils/file_lock.js';
 import { assertNoDuplicateBotKeys, normalizeBotEntry } from '../../modules/bot_settings.js';
+import { migrateLegacyOrderKeys } from '../../modules/bot_defaults.js';
 import { BOT_LIVE_CONFIG_KEYS } from '../../modules/runtime_settings.js';
 import { clone } from './utils.js';
 import { createBotKey, sanitizeKey } from '../../modules/account_orders.js';
@@ -24,7 +25,7 @@ const DEFAULT_MARKET_PROFILES_FILE = 'market_profiles.json';
 const DEFAULT_ORDERS_DIR = 'orders';
 
 const KNOWN_BOT_KEYS = new Set([
-  'active', 'activeOrders', 'assetA', 'assetAId', 'assetB', 'assetBId',
+  'active', 'coreOrders', 'edgeOrders', 'assetA', 'assetAId', 'assetB', 'assetBId',
   'botFunds', 'debtPolicy', 'dryRun', 'gridPrice',
   'incrementPercent', 'maxPrice',
   'minPrice', 'name', 'preferredAccount', 'startPrice', 'strategy',
@@ -35,7 +36,8 @@ const KNOWN_BOT_KEYS = new Set([
 const BOT_SETTINGS_READ_ONLY_KEYS = new Set(['botIndex', 'botKey']);
 const BOT_SETTINGS_TRIGGER_KEYS = new Set([
   'active',
-  'activeOrders',
+  'coreOrders',
+  'edgeOrders',
   'assetA',
   'assetAId',
   'assetB',
@@ -59,7 +61,8 @@ const REQUIRED_BOT_KEY_ALIASES = {
 };
 
 const BOT_SETTINGS_NESTED_KEYS = Object.freeze({
-  activeOrders: new Set(['buy', 'sell']),
+  coreOrders: new Set(['buy', 'sell']),
+  edgeOrders: new Set(['buy', 'sell']),
   botFunds: new Set(['buy', 'sell']),
   weightDistribution: new Set(['buy', 'sell'])
 });
@@ -211,7 +214,7 @@ function cloneBotSettings(value: any) {
  * Fills missing fields from DEFAULT_CONFIG and clamps values within bounds.
  */
 function normalizeBotSettings(bot: Partial<BotSettings> = {}) {
-  const normalized = cloneBotSettings(bot) || {};
+  const normalized = migrateLegacyOrderKeys(cloneBotSettings(bot) || {});
 
   normalized.active = normalizeBooleanField(normalized.active, DEFAULT_CONFIG.active);
   normalized.dryRun = normalizeBooleanField(normalized.dryRun, DEFAULT_CONFIG.dryRun);
@@ -233,15 +236,25 @@ function normalizeBotSettings(bot: Partial<BotSettings> = {}) {
     ...cloneBotSettings(DEFAULT_CONFIG.botFunds),
     ...(isPlainObject(normalized.botFunds) ? normalized.botFunds : {})
   };
-  normalized.activeOrders = {
-    ...cloneBotSettings(DEFAULT_CONFIG.activeOrders),
-    ...(isPlainObject(normalized.activeOrders) ? normalized.activeOrders : {})
+  normalized.coreOrders = {
+    ...cloneBotSettings(DEFAULT_CONFIG.coreOrders),
+    ...(isPlainObject(normalized.coreOrders) ? normalized.coreOrders : {})
+  };
+  // Legacy numeric form migrates to `{ buy: n, sell: 0 }` before the default
+  // merge (mirrors the shared runtime resolver).
+  if (typeof normalized.edgeOrders === 'number') {
+    normalized.edgeOrders = { buy: Math.max(0, Math.floor(normalized.edgeOrders)), sell: 0 };
+  }
+  normalized.edgeOrders = {
+    ...cloneBotSettings(DEFAULT_CONFIG.edgeOrders),
+    ...(isPlainObject(normalized.edgeOrders) ? normalized.edgeOrders : {})
   };
   return normalized;
 }
 
 function mergeBotSettingsPatch(currentBot: Record<string, any> = {}, patch: Record<string, any> = {}) {
-  const next = cloneBotSettings(currentBot) || {};
+  const next = migrateLegacyOrderKeys(cloneBotSettings(currentBot) || {});
+  patch = migrateLegacyOrderKeys({ ...patch });
   const patchKeys = Object.keys(patch || {});
 
   for (const key of patchKeys) {
@@ -250,7 +263,7 @@ function mergeBotSettingsPatch(currentBot: Record<string, any> = {}, patch: Reco
       continue;
     }
 
-    if (['weightDistribution', 'botFunds', 'activeOrders'].includes(key) && isPlainObject(value)) {
+    if (['weightDistribution', 'botFunds', 'coreOrders', 'edgeOrders'].includes(key) && isPlainObject(value)) {
       next[key] = {
         ...(isPlainObject(next[key]) ? next[key] : {}),
         ...value
@@ -410,22 +423,48 @@ function validateBotSettingsValue(field: any, value: any, errors: any[]) {
       }
       break;
 
-    case 'activeOrders':
+    case 'coreOrders':
       if (!isPlainObject(value)) {
-        push('activeOrders must be an object with sell and buy');
+        push('coreOrders must be an object with sell and buy');
         break;
       }
-      validateNestedBotSettingKeys('activeOrders', value, errors);
+      validateNestedBotSettingKeys('coreOrders', value, errors);
       for (const side of ['sell', 'buy']) {
         const sideValue = value[side];
         if (sideValue === undefined) {
           continue;
         }
         if (!Number.isInteger(Number(sideValue)) || Number(sideValue) < 0) {
-          push(`activeOrders.${side} must be an integer greater than or equal to 0`);
+          push(`coreOrders.${side} must be an integer greater than or equal to 0`);
         }
       }
       break;
+
+    case 'edgeOrders': {
+      // Legacy numeric form is accepted and migrated at read time.
+      const edgeValue = typeof value === 'number'
+        ? { buy: value, sell: 0 }
+        : value;
+      if (typeof value === 'number' && (!Number.isInteger(value) || value < 0)) {
+        push('edgeOrders numeric form must be a non-negative integer');
+        break;
+      }
+      if (!isPlainObject(edgeValue)) {
+        push('edgeOrders must be an object with sell and buy');
+        break;
+      }
+      validateNestedBotSettingKeys('edgeOrders', edgeValue, errors);
+      for (const side of ['sell', 'buy']) {
+        const sideValue = edgeValue[side];
+        if (sideValue === undefined) {
+          continue;
+        }
+        if (!Number.isInteger(Number(sideValue)) || Number(sideValue) < 0) {
+          push(`edgeOrders.${side} must be an integer greater than or equal to 0`);
+        }
+      }
+      break;
+    }
 
     case 'debtPolicy':
       if (value !== undefined && value !== null && typeof value !== 'object') {
@@ -470,6 +509,9 @@ function validateBotSettingsValue(field: any, value: any, errors: any[]) {
 function validateBotSettingsState(bot: Record<string, any> = {}) {
   const errors: string[] = [];
   const warnings = [];
+  // Legacy key aliases collapse before validation so a pre-rename entry is
+  // neither rejected nor reported as an unrecognized key.
+  bot = migrateLegacyOrderKeys({ ...bot });
 
   for (const field of Object.keys(BOT_SETTINGS_NESTED_KEYS)) {
     if (bot[field] !== undefined) {
@@ -539,7 +581,6 @@ function validateBotSettingsState(bot: Record<string, any> = {}) {
 function validateBotSettingsPatch(patch: Record<string, any> = {}, currentBot: Record<string, any> = {}, options: Partial<ProfileOptions> = {}) {
   const errors: string[] = [];
   const warnings = [];
-  const patchKeys = Object.keys(patch || {});
   const allowUnknownKeys = Boolean(options.allowUnknownKeys);
 
   if (!isPlainObject(patch)) {
@@ -553,6 +594,9 @@ function validateBotSettingsPatch(patch: Record<string, any> = {}, currentBot: R
     };
   }
 
+  patch = migrateLegacyOrderKeys({ ...patch });
+  const patchKeys = Object.keys(patch);
+
   for (const key of patchKeys) {
     if (!KNOWN_BOT_KEYS.has(key)) {
       if (allowUnknownKeys) {
@@ -563,7 +607,7 @@ function validateBotSettingsPatch(patch: Record<string, any> = {}, currentBot: R
       continue;
     }
 
-    if (['weightDistribution', 'botFunds', 'activeOrders'].includes(key) && isPlainObject(patch[key])) {
+    if (['weightDistribution', 'botFunds', 'coreOrders', 'edgeOrders'].includes(key) && isPlainObject(patch[key])) {
       validateNestedBotSettingKeys(key, patch[key], errors);
       const mergedField = {
         ...(isPlainObject(currentBot[key]) ? currentBot[key] : {}),

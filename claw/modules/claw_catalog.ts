@@ -103,10 +103,14 @@ function botSettingsPatchSchema(description: string | null = null) {
   return objectSchema({
     patch: strictObjectSchema({
       active: booleanSchema('Whether the bot is active'),
-      activeOrders: strictObjectSchema({
-        buy: integerSchema('Buy-side active order count'),
-        sell: integerSchema('Sell-side active order count')
-      }, [], 'Per-side active order counts'),
+      coreOrders: strictObjectSchema({
+        buy: integerSchema('Buy-side core order count'),
+        sell: integerSchema('Sell-side core order count')
+      }, [], 'Per-side core window order counts'),
+      edgeOrders: strictObjectSchema({
+        buy: integerSchema('Buy-side edge order count'),
+        sell: integerSchema('Sell-side edge order count')
+      }, [], 'Per-side edge-pinned reserve order counts'),
       assetA: stringSchema('Base asset symbol'),
       assetAId: stringSchema('Base asset id'),
       assetB: stringSchema('Quote asset symbol'),

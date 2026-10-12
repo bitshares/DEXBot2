@@ -82,7 +82,7 @@ Order lifecycle, fill processing, trade history, batch execution.
 
 ### Strategy & Grid Logic
 Grid generation, sizing, rotation, divergence detection, reconciliation.
-*Examples:* `test_order_grid.ts`, `test_strategy_logic.ts`, `test_grid_reconcile.ts`, `test_working_grid.ts`, `test_rotation_order_sizing.ts`, `test_strategy_edge_cases.ts`, `test_reserve_orders.ts`
+*Examples:* `test_order_grid.ts`, `test_strategy_logic.ts`, `test_grid_reconcile.ts`, `test_working_grid.ts`, `test_rotation_order_sizing.ts`, `test_strategy_edge_cases.ts`, `test_edge_orders.ts`
 
 ### Copy-on-Write (COW) Rebalancing
 Concurrent-safe rebalancing with isolated working grids — dedicated test suite.

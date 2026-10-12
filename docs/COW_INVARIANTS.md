@@ -61,15 +61,15 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
   - Funds drive order sizing/budget allocation only; `syncBoundaryToFunds`/`calculateFundDrivenBoundary` are deleted (1.5.3).
 
 - `INV-COW-007` Boundary hold on guard-skipped refills
-  - When a slot on the plan's refill wire (`collectRefillSlotIds`: the plan's CREATE ids minus reserve-ladder edge ids) was guard-skipped at broadcast (`skippedUpdateSlotIds` ∪ `clampedUpdateSlotIds` ∪ `skippedCreateSlotIds`), `resolveRefillBoundaryHold` keeps the COMMITTED boundary instead of committing the plan's shifted one over the stranded rail hole; the grid still commits.
-  - Reserve-ladder CREATEs are excluded because reserves are static edge insurance whose fills never crawl — a skipped reserve must not pin geometry.
+  - When a slot on the plan's refill wire (`collectRefillSlotIds`: the plan's CREATE ids minus edge-ladder edge ids) was guard-skipped at broadcast (`skippedUpdateSlotIds` ∪ `clampedUpdateSlotIds` ∪ `skippedCreateSlotIds`), `resolveRefillBoundaryHold` keeps the COMMITTED boundary instead of committing the plan's shifted one over the stranded rail hole; the grid still commits.
+  - Edge-ladder CREATEs are excluded because reserves are static edge insurance whose fills never crawl — a skipped reserve must not pin geometry.
   - The hold rides to the commit as `options.boundaryHeld`, which suppresses the pending-crawl clear.
   - `trackBoundaryHold` counts consecutive hold batches (`manager._consecutiveBoundaryHolds`, cleared on the first clean batch) with a last-hold snapshot (`manager._lastBoundaryHoldInfo`); runs of 3+ escalate visibly. It also records a hold signature (`manager._lastHeldPlanSignature`: committed boundary + guard pivot + `_lastFilledAt` + held wire) so a fill-less re-plan of an unchanged state defers instead of re-broadcasting the identical vetoed plan.
   - Fill-driven rebalances never sleep on `_broadcastingFlag` inside `_fillProcessingLock`: `performSafeRebalance({deferIfBroadcasting:true})` returns a `deferred` result and the region-end hook schedules one no-fill rebalance (`schedulePostRecoveryRebalance`). This prevents the 20s lock-acquisition-timeout cascade when a broadcast region outlives the 30s `_awaitBroadcastIdle` wait. The stale-flag watchdog (`_clearStaleBroadcastFlag`, 120s) fires the same region-end hook when it hard-clears a leaked flag, so deferred fills are woken even when the region never ends through `stopBroadcasting()`.
   - A hold run carrying fresh fills (>= `TIMING.BOUNDARY_HOLD_RESYNC_THRESHOLD`) requests a guard-aware structural re-center (`requestStructuralGridResync`, cooldown `TIMING.BOUNDARY_HOLD_RESYNC_COOLDOWN_MS`) instead of holding forever — the heal path when the grid is trailing the market.
 
 - `INV-COW-008` Owed fill crawls survive unapplied commits
-  - `order/strategy.ts` records a crawl per shift-eligible fill at intake (slot-level dedupe, capped at 500); `deriveTargetBoundary` folds still-owed `_pendingFillCrawls` into the next derivation, excluding the current batch's slots, reserve slots, and window members — a window that reaches the grid edge is not a reserve, using the same window exclusion every placement picker and `countLiveReserveOrders` apply.
+  - `order/strategy.ts` records a crawl per shift-eligible fill at intake (slot-level dedupe, capped at 500); `deriveTargetBoundary` folds still-owed `_pendingFillCrawls` into the next derivation, excluding the current batch's slots, edge slots, and window members — a window that reaches the grid edge is not an edge order, using the same window exclusion every placement picker and `countLiveEdgeOrders` apply.
   - `_commitWorkingGrid` clears them only when the plan's boundary was actually applied — a held boundary (`boundaryHeld`), a gate-rejected boundary, and a null boundary all leave them owed.
   - `consumePendingFillCrawls` applies them onto a restored finite boundary; `applyPersistedPendingCrawls` is the shared startup/recovery wrapper used before sync/reconcile; `_clearPendingFillCrawls` drops them when the boundary is re-anchored (grid rebuild via `initializeGrid`, rejected snapshot via `rejectCorruptedGridSnapshot`, persisted snapshot wipe via `AccountOrders.clearGrid`).
 
@@ -191,7 +191,7 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
 - `INV-GRID-001` One-to-one order mapping
   - One grid slot = at most one on-chain order. No two chain orders may map to the same grid slot.
   - Sync engine tracks `matchedGridOrderIds` through both sync passes and skips already-matched slots.
-  - Surplus orders (matched count above the per-side `activeOrders` + `reserveOrders` targets) are flagged for cancellation.
+  - Surplus orders (matched count above the per-side `coreOrders` + `edgeOrders` targets) are flagged for cancellation.
 
 - `INV-GRID-002` One order per price level
   - The active grid must have at most one on-chain order per (type, price) pair.

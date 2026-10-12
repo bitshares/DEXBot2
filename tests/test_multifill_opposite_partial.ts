@@ -42,7 +42,7 @@ async function testMultifillOppositePartial() {
         assetB: 'USD',
         startPrice: 1.0,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 3, sell: 3 },
+        coreOrders: { buy: 3, sell: 3 },
         incrementPercent: 1,
         targetSpreadPercent: 2
     });

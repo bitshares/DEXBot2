@@ -16,7 +16,7 @@ async function testSpreadBoundaryPromotion() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 4, sell: 0 },
+        coreOrders: { buy: 4, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -76,7 +76,7 @@ async function testPromotionReservesMinSpread() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 4, sell: 0 },
+        coreOrders: { buy: 4, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -130,7 +130,7 @@ async function testStrandingDepthCaps() {
             assetB: 'QUOTE',
             startPrice: 1,
             botFunds: { buy: 1000, sell: 1000 },
-            activeOrders: { buy: 4, sell: 0 },
+            coreOrders: { buy: 4, sell: 0 },
             incrementPercent: 1,
             targetSpreadPercent: 1
         });
@@ -178,7 +178,7 @@ async function testStrandingDepthCaps() {
             assetB: 'QUOTE',
             startPrice: 1,
             botFunds: { buy: 1000, sell: 1000 },
-            activeOrders: { buy: 4, sell: 4 },
+            coreOrders: { buy: 4, sell: 4 },
             incrementPercent: 1,
             targetSpreadPercent: 1
         });
@@ -229,7 +229,7 @@ async function testSellSideBoundaryPromotion() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 0, sell: 3 },
+        coreOrders: { buy: 0, sell: 3 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -288,7 +288,7 @@ async function testPartialPlacementBoundaryPromotion() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 100, sell: 1000 },
-        activeOrders: { buy: 2, sell: 0 },
+        coreOrders: { buy: 2, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -357,7 +357,7 @@ async function testNullBoundaryBlocksPromotion() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 4, sell: 4 },
+        coreOrders: { buy: 4, sell: 4 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
@@ -405,7 +405,7 @@ async function testNoDuplicateInRailSlot() {
         assetB: 'QUOTE',
         startPrice: 1,
         botFunds: { buy: 1000, sell: 1000 },
-        activeOrders: { buy: 4, sell: 0 },
+        coreOrders: { buy: 4, sell: 0 },
         incrementPercent: 1,
         targetSpreadPercent: 1
     });
