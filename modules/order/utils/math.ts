@@ -1538,9 +1538,15 @@ function validateBoundaryCommit(
 ): { ok: boolean; reason?: string; detail?: string } {
     // Absent-aware: null/undefined/'' means "no proposal" (ok), NOT boundary 0,
     // otherwise Number('') === 0 would self-legalize a fake boundary 0 commit.
-    const raw = Format.toKnownNumber(proposedBoundary);
-    if (!Number.isFinite(raw)) return { ok: true };
-    if (!Number.isInteger(raw)) {
+    // Everything else non-numeric stays FAIL-CLOSED (corrupt/garbage, never
+    // ok): this gate also backs validatePersistedBoundary — the disk-trust
+    // boundary where a poison value must surface as a rejection (rebuild),
+    // not silently pass as "no proposal". Callers pass number | null; the
+    // '' branch only exists because '' would otherwise coerce to 0 via
+    // Number() and read as a valid boundary index.
+    if ((proposedBoundary as unknown) === '' || proposedBoundary == null) return { ok: true };
+    const raw = Number(proposedBoundary);
+    if (!Number.isFinite(raw) || !Number.isInteger(raw)) {
         return { ok: false, reason: 'non_integer_boundary', detail: `proposed=${proposedBoundary}` };
     }
     if (raw < 0) {

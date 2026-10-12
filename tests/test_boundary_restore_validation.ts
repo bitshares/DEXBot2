@@ -113,6 +113,20 @@ async function testValidatorSemantics() {
     assert.strictEqual(validatePersistedBoundary(5, grid, 2).ok, true, 'restore gate accepts honest boundary');
     assert.strictEqual(validateBoundaryCommit(null, grid, 2).ok, true, 'null boundary is always acceptable');
 
+    // Absent-vs-garbage contract (pinned): null/undefined/'' are "no
+    // proposal" (ok) — '' only because Number('') === 0 would otherwise
+    // self-legalize a fake boundary-0 commit. Everything else non-numeric is
+    // FAIL-CLOSED non_integer_boundary: this gate backs
+    // validatePersistedBoundary (disk-trust), where a corrupt value must
+    // surface as a rejection (rebuild), never silently pass as "no
+    // proposal".
+    assert.deepStrictEqual(validateBoundaryCommit(undefined, grid, 2), { ok: true }, 'undefined boundary = no proposal');
+    assert.deepStrictEqual(validateBoundaryCommit('' as any, grid, 2), { ok: true }, "'' boundary = no proposal (the pre-1.6.13 Number('')===0 hole)");
+    assert.strictEqual(validateBoundaryCommit('abc' as any, grid, 2).reason, 'non_integer_boundary', 'garbage string fail-closed, not "no proposal"');
+    assert.strictEqual(validateBoundaryCommit(NaN as any, grid, 2).reason, 'non_integer_boundary', 'NaN fail-closed');
+    assert.strictEqual(validateBoundaryCommit(Infinity as any, grid, 2).reason, 'non_integer_boundary', 'Infinity fail-closed');
+    assert.strictEqual(validatePersistedBoundary('abc' as any, grid, 2).reason, 'non_integer_boundary', 'restore gate treats garbage as poison, not absence');
+
     // Numeric sanity.
     assert.strictEqual(validateBoundaryCommit(4.5, grid, 2).ok, false, 'non-integer rejected');
     assert.strictEqual(validateBoundaryCommit(-1, grid, 2).ok, false, 'negative rejected');
