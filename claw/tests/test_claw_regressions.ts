@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const path = require('path');
-const { runEsmMockStages, defineEsmMockAbs } = require('../../tests/helpers/esm_mocks');
+const { runEsmMockStagesGrouped, defineEsmMockAbs } = require('../../tests/helpers/esm_mocks');
 
 // Compiled ESM graphs cannot be mocked via require.cache; the helper installs
 // loader hooks (one child process per stage so fresh module instances load).
@@ -628,23 +628,27 @@ function testClawDefaultDataPathsStayInsideClawFolder() {
   console.log('    PASS');
 }
 
-runEsmMockStages(
+runEsmMockStagesGrouped(
   [
     'native-path',
     'wait-connected',
-    'root-exports',
-    'skill-toml',
     'liquidity-pools',
     'analyzer-reuse',
     'analyzer-replace',
     'position-manager',
     'bridge-runtime-name',
-    'script-manifest',
-    'runtime-manifest',
     'command-runtime-name',
-    'account-orders-bot-key',
-    'kibana-query-scopes',
-    'default-data-paths'
+    // Mock-free stages: identical (empty) mock set and no cross-stage state,
+    // so one worker runs all seven instead of seven separate workers.
+    [
+      'root-exports',
+      'skill-toml',
+      'script-manifest',
+      'runtime-manifest',
+      'account-orders-bot-key',
+      'kibana-query-scopes',
+      'default-data-paths'
+    ]
   ],
   async (stage: string) => {
     if (stage === 'native-path') {

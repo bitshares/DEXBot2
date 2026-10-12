@@ -7,7 +7,7 @@ const path = require('path');
 // Compiled ESM namespaces are frozen and cannot be swapped via require.cache;
 // each scenario runs in its own hooked child process (runEsmMockStages) with
 // fresh loader-hook mocks registered by installStubs().
-const { runEsmMockStages, defineEsmMockAbs } = require('./helpers/esm_mocks');
+const { runEsmMockStagesShared, defineEsmMockAbs } = require('./helpers/esm_mocks');
 const { getErrorMessage } = require('../modules/utils/errors');
 
 console.log('Running credit runtime tests');
@@ -16,142 +16,158 @@ const bitsharesClientPath = require.resolve('../modules/bitshares_client');
 const chainOrdersPath = require.resolve('../modules/chain_orders');
 const creditRuntimePath = path.resolve(__dirname, '../modules/credit_runtime.ts');
 
+// Live mock state. ESM mock bindings are captured at first import, so the mock
+// functions must read a mutable scenario instead of closing over the values
+// from the stage that installed them. This lets every stage share one hooked
+// worker (runEsmMockStagesShared) without cross-stage bleed; installStubs()
+// refreshes `current` on every call.
+let current: any = null;
+let stubsInstalled = false;
+
 function installStubs(calls, dbCalls, options = {}) {
-  const callOrders = (options as any).callOrders || [
-    {
-      id: '1.8.1',
-      borrower: '1.2.3',
-      debt: { amount: 100, asset_id: '1.3.10' },
-      collateral: { amount: 250, asset_id: '1.3.0' },
-      call_price: {
-        base: { amount: 2, asset_id: '1.3.0' },
-        quote: { amount: 1, asset_id: '1.3.10' },
-      },
-    },
-  ];
-  const dealResponses = (options as any).dealResponses || [[
-    {
-      id: '1.19.77',
-      borrower: '1.2.3',
-      offer_id: '1.18.42',
-      offer_owner: '1.2.9',
-      debt_asset: '1.3.10',
-      debt_amount: 500,
-      collateral_asset: '1.3.0',
-      collateral_amount: 1000,
-      fee_rate: 30000,
-      latest_repay_time: '2030-01-01T00:00:00',
-      auto_repay: 0,
-    },
-  ]];
-  let dealResponseIndex = 0;
-  const assetsById = (options as any).assetsById || {
-    '1.3.10': {
-      id: '1.3.10',
-      symbol: 'HONEST.USD',
-      precision: 0,
-      bitasset_data_id: '2.4.1',
-    },
-    '1.3.0': {
-      id: '1.3.0',
-      symbol: 'BTS',
-      precision: 0,
-      bitasset_data_id: null,
-    },
-  };
-  const assetsBySymbol = new Map(Object.values(assetsById).map((asset) => [(asset as any).symbol, asset]));
-  const bitassetObjects = (options as any).bitassetObjects || {
-    '2.4.1': {
-      id: '2.4.1',
-      current_feed: {
-        settlement_price: {
+  current = {
+    calls,
+    dbCalls,
+    options,
+    callOrders: (options as any).callOrders || [
+      {
+        id: '1.8.1',
+        borrower: '1.2.3',
+        debt: { amount: 100, asset_id: '1.3.10' },
+        collateral: { amount: 250, asset_id: '1.3.0' },
+        call_price: {
           base: { amount: 2, asset_id: '1.3.0' },
           quote: { amount: 1, asset_id: '1.3.10' },
         },
       },
+    ],
+    dealResponses: (options as any).dealResponses || [[
+      {
+        id: '1.19.77',
+        borrower: '1.2.3',
+        offer_id: '1.18.42',
+        offer_owner: '1.2.9',
+        debt_asset: '1.3.10',
+        debt_amount: 500,
+        collateral_asset: '1.3.0',
+        collateral_amount: 1000,
+        fee_rate: 30000,
+        latest_repay_time: '2030-01-01T00:00:00',
+        auto_repay: 0,
+      },
+    ]],
+    dealResponseIndex: 0,
+    assetsById: (options as any).assetsById || {
+      '1.3.10': {
+        id: '1.3.10',
+        symbol: 'HONEST.USD',
+        precision: 0,
+        bitasset_data_id: '2.4.1',
+      },
+      '1.3.0': {
+        id: '1.3.0',
+        symbol: 'BTS',
+        precision: 0,
+        bitasset_data_id: null,
+      },
     },
-  };
-  const assetDynamicData = (options as any).assetDynamicData || {};
-  const offersById = (options as any).offersById || {
-    '1.18.42': {
-      id: '1.18.42',
-      asset_type: '1.3.10',
-      current_balance: 10000,
-      fee_rate: 30000,
-      min_deal_amount: 100,
-      enabled: true,
-      max_duration_seconds: 86400,
-      acceptable_collateral: {
-        '1.3.0': {
-          base: { amount: 2, asset_id: '1.3.0' },
-          quote: { amount: 1, asset_id: '1.3.10' },
+    bitassetObjects: (options as any).bitassetObjects || {
+      '2.4.1': {
+        id: '2.4.1',
+        current_feed: {
+          settlement_price: {
+            base: { amount: 2, asset_id: '1.3.0' },
+            quote: { amount: 1, asset_id: '1.3.10' },
+          },
         },
       },
     },
+    assetDynamicData: (options as any).assetDynamicData || {},
+    offersById: (options as any).offersById || {
+      '1.18.42': {
+        id: '1.18.42',
+        asset_type: '1.3.10',
+        current_balance: 10000,
+        fee_rate: 30000,
+        min_deal_amount: 100,
+        enabled: true,
+        max_duration_seconds: 86400,
+        acceptable_collateral: {
+          '1.3.0': {
+            base: { amount: 2, asset_id: '1.3.0' },
+            quote: { amount: 1, asset_id: '1.3.10' },
+          },
+        },
+      },
+    },
+    poolByShareAsset: (options as any).poolByShareAsset || {},
+    poolByAssetPair: (options as any).poolByAssetPair || {},
+    onExecuteBatch: typeof (options as any).onExecuteBatch === 'function' ? (options as any).onExecuteBatch : null,
   };
-  const creditOffersByOwner = (options as any).creditOffersByOwner || Object.values(offersById);
-  const poolByShareAsset = (options as any).poolByShareAsset || {};
-  const poolByAssetPair = (options as any).poolByAssetPair || {};
+  current.assetsBySymbol = new Map(Object.values(current.assetsById).map((asset: any) => [asset.symbol, asset]));
+  current.creditOffersByOwner = (options as any).creditOffersByOwner || Object.values(current.offersById);
+
+  if (stubsInstalled) return () => {};
+  stubsInstalled = true;
+
   const pairKey = (left, right) => [String(left), String(right)].sort().join('|');
   const handleDbCall = async (method, args) => {
-    dbCalls.push({ method, args });
+    current.dbCalls.push({ method, args });
     if (method === 'get_full_accounts') {
       return [
         ['alice', {
           account: {
             id: '1.2.3',
             name: 'alice',
-            call_orders: callOrders,
+            call_orders: current.callOrders,
           },
         }],
       ];
     }
     if (method === 'get_assets') {
       const ids = Array.isArray(args?.[0]) ? args[0] : [];
-      return ids.map((id) => assetsById[id] || null);
+      return ids.map((id) => current.assetsById[id] || null);
     }
     if (method === 'lookup_asset_symbols') {
       const symbols = Array.isArray(args?.[0]) ? args[0] : [];
-      return symbols.map((symbol) => assetsBySymbol.get(symbol) || null);
+      return symbols.map((symbol) => current.assetsBySymbol.get(symbol) || null);
     }
     if (method === 'get_objects') {
       const ids = Array.isArray(args?.[0]) ? args[0] : [];
       return ids.map((id) => {
-        if (bitassetObjects[id]) return bitassetObjects[id];
-        if (assetDynamicData[id]) return assetDynamicData[id];
-        if (Object.prototype.hasOwnProperty.call(offersById, id)) return offersById[id];
+        if (current.bitassetObjects[id]) return current.bitassetObjects[id];
+        if (current.assetDynamicData[id]) return current.assetDynamicData[id];
+        if (Object.prototype.hasOwnProperty.call(current.offersById, id)) return current.offersById[id];
         return null;
       });
     }
     if (method === 'get_liquidity_pools_by_share_asset') {
       const ids = Array.isArray(args?.[0]) ? args[0] : [];
-      return ids.map((id) => poolByShareAsset[id] || null);
+      return ids.map((id) => current.poolByShareAsset[id] || null);
     }
     if (method === 'get_liquidity_pools_by_both_assets') {
       const left = args?.[0];
       const right = args?.[1];
-      const pool = poolByAssetPair[pairKey(left, right)];
+      const pool = current.poolByAssetPair[pairKey(left, right)];
       return pool ? [pool] : [];
     }
     if (method === 'get_credit_deals_by_borrower') {
-      const response = dealResponses[Math.min(dealResponseIndex, dealResponses.length - 1)];
-      dealResponseIndex += 1;
+      const response = current.dealResponses[Math.min(current.dealResponseIndex, current.dealResponses.length - 1)];
+      current.dealResponseIndex += 1;
       return response;
     }
     if (method === 'get_credit_offers_by_owner') {
-      return creditOffersByOwner;
+      return current.creditOffersByOwner;
     }
     if (method === 'get_credit_offers_by_asset') {
       const assetId = args?.[0];
-      return Object.values(offersById).filter((offer) => String((offer as any)?.asset_type) === String(assetId));
+      return Object.values(current.offersById).filter((offer) => String((offer as any)?.asset_type) === String(assetId));
     }
     if (method === 'get_on_chain_asset_balances') {
-      return (options as any).assetBalances || {};
+      return current.options.assetBalances || {};
     }
     return [];
   };
-
-  const onExecuteBatch = typeof (options as any).onExecuteBatch === 'function' ? (options as any).onExecuteBatch : null;
 
   defineEsmMockAbs(bitsharesClientPath, [
     'BitShares',
@@ -201,7 +217,7 @@ function installStubs(calls, dbCalls, options = {}) {
       return null;
     },
     getOnChainAssetBalances: async (accountRef, assets) => {
-      const balanceMap = (options as any).assetBalances || {};
+      const balanceMap = current.options.assetBalances || {};
       const out: any = {};
       for (const asset of assets || []) {
         const key = String(asset);
@@ -210,15 +226,16 @@ function installStubs(calls, dbCalls, options = {}) {
       return out;
     },
     executeBatch: async (accountName, privateKey, operations) => {
-      calls.push({ accountName, privateKey, operations });
-      if (onExecuteBatch) {
-        await onExecuteBatch({ accountName, privateKey, operations });
+      current.calls.push({ accountName, privateKey, operations });
+      if (current.onExecuteBatch) {
+        await current.onExecuteBatch({ accountName, privateKey, operations });
       }
-      return { tx_id: `tx-${calls.length}`, operation_results: operations.map((op, index) => [index, op.op_name]) };
+      return { tx_id: `tx-${current.calls.length}`, operation_results: operations.map((op, index) => [index, op.op_name]) };
     },
   });
 
-  // Mocks live for the lifetime of the hooked child process; nothing to undo.
+  // Mocks live for the lifetime of the worker; installStubs() refreshes the
+  // per-stage `current` scenario on every call.
   return () => {};
 }
 
@@ -5173,7 +5190,11 @@ const STAGES = {
   max_borrow_amount_per_operation_is_max_borrow_amount_error: testMaxBorrowAmountPerOperationIsMaxBorrowAmountError,
 };
 
-runEsmMockStages(Object.keys(STAGES), async (stage) => {
+// One shared worker runs all stages sequentially: installStubs() refreshes a
+// live `current` scenario so the ESM mock bindings stay valid, and
+// credit_runtime holds no module-level state (each scenario builds its own
+// CreditRuntime), so a fresh process per stage is unnecessary here.
+runEsmMockStagesShared(Object.keys(STAGES), async (stage) => {
   await STAGES[stage]();
   console.log('credit runtime tests passed');
 });
