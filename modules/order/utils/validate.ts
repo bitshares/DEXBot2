@@ -503,8 +503,11 @@ function reconcileGrid(masterGrid: Map<string, ManagedOrder>, targetGrid: Map<st
     const { logger = null, dustThresholdPercent = GRID_LIMITS.PARTIAL_DUST_THRESHOLD_PERCENTAGE } = options;
     // B-stamp inputs for gap-evacuation rotation stamping (frozen at
     // plan-build): callers pass the geometry this plan was built for. Absent
-    // or non-finite => no stamping (guarded default, never fail-open).
-    const planGapSlots = Number(options?.gapSlots);
+    // (null/undefined/'') or non-finite => no stamping (guarded default, never
+    // fail-open). Absent-aware coercion: Number(null) === 0 would otherwise
+    // feed 0 into stampGapEvacuationRotation/detectGapEvacuationCandidates and
+    // defeat their own null guards.
+    const planGapSlots = Format.toKnownNumber(options?.gapSlots);
     const hasPlanGeometry = Number.isFinite(planGapSlots) && planGapSlots >= 0;
     const evacAssets = options?.assets ?? null;
     const actions: CowAction[] = [];

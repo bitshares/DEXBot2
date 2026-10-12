@@ -21,6 +21,9 @@ const {
     isEvacuationRotationAllowed,
     isEvacuationSizeStillValid,
     isSlotIndexInGapBand,
+    resolveGapBand,
+    validateBoundaryCommit,
+    isSlotInRail,
     getSellStartIdx
 } = require('../modules/order/utils/math');
 const {
@@ -571,6 +574,59 @@ async function testEVAC021_UnknownPlanGeometryDoesNotStamp() {
     console.log('✓ EVAC-021 passed');
 }
 
+async function testEVAC022_SharedGeometryHelpersAbsentAware() {
+    console.log('\n[EVAC-022] Shared geometry helpers treat null/"" gap/boundary as unknown...');
+    // resolveGapBand: '' must be unknown (null), not boundary 0; genuine 0 stays 0.
+    assert.deepStrictEqual(
+        resolveGapBand({ _gapSlots: GAP_SLOTS, boundaryIdx: '' as any }),
+        { gapSlots: GAP_SLOTS, boundaryIdx: null, sellStartIdx: null },
+        "'' boundary is unknown, not slot 0"
+    );
+    assert.deepStrictEqual(
+        resolveGapBand({ _gapSlots: GAP_SLOTS, boundaryIdx: null as any }),
+        { gapSlots: GAP_SLOTS, boundaryIdx: null, sellStartIdx: null }
+    );
+    const zeroBand = resolveGapBand({ _gapSlots: GAP_SLOTS, boundaryIdx: 0 });
+    assert.strictEqual(zeroBand.boundaryIdx, 0, 'genuine boundary 0 preserved');
+    assert.strictEqual(zeroBand.sellStartIdx, GAP_SLOTS + 1);
+
+    // validateBoundaryCommit: '' is "no proposal" (ok), not a boundary-0 commit.
+    assert.deepStrictEqual(validateBoundaryCommit('' as any, [], GAP_SLOTS), { ok: true }, "'' refused as no-proposal");
+    const commitZero = validateBoundaryCommit(0, [
+        slot('slot-0', ORDER_TYPES.BUY, ORDER_STATES.VIRTUAL, 100, 0),
+        slot('slot-1', ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL, 101, 0),
+        slot('slot-2', ORDER_TYPES.SPREAD, ORDER_STATES.VIRTUAL, 102, 0),
+        slot('slot-3', ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL, 103, 0),
+    ], 1);
+    assert.strictEqual(commitZero.ok, true, 'genuine boundary 0 still commits');
+
+    // isSlotInRail: absent boundary/gap must fail OPEN, never fabricate slot 0.
+    assert.strictEqual(isSlotInRail('' as any, GAP_SLOTS, ORDER_TYPES.SELL, { id: 'slot-5' }), true, "'' boundary fails open");
+    assert.strictEqual(isSlotInRail(3, null, ORDER_TYPES.SELL, { id: 'slot-5' }), true, 'null gap fails open on the SELL rail');
+    assert.strictEqual(isSlotInRail(3, GAP_SLOTS, ORDER_TYPES.SELL, { id: 'slot-5' }), false, 'known geometry still excludes a below-rail slot');
+    assert.strictEqual(isSlotInRail(3, GAP_SLOTS, ORDER_TYPES.SELL, { id: 'slot-6' }), true);
+
+    // isSlotIndexInGapBand: unknown gap must not collapse the band.
+    assert.strictEqual(isSlotIndexInGapBand(4, 3, null as any), false, 'null gap fails closed');
+    assert.strictEqual(isSlotIndexInGapBand(4, 3, GAP_SLOTS), true, 'known gap keeps the band');
+    assert.strictEqual(isSlotIndexInGapBand(4, '' as any, GAP_SLOTS), false, "'' boundary fails closed");
+
+    // reconcileGrid with an absent gap width must not B-stamp (the plan
+    // geometry guard must see the unknown, not a coerced 0).
+    const master = paddedGrid([
+        ['slot-143', slot('slot-143', ORDER_TYPES.SELL, ORDER_STATES.ACTIVE, 950, 100, '1.7.143')],
+    ]);
+    const target = paddedGrid([
+        ['slot-143', slot('slot-143', ORDER_TYPES.SELL, ORDER_STATES.VIRTUAL, 950, 0)],
+        ['slot-147', slot('slot-147', ORDER_TYPES.SELL, ORDER_STATES.ACTIVE, 960, 100)],
+    ]);
+    const res = reconcileGrid(master, target, BOUNDARY, { logger: () => {}, gapSlots: null as any });
+    const rotations = res.actions.filter((a: any) => a.type === COW_ACTIONS.UPDATE && a.newGridId && a.newGridId !== a.id);
+    assert.strictEqual(rotations.length, 1, 'rotation still planned');
+    assert.strictEqual(rotations[0].origin, undefined, 'absent plan gap must not stamp a bogus evacuation');
+    console.log('✓ EVAC-022 passed');
+}
+
 async function runAllTests() {
     console.log('=== Gap-Evacuation Test Suite ===\n');
     await testEVAC001_AllowsSellOutwardNonGrowing();
@@ -594,6 +650,7 @@ async function runAllTests() {
     await testEVAC019_PlanLevelOriginRoutesThroughProof();
     await testEVAC020_StampedSizeReproof();
     await testEVAC021_UnknownPlanGeometryDoesNotStamp();
+    await testEVAC022_SharedGeometryHelpersAbsentAware();
     console.log('\n=== All gap-evacuation tests passed! ===');
 }
 

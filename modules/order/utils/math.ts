@@ -1466,13 +1466,11 @@ function resolveGapSlots(manager: { _gapSlots?: number | null; config?: GridConf
  */
 function resolveGapBand(manager: { _gapSlots?: number | null; boundaryIdx?: number | null; config?: GridConfig | null }): { gapSlots: number; boundaryIdx: number | null; sellStartIdx: number | null } {
     const gapSlots = resolveGapSlots(manager);
-    // Explicit null/undefined guard: Number(null) === 0, which would silently
-    // treat "no boundary" as boundary 0 — a valid index that biases all slots
-    // to the SELL rail.  Return null so callers can detect the unknown state.
-    if (manager.boundaryIdx == null) {
-        return { gapSlots, boundaryIdx: null, sellStartIdx: null };
-    }
-    const raw = Number(manager.boundaryIdx);
+    // Absent-aware coercion: Number(null)/Number('') === 0 would silently treat
+    // "no boundary" as boundary 0 — a valid index that biases all slots to the
+    // SELL rail. toKnownNumber keeps null/undefined/'' as NaN so the unknown
+    // state is detectable, while a genuine boundary 0 still returns 0.
+    const raw = Format.toKnownNumber(manager.boundaryIdx);
     if (!Number.isFinite(raw)) {
         return { gapSlots, boundaryIdx: null, sellStartIdx: null };
     }
@@ -1538,9 +1536,11 @@ function validateBoundaryCommit(
     gapSlots: number,
     options: { rejectInBandPlacements?: boolean } = {}
 ): { ok: boolean; reason?: string; detail?: string } {
-    if (proposedBoundary == null) return { ok: true };
-    const raw = Number(proposedBoundary);
-    if (!Number.isFinite(raw) || !Number.isInteger(raw)) {
+    // Absent-aware: null/undefined/'' means "no proposal" (ok), NOT boundary 0,
+    // otherwise Number('') === 0 would self-legalize a fake boundary 0 commit.
+    const raw = Format.toKnownNumber(proposedBoundary);
+    if (!Number.isFinite(raw)) return { ok: true };
+    if (!Number.isInteger(raw)) {
         return { ok: false, reason: 'non_integer_boundary', detail: `proposed=${proposedBoundary}` };
     }
     if (raw < 0) {
@@ -1746,13 +1746,20 @@ function countGapBandSpread(manager: OrderManagerLike, orders: Iterable<ManagedO
  *   sits provably outside the rail.
  */
 function isSlotInRail(boundaryIdx: number | null, gapSlots: number | null, orderType: string, slot: { id?: string } | null | undefined): boolean {
-    if (boundaryIdx == null || !Number.isFinite(Number(boundaryIdx))) return true;
+    // Absent-aware: ''/null/undefined is unknown geometry → fail open, never a
+    // boundary of 0 (Number('') === 0 would otherwise exclude valid slots).
+    const boundary = Format.toKnownNumber(boundaryIdx);
+    if (!Number.isFinite(boundary)) return true;
     const parsed = parseSlotIndex(slot?.id);
     if (parsed === null) return true;
     const idx = parsed;
-    if (orderType === ORDER_TYPES.BUY) return idx <= Number(boundaryIdx);
+    if (orderType === ORDER_TYPES.BUY) return idx <= boundary;
     if (orderType !== ORDER_TYPES.SELL) return true;
-    const sellStartIdx = getSellStartIdx(boundaryIdx, gapSlots);
+    // The SELL rail needs the gap width; unknown gap → cannot derive sellStart
+    // → fail open (same contract as the unknown-boundary branch above).
+    const gap = Format.toKnownNumber(gapSlots);
+    if (!Number.isFinite(gap)) return true;
+    const sellStartIdx = getSellStartIdx(boundary, gap);
     if (!Number.isFinite(sellStartIdx)) return true;
     return idx >= sellStartIdx;
 }
@@ -1769,12 +1776,11 @@ function isSlotInRail(boundaryIdx: number | null, gapSlots: number | null, order
  * @returns {boolean} True when the index is inside the gap band
  */
 function isSlotIndexInGapBand(idx: number | string | null | undefined, boundaryIdx: number | string | null | undefined, gapSlots: number): boolean {
-    // Explicit null guard: Number(null) === 0 must never read as slot 0.
-    if (idx === null || idx === undefined || idx === '') return false;
-    if (boundaryIdx === null || boundaryIdx === undefined || boundaryIdx === '') return false;
-    const n = Number(idx);
-    const b = Number(boundaryIdx);
-    const g = Number(gapSlots);
+    // Absent-aware: Number(null)/Number('') === 0 must never read as slot 0,
+    // and an unknown gap width must not collapse the band (null → 0).
+    const n = Format.toKnownNumber(idx);
+    const b = Format.toKnownNumber(boundaryIdx);
+    const g = Format.toKnownNumber(gapSlots);
     if (!Number.isFinite(n) || !Number.isFinite(b) || !Number.isFinite(g)) return false;
     const sellStartIdx = getSellStartIdx(b, g);
     if (!Number.isFinite(sellStartIdx)) return false;

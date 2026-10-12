@@ -14,7 +14,7 @@ const { readOpenOrdersWithMetaSafe } = chainOrdersModule;
 import { BroadcastUncertainError as BroadcastUncertainErrorBinding } from './dexbot_credential_client.js';
 const BroadcastUncertainError = BroadcastUncertainErrorBinding;
 import * as orderUtils from './order/utils/order.js';
-import { sleep, setLastFillPivot, fireStructuralResync, evaluateSpreadCorrectionReadiness } from './order/utils/system.js';
+import { sleep, setLastFillPivot, fireStructuralResync, evaluateSpreadCorrectionReadiness, resolveLastFillGuardReference } from './order/utils/system.js';
 const {
     buildCreateOrderArgs,
     buildCreateOpFingerprint,
@@ -2520,7 +2520,8 @@ function buildCowResultFromPlan(bot: BotLike, plan: JsonObj): CowResult {
     // Guard null/undefined explicitly: Number(null) === 0 would be treated as a
     // valid finite boundary (index 0), silently biasing role classification.
     const rawBoundary = plan?.boundaryIdx;
-    const requestedBoundary = rawBoundary != null ? Number(rawBoundary) : NaN;
+    // Absent-aware: null/undefined/'' are unknown (NaN), never boundary 0.
+    const requestedBoundary = Format.toKnownNumber(rawBoundary);
     const workingBoundary = Number.isFinite(requestedBoundary)
         ? requestedBoundary
         : bot.manager.boundaryIdx;
@@ -3571,7 +3572,9 @@ async function runPreBroadcastGuards(bot: BotLike, cowResult: CowResult): Promis
         const shadowBoundary = Number.isFinite(planBoundaryRaw)
             ? planBoundaryRaw
             : (managerBoundaryRaw != null && managerBoundaryRaw !== '' ? Number(managerBoundaryRaw) : NaN);
-        const shadowGapSlots = Number(bot.manager?._gapSlots);
+        // Absent-aware gap: Number(null) === 0 would defeat the helper's own
+        // null guard by passing a collapsed 0 band before the helper sees it.
+        const shadowGapSlots = Format.toKnownNumber(bot.manager?._gapSlots);
         const shadowSlots = collectGapBandPlacementShadowSlots(actions, shadowBoundary, shadowGapSlots);
         if (shadowSlots.length > 0) {
             if (bot._metrics) {
@@ -3863,8 +3866,12 @@ async function updateOrdersOnChainBatchCOWBody(
         // whose freeze picked up a pre-freeze queued fill look "moved" at the
         // gate — a spurious warn plus a redundant full re-check against the
         // identical pivot.
-        const frozenPivotAtBatchStart = bot.manager?._lastFilledPrice;
-        const frozenTypeAtBatchStart = bot.manager?._lastFilledType;
+        // Same effective reference the per-action guard judges against (live
+        // pivot, else the bot-scoped market fill) so the freeze cannot run cold
+        // while the guard still blocks.
+        const frozenRef = resolveLastFillGuardReference(bot.manager);
+        const frozenPivotAtBatchStart = frozenRef.price;
+        const frozenTypeAtBatchStart = frozenRef.type;
         for (const action of actions) {
             if (action.type === COW_ACTIONS.CANCEL) {
                 try {
@@ -4189,8 +4196,10 @@ async function updateOrdersOnChainBatchCOWBody(
                             let bypassedEvacuation = false;
                             const rotationOrigin = action?.origin;
                             if (rotationOrigin === COW_ORIGINS.GAP_EVACUATION) {
-                                const frozenB = Number(action?.evacBoundary);
-                                const frozenG = Number(action?.evacGapSlots);
+                                // Absent-aware: a legacy stamp carrying null/''
+                                // geometry must not read as boundary 0 / gap 0.
+                                const frozenB = Format.toKnownNumber(action?.evacBoundary);
+                                const frozenG = Format.toKnownNumber(action?.evacGapSlots);
                                 let stampUsable = Number.isFinite(frozenB) && Number.isFinite(frozenG);
                                 if (stampUsable) {
                                     // Stale-stamp check: the stamp froze PLAN-BUILD
@@ -4633,8 +4642,12 @@ async function updateOrdersOnChainBatchCOWBody(
             const gateGuarded = finalGateStats.checked + finalGateStats.bypassed;
             const totalGuarded = lastFillGuardStats.checked + lastFillGuardStats.bypassed + gateGuarded;
             if (totalGuarded > 0) {
-                const sumPivotRaw = bot.manager?._lastFilledPrice;
-                const sumType = bot.manager?._lastFilledType;
+                // Same effective reference the guard judged against (live pivot
+                // else the bot-scoped market fill) so the summary cannot report
+                // disabled(cold) while placements were actually blocked.
+                const sumRef = resolveLastFillGuardReference(bot.manager);
+                const sumPivotRaw = sumRef.price;
+                const sumType = sumRef.type;
                 const sumInc = resolveLastFillGuardIncrement(bot);
                 const cold = sumPivotRaw == null || !Number.isFinite(Number(sumPivotRaw)) || sumType == null;
                 const batchOrigin = cowResult?.origin;
@@ -5605,8 +5618,12 @@ function runLastFillGuardCheck(bot: BotLike, price: number, size: number, type: 
     if (!skipRefresh) {
         try { refreshed = !!refreshLastFillPivotFromQueue(bot); } catch { /* best-effort */ }
     }
-    const lastPrice = bot.manager?._lastFilledPrice;
-    const lastType = bot.manager?._lastFilledType;
+    // Effective reference: the live pivot when armed, else the bot-scoped
+    // market fill that survives a grid regeneration. Without the fallback a
+    // rebuild un-arms the guard until the next fill.
+    const lastRef = resolveLastFillGuardReference(bot.manager);
+    const lastPrice = lastRef.price;
+    const lastType = lastRef.type;
     const inc = resolveLastFillGuardIncrement(bot);
     // Validate the pivot onto the ladder before use (see resolveOnGridPivot).
     // Reported once per probe at warn when the raw pivot was NOT a grid level:
@@ -5730,8 +5747,9 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
         const queueDepthAfter = Array.isArray(bot?._incomingFillQueue)
             ? bot._incomingFillQueue.length
             : null;
-        const livePivot = Number(bot.manager?._lastFilledPrice);
-        const liveType = bot.manager?._lastFilledType;
+        const liveRef = resolveLastFillGuardReference(bot.manager);
+        const livePivot = Number(liveRef.price);
+        const liveType = liveRef.type;
         const liveCold = !Number.isFinite(livePivot) || liveType == null;
         // No-op fast path: pivot unchanged (or uncomparable) since the freeze.
         // frozenCold + liveCold: guard stayed disabled — nothing to re-check.
@@ -5768,7 +5786,7 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
         const dropIdx = new Set<number>();
         const dropped: JsonObj[] = [];
         const inc = resolveLastFillGuardIncrement(bot);
-        const onGrid = resolveOnGridPivot(bot.manager, bot.manager?._lastFilledPrice);
+        const onGrid = resolveOnGridPivot(bot.manager, liveRef.price);
         for (let i = 0; i < opContexts.length; i++) {
             const ctx = opContexts[i];
             if (!ctx || ctx.kind === 'cancel' || ctx.kind === 'size-update') continue;
@@ -5838,8 +5856,8 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
                 // especially not on an op the build loop already allowed.
                 const rotOrigin = action?.origin;
                 if (rotOrigin === COW_ORIGINS.GAP_EVACUATION
-                    && Number.isFinite(Number(action?.evacBoundary))
-                    && Number.isFinite(Number(action?.evacGapSlots))) {
+                    && Number.isFinite(Format.toKnownNumber(action?.evacBoundary))
+                    && Number.isFinite(Format.toKnownNumber(action?.evacGapSlots))) {
                     if (stats) stats.bypassed = (Number(stats.bypassed) || 0) + 1;
                     continue;
                 }

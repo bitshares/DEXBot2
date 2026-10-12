@@ -338,6 +338,10 @@ class StrategyEngine {
                 Number(config?.coreOrders?.buy) || 1,
                 Number(config?.coreOrders?.sell) || 1
             );
+            // Null boundary is DELIBERATELY compared against numeric 0 here:
+            // the derived boundary is an absolute recovery anchor, and its
+            // distance from 0 is exactly the ANCHOR-DIVERGENCE signal this
+            // observability counter exists to surface (see P2 test).
             const driftSlots = Math.abs(Number(newBoundaryIdx) - Number(currentBoundaryIdx));
             if (Number.isFinite(driftSlots) && driftSlots > activeWindow) {
                 const metrics = this.manager._metrics;

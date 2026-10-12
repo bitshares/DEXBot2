@@ -386,6 +386,10 @@ class COWRebalanceEngine {
         // boundary-hold still judge the plan; no geometry is refused here.
         {
             const railSize = targetGrid?.size ?? 0;
+            // Null boundary is DELIBERATELY compared against numeric 0 here:
+            // the recovery plan's window is measured from rail start, and an
+            // off-rail truncation is exactly the telemetry this warn surfaces
+            // (see ANCHOR-007). It never gates the plan.
             const gap = Number(gapSlots) || 0;
             const sellStart = Number(targetBoundary) + gap + 1;
             if (Number.isFinite(sellStart) && railSize > 0 && sellStart >= railSize) {

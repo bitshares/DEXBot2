@@ -2744,7 +2744,10 @@ export function consumePendingFillCrawls(manager: OrderManagerLike): { applied: 
         1
     );
     if (Math.abs(netShift) > fallbackCap) netShift = Math.sign(netShift) * fallbackCap;
-    let gapSlots = Number(manager?._gapSlots);
+    // Absent-aware: Number(null) === 0 is finite, so a plain Number() would use
+    // a collapsed (0) gap instead of the config-derived fallback and let the
+    // ceiling + validatePersistedBoundary run on the wrong band.
+    let gapSlots = Format.toKnownNumber(manager?._gapSlots);
     if (!Number.isFinite(gapSlots)) {
         try {
             gapSlots = MathUtils.calculateGapSlots(config?.incrementPercent, config?.targetSpreadPercent, config?.gridLimits);

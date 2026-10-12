@@ -21,7 +21,9 @@ const {
     persistGridSnapshot,
     restoreLastFillPivot,
     resetLastFillPivot,
+    resolveLastFillGuardReference,
 } = require('../modules/order/utils/system');
+const { isLastFillGuardBlocked } = require('../modules/dexbot_cow_runtime');
 const { ORDER_TYPES, DEFAULT_CONFIG } = require('../modules/constants');
 
 // Synthetic genesis helper: deterministic ladder like the runtime builds.
@@ -290,6 +292,55 @@ async function testLFP8_ResetClearsWholeFamily() {
     console.log('✓ LFP-8 passed');
 }
 
+async function testLFP9_GuardFallsBackToMarketFillWhenPivotCold() {
+    console.log('\n[LFP-9] generic LAST-FILL-GUARD keeps the market anchor across a rebuild...');
+    // Cold pivot (post-rebuild) + a surviving bot-scoped market fill: the
+    // guard must still see the last real fill, not report cold and let a
+    // CREATE cross it.
+    const cold: any = {
+        _lastFilledPrice: null,
+        _lastFilledType: null,
+        lastFillPivotSource: null,
+        _lastMarketFillPrice: 100,
+        _lastMarketFillType: ORDER_TYPES.BUY,
+        _lastMarketFillAt: FILLS_AT,
+    };
+    assert.deepStrictEqual(
+        resolveLastFillGuardReference(cold),
+        { price: 100, type: ORDER_TYPES.BUY },
+        'cold pivot falls back to the bot-scoped market fill'
+    );
+    const { price, type } = resolveLastFillGuardReference(cold);
+    assert.strictEqual(
+        isLastFillGuardBlocked(100, 1, ORDER_TYPES.BUY, price, type, 0.5).blocked,
+        true,
+        'a BUY at/above the last fill is blocked via the fallback (guard not cold)'
+    );
+    assert.strictEqual(
+        isLastFillGuardBlocked(99.5, 1, ORDER_TYPES.BUY, price, type, 0.5).blocked,
+        false,
+        'a BUY below the fallback floor is still allowed'
+    );
+
+    // An armed live pivot wins over the (older) market row.
+    const armed: any = {
+        _lastFilledPrice: 101,
+        _lastFilledType: ORDER_TYPES.SELL,
+        lastFillPivotSource: 'fill',
+        _lastMarketFillPrice: 100,
+        _lastMarketFillType: ORDER_TYPES.BUY,
+        _lastMarketFillAt: FILLS_AT,
+    };
+    assert.deepStrictEqual(resolveLastFillGuardReference(armed), { price: 101, type: ORDER_TYPES.SELL });
+
+    // Both cold => cold (fail-open), unchanged.
+    assert.deepStrictEqual(
+        resolveLastFillGuardReference({ _lastFilledPrice: null, _lastFilledType: null, lastFillPivotSource: null }),
+        { price: null, type: null }
+    );
+    console.log('✓ LFP-9 passed');
+}
+
 async function runAllTests() {
     console.log('=== LAST-FILL-GUARD Pivot Persistence Test Suite ===\n');
     try {
@@ -301,6 +352,7 @@ async function runAllTests() {
         await testLFP6_GenesisMismatchDropsAndErases();
         await testLFP7_OffLadderPivotRefused();
         await testLFP8_ResetClearsWholeFamily();
+        await testLFP9_GuardFallsBackToMarketFillWhenPivotCold();
         console.log('\nAll LAST-FILL-GUARD pivot persistence tests passed.');
     } catch (e: any) {
         console.error('Test failed:', e?.message ?? e);

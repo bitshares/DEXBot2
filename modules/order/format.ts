@@ -278,6 +278,24 @@ function positiveOrNull(value: unknown): number | null {
 }
 
 /**
+ * Convert a value to a finite number but treat an explicitly absent value
+ * (`null`/`undefined`/`''`) as unknown (`NaN`) instead of `0`.
+ *
+ * `Number(null) === 0` and `Number('') === 0` are finite, so a plain `Number()`
+ * coercion reads "no value" as the valid value 0 — the trap that made an
+ * unknown boundary read as slot 0, an unknown gap width collapse the band, and
+ * an unknown fill timestamp read as epoch. Use this for any geometry/index/
+ * count field where 0 is legitimate and absence must stay detectable.
+ *
+ * A genuine `0` (number, `'0'`, `false`) still converts to `0`. Pair with
+ * `Number.isFinite` at the call site where absent must fail closed.
+ */
+function toKnownNumber(value: unknown): number {
+	if (value === null || value === undefined || value === '') return NaN;
+	return Number(value);
+}
+
+/**
  * Safely format a numeric value with specified decimals and fallback.
  *
  * @param {*} value - The value to format
@@ -300,5 +318,5 @@ function safeFormat(value: unknown, decimals: number, fallback: string = 'N/A'):
 // EXPORTS
 // ===============================================================================
 
-export { formatAmount8, formatAmount, formatAmountByPrecision, formatSizeByOrderType, formatPrice, formatPrice6, formatPrice4, formatCurrency, formatFundsValue, formatPercent2, formatPercent, formatMetric2, isValidNumber, toFiniteNumber, positiveOrNull, safeFormat }
+export { formatAmount8, formatAmount, formatAmountByPrecision, formatSizeByOrderType, formatPrice, formatPrice6, formatPrice4, formatCurrency, formatFundsValue, formatPercent2, formatPercent, formatMetric2, isValidNumber, toFiniteNumber, toKnownNumber, positiveOrNull, safeFormat }
 

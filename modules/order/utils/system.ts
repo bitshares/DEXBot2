@@ -54,7 +54,7 @@ import { getStorage } from '../../storage/index.js';
 const storage = getStorage();
 import { API_LIMITS, ORDER_TYPES, COW_ACTIONS, FEE_PARAMETERS, BTS_PRECISION, PIPELINE_TIMING, NATIVE_CLIENT, GRID_LIMITS, TIMING } from '../../constants.js';
 import { PATHS } from '../../paths.js';
-import { toFiniteNumber, isValidNumber } from '../format.js';
+import { toFiniteNumber, isValidNumber, toKnownNumber } from '../format.js';
 import * as MathUtils from './math.js';
 import * as OrderUtils from './order.js';
 import Logger from '../../order/logger.js';
@@ -1438,6 +1438,39 @@ export function resolveSpreadMarketReference(manager: OrderManagerLike): number 
 }
 
 /**
+ * Resolve the reference the generic LAST-FILL-GUARD judges against.
+ *
+ * Prefers the live armed pivot. When that is cold (a grid regeneration
+ * cleared it, or a rejected-snapshot reset ran) it falls back to the
+ * bot-scoped last-market-fill row — the same market truth spread correction
+ * already uses. This is what stops a rebuild from silently un-arming the
+ * guard until the next fill: the price the account last traded at is known,
+ * so a CREATE/rotation must still not cross it.
+ *
+ * Read-time fallback only: it does NOT mutate the pivot or persist an
+ * old-generation value, so the genesis-bound pivot/persist contract is
+ * unchanged. The guard still validates the value onto the CURRENT ladder via
+ * resolveOnGridPivot at the call site (off-ladder → raw value + warn), so a
+ * regenerated geometry stays the authority on which placements are off-grid.
+ *
+ * @param {Object} manager - OrderManager instance
+ * @returns {{price: number|null, type: string|null}} Effective pivot (both null when cold)
+ */
+export function resolveLastFillGuardReference(manager: OrderManagerLike): { price: number | null; type: string | null } {
+    const livePrice = Number(manager?._lastFilledPrice);
+    const liveType = manager?._lastFilledType;
+    if (Number.isFinite(livePrice) && livePrice > 0 && (liveType === ORDER_TYPES.BUY || liveType === ORDER_TYPES.SELL)) {
+        return { price: livePrice, type: liveType };
+    }
+    const marketPrice = Number(manager?._lastMarketFillPrice);
+    const marketType = manager?._lastMarketFillType;
+    if (Number.isFinite(marketPrice) && marketPrice > 0 && (marketType === ORDER_TYPES.BUY || marketType === ORDER_TYPES.SELL)) {
+        return { price: marketPrice, type: marketType };
+    }
+    return { price: null, type: null };
+}
+
+/**
  * Restore the persisted bot-scoped last-market-fill reference into the
  * manager. Deliberately independent of the boundary and the genesis: this is
  * the anchor spread correction uses to avoid trading through the last real
@@ -1835,7 +1868,9 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
         // the sell rail parked at 111-130 with the bottom three, 111-113,
         // inside the new spread gap; real spread 0.5% instead of the 2.0%
         // target).
-        const workingBoundaryIdx = (pendingBoundaryIdx !== null && pendingBoundaryIdx !== undefined && Number.isFinite(Number(pendingBoundaryIdx)))
+        // Absent-aware: Number(null)/Number('') === 0 would fabricate a
+        // boundary-0 rail; only a real finite pending boundary wins.
+        const workingBoundaryIdx = Number.isFinite(toKnownNumber(pendingBoundaryIdx))
             ? Number(pendingBoundaryIdx)
             : manager.boundaryIdx;
         const gapSlots = manager._genesis?.gapSlots ?? manager._gapSlots ?? MathUtils.calculateGapSlots(
