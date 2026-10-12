@@ -220,7 +220,9 @@ function getTxBuilderFeeCacheTtl(): number | undefined {
 }
 
 function setUmask(mode: number): void {
-    if (hasProcess()) { process.umask(mode); }
+    // Worker threads cannot set the process-wide umask, so skip gracefully
+    // there (matches Runtime.umask()'s try/catch guard).
+    if (hasProcess()) { try { process.umask(mode); } catch { /* not supported in workers */ } }
 }
 
 // Make path-related env keys live (ESM cache not invalidated via require.cache in tests)
