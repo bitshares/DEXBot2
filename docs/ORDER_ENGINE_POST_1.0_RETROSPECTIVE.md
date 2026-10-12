@@ -4,14 +4,16 @@
 > misbehaving (Part I) and the preserved **incident & fix ledger** (Part II), formerly
 > `CONSOLIDATED_ORPHAN_FIX_SUMMARY.md`.
 >
-> **Sources:** `CHANGELOG.md` v1.0.0 → v1.6.3; `docs/GRID_PRICE_INVARIANT.md`;
+> **Sources:** `CHANGELOG.md` v1.0.0 → v1.6.14; `docs/GRID_PRICE_INVARIANT.md`;
 > `docs/COW_INVARIANTS.md`. Generic terms only — no live markets, accounts, or order ids.
 >
-> **Scope / snapshot:** v1.0.0 → v1.6.3.
+> **Scope / snapshot:** v1.0.0 → v1.6.14 (`f6c0df32`, 2026-10-12); the v1.6.4 → v1.6.14 arc
+> is the §9 addendum below.
 >
 > **Section numbering:** Part II deliberately keeps its original `§0`–`§8` numbers because
-> source-code comments and tests cite them (e.g. `… §2 fix #1`, `… §3 lineage`). Part I uses
-> `R1`–`R5` so the two never collide. The closing appendix is unnumbered (`A`) so the cited `§` range stays fixed.
+> source-code comments and tests cite them (e.g. `… §2 fix #1`, `… §3 lineage`); §9 is a
+> later addendum (v1.6.4 → v1.6.14) that extends, and does not renumber, that range. Part I
+> uses `R1`–`R5` so the two never collide. The closing appendix is unnumbered (`A`).
 >
 > **How to read:** start with **Part I** for the explanation; drop into **Part II** when you need
 > the per-incident evidence, commit hashes, and verification targets.
@@ -41,6 +43,7 @@
 - 6. Consolidated invariants
 - 7. Consolidated verification — grid-correction check as regression gate
 - 8. Provenance & supersession record
+- 9. COW Broadcast, Resync & Geometry Safety (v1.6.4 → v1.6.14) — addendum
 - A. Grid-Price Invariant — former failure trace (appendix)
 
 ---
@@ -102,6 +105,11 @@ notes; the grid-price invariant has its own doc — [GRID_PRICE_INVARIANT.md](GR
   config, one authoritative set of counters.
 - **Global last-fill guard + final pre-broadcast gate:** one pivot rule, enforced at the
   last moment before broadcast, with fail-open semantics for unjudgeable ops.
+- **Non-destructive recovery (v1.6.13+):** uncertain broadcasts and credential outages
+  *defer* instead of rebuilding the grid, so a reset stops being the reflex response to
+  ambiguity — see §9.1.
+- **Fail-closed geometry (v1.6.14+):** an unknown boundary/gap is no longer coerced to a
+  valid-looking `0` — see §9.1.
 
 The winning strategy was **removing writers and sources of truth**, not adding handlers.
 
@@ -115,6 +123,8 @@ The winning strategy was **removing writers and sources of truth**, not adding h
    beats fail-closed alone.
 5. Make deferred work **level-triggered** — never let a retry depend on a future event.
 6. If a fix class keeps returning, the model is wrong, not the fix.
+7. Treat **ambiguity as deferral, not destruction** — a reset that clears guard state is
+   another writer, and `Number(null) === 0` is how "unknown" becomes a confident `0`.
 
 ---
 
@@ -243,7 +253,7 @@ Falling market Aug 28 after ~17:00 UTC: bot **placed new SELLs below own live se
 
 **Mode B — lag (stale boundary).** Aug 29 09:32 swept up through sell rail slots 147–158 → then `09:32:21 Placed sell slot-129 -> <order-1>` filled 250 ms later, `09:32:33 slot-131`, `09:32:42 slot-132` — 15–25 levels below rail; `ANCHOR-DIVERGENCE projected=138 bookkept=123 drift=15`. Boundary crawled down with falling-market buys, re-rolled slots 129–132 as SELL into rising market. One instant fill set `maxFilledSellPrice=1044.79`, guard caught later attempts `15:47` (1 slot below) and `17:27` (4+8 below 1099.37/1112.62). **What PRICE_FIRST Phase 2 fixes.**
 
-**Mode C — COW commit geometry (separate).** Attribution corrected: `Batch transaction failed: Execution error: Order does not exist … cannot update` confirmed post-commit on bot-B: `<order-4>` `00:28:51 chunk1/3`, `<order-5>` `06:43:09 chunk5/9`, `<order-6>` `00:29:30` (`limit_order_update delta=-2341206 targets missing`). Broadcast refs missing orderId, aborts partial grid. `GAP-BAND VIOLATION after commit` = 0 in post-commit bot-A/B/C logs (evidence is bot-D `4` + D2 `11` dated Aug 26/28/29). Need: (a) COW rejects placement inside gap pre-broadcast; (b) pre-broadcast existence check off slot→orderId map. Gap case hardening independent.
+**Mode C — COW commit geometry (separate).** Attribution corrected: `Batch transaction failed: Execution error: Order does not exist … cannot update` confirmed post-commit on bot-B: `<order-4>` `00:28:51 chunk1/3`, `<order-5>` `06:43:09 chunk5/9`, `<order-6>` `00:29:30` (`limit_order_update delta=-2341206 targets missing`). Broadcast refs missing orderId, aborts partial grid. `GAP-BAND VIOLATION after commit` = 0 in post-commit bot-A/B/C logs (evidence is bot-D `4` + D2 `11` dated Aug 26/28/29). Need: (a) COW rejects placement inside gap pre-broadcast; (b) pre-broadcast existence check off slot→orderId map. Gap case hardening independent. **Status: (b) LANDED `552b3ed7` (v1.6.14) as `UPDATE_TARGET_MISSING`; (a) deliberately shipped as a non-gating shadow (`gapBandPlacementShadowCount`) — see §9.2.**
 
 **Mode D — boundary-evidence re-derivation not persisted (freeze).** `grid_reconcile.ts:359-502` re-derives corrected boundary via `manager._restoreBoundary (:380)` but didn't survive next resync; bot-A re-derived at *every* hourly resync: `117→118 (00:28:48)`, `118→119 (01:00)`, `118→115 (02:00)`, `118→114 (03:00,04:00)`, `118→115 (04:30,05:00)`, `122→119 (07:00)` — 8× identical `ERROR` in ~7h. Bot-C `NO_FEASIBLE_BOUNDARY` → adoption-only at `00:27:17, 00:31:12, 04:27:48`; after `04:27:48` placed **zero orders 04:27:48→07:15:27 (~2h48m)** — only fills + `[ORPHAN-FILL]`. Earlier freeze `00:31→00:54`. Resumed only via fill-driven rotation `07:15`. → Fix #5 (LANDED).
 
@@ -444,7 +454,7 @@ Goal (Phase 2): I1–I6 property pass, full suite green, harness random, 48h per
 4. **LADDER #2/#3** identity + update-first hardening. — *done (`4838bcb0`).*
 5. **LADDER #5 / ORPHAN P0 recovery-by-ID** persistence (long freeze). — *done (`4838bcb0`, extended `a54863ca`; recovery-by-ID `1b27f6eb`).*
 6. **ORPHAN P0 ID-based adoption** + **P1 atomicity** (stale-plan race). — *P0 done (`1b27f6eb`, retry `d808c052`); atomicity partial.*
-7. **ORPHAN P1 rotation + P1 duplicate + GAP P3/P5 + Mode C guards + P2 guardrails** fast-follow. — *rotation + GAP P5 done; GAP P3 reverted `e7231534` (`validateBoundaryAgainstChainEvidence`/`placementsAllowed` removed); duplicate-cancel hard-error, Mode C guards and P2 counters open.*
+7. **ORPHAN P1 rotation + P1 duplicate + GAP P3/P5 + Mode C guards + P2 guardrails** fast-follow. — *rotation + GAP P5 done; GAP P3 reverted `e7231534` (`validateBoundaryAgainstChainEvidence`/`placementsAllowed` removed); Mode C pre-broadcast UPDATE guard and P2 counters LANDED `552b3ed7` (§9.2); the in-gap reject ships as a shadow, not a block.*
 8. **PRICE Phase 3/4** only after evidence (`grid_correction_check` see §7). If soak never clean, stop at Phase 2. — *Phase 3 moot; Phase 4 golden tests landed.*
 
 ---
@@ -474,7 +484,7 @@ Pairs-checked base excludes cross-pair unless flagged; strict sat-level detectio
 - Shifted center → every live order adopted or immediate cancel (no silent unmanaged); startup reconcile replays: bot-A `<order-8>` 07:00 and `<order-9>` 6× loop must stay managed, no `ORPHAN-FILL`.
 - Boundary re-derivation persists: bot-A `00:28–07:00` must not repeat `[BOUNDARY-EVIDENCE]` for unchanged chain.
 - `NO_FEASIBLE_BOUNDARY` bot-C `04:27:48` resumes on next sync tick (bounded, not hours) with WARN.
-- Post-broadcast read-back retry: bot-B `06:43` no `14` piled / forced resync mid-broadcast.
+- Post-broadcast read-back retry: bot-B `06:43` no `14` piled / forced resync mid-broadcast. *(Addressed v1.6.13–1.6.14 by the resync-cascade break (`7eb65c8e`) and the fresh-placement cancel grace (`85a7e7f0`); see §9.)*
 - COW commit never places inside gap; pre-broadcast existence check: bot-B `<order-4/5>` + bot-D/D2 `GAP-BAND` fixtures → `0`. *(Amended: the commit-time in-gap cancel sweep was reverted `e2898e51` — current expectation is adoption-after-chain-evidence-correction; `0` unmanaged in-gap orders remains the target.)*
 - Aug 28 burst `17:09–17:16` (3 regs/6m, sells 1110–1176) → `0` orphans, `0` sells below asks.
 - **Orphan regression over ~7h post-`cd690000` on bot-A/B/C:** distinct `Unmatched` `58/60/91 → ~0` (full `229/107/172 → ~0`), `Fund invariant violation` `0` (was `3077.07→3184.93` etc.), `ORPHAN-FILL` `0` (was `7/33/22`), repeated `[BOUNDARY-EVIDENCE]` `0`, deferred minutes `0`, `[MAINT] n/m failed` `0`.
@@ -490,7 +500,142 @@ Original doc regression excerpts preserved: GAP P6 A/B/C; LADDER §2.8 checks (1
 - [x] No other doc/index lists the four (verified 2026-08-31); `analysis/README.md` documents the `grid_correction_check` tool.
 - [x] Stale `*.md` filename references in code comments/tests updated to the consolidated doc (9 module files, 6 test files), then re-pointed to this hub when it absorbed the summary.
 
-*Generated 2026-08-31 from the 4 test-only docs at their HEAD contents; statuses corrected against `test` HEAD `a54863ca` the same day, then refreshed against `1382f267` (2026-09-13). Landed/reverted/superseded annotations carry commit hashes where known; **line references in §§1-4 were re-verified at `a54863ca` and are subject to drift** — treat them as pointers, not assertions. The GRID-PRICE-INVARIANT guard is **BLOCKING** at all six emission sites (CREATE / UPDATE / CREATE-FALLBACK in `modules/dexbot_cow_runtime.ts`, RECONCILE-CREATE / RECONCILE-UPDATE / STARTUP-CREATE in `modules/order/grid_reconcile_internal.ts`): an off-grid emission is skipped, not merely counted, so a `violated>0` line means an emission was *prevented* rather than a writer merely *pinned*. Counters are still reported (`site=`, `checked=`, `violated=`, `unchecked=`) for observability — see `docs/GRID_PRICE_INVARIANT.md`.*
+*Generated 2026-08-31 from the 4 test-only docs at their HEAD contents; statuses corrected against `test` HEAD `a54863ca` the same day, then refreshed against `1382f267` (2026-09-13) and extended through v1.6.14 at `f6c0df32` (2026-10-12; see §9). Landed/reverted/superseded annotations carry commit hashes where known; **line references in §§1-4 were re-verified at `a54863ca` and are subject to drift** — treat them as pointers, not assertions. The GRID-PRICE-INVARIANT guard is **BLOCKING** at all six emission sites (CREATE / UPDATE / CREATE-FALLBACK in `modules/dexbot_cow_runtime.ts`, RECONCILE-CREATE / RECONCILE-UPDATE / STARTUP-CREATE in `modules/order/grid_reconcile_internal.ts`): an off-grid emission is skipped, not merely counted, so a `violated>0` line means an emission was *prevented* rather than a writer merely *pinned*. Counters are still reported (`site=`, `checked=`, `violated=`, `unchecked=`) for observability — see `docs/GRID_PRICE_INVARIANT.md`.*
+
+---
+
+### 9. COW Broadcast, Resync & Geometry Safety (v1.6.4 → v1.6.14)
+
+> **Source:** `CHANGELOG.md` v1.6.4 → v1.6.14 · **Snapshot:** `f6c0df32` (2026-10-12).
+> Extends the §§1–8 ledger; the `§0`–`§8` numbers are unchanged (code and tests cite them).
+
+Sections 1–4 end with the prevention sweeps reverted: a cancel sweep on ambiguous evidence
+proved worse than the orphan it targets. The post-1.6.3 arc is the constructive inverse —
+**stop the engine from destroying good state**, and **fail closed when geometry is unknown**.
+
+#### 9.1 The synthesis: avoid the destructive resync
+
+R4's fixes (genesis determinism, one writer, the last-fill guard) closed the *orphan* family.
+The remaining harm was self-inflicted: **structural resyncs fired on evidence that did not
+justify them**, and each reset clears the LAST-FILL-GUARD pivot and any gap-evacuation streak.
+The engine now treats uncertainty as *defer, never rebuild*:
+
+- **Uncertain-broadcast reconciliation is master-aware** (`7eb65c8e`, v1.6.13):
+  `resyncIfUnreconciled` treats a chain order as reconciled if master already tracks it
+  (`collectKnownOnChainOrderIds`), not merely if it appears in this batch's adopted set.
+  Before, a populated grid (`W` chain orders − `A` adopted ≫ 0) forced a full rebuild — and a
+  LAST-FILL pivot wipe — after *every* uncertain broadcast.
+- **A suspended persistence is a deferral, not divergence** (`7eb65c8e`): a credential-daemon
+  outage (`persistGrid()` → `{skipped, suspended}`) marks the committed grid dirty for the
+  end-of-tick flush instead of escalating to a resync. The daemon watchdog also sets the
+  recovery flag that actually re-runs `resumeGridPersistence()` — previously a transient ping
+  timeout suspended persistence for hours and cascade-resynced the grid many times in one window.
+- **Unknown geometry fails closed** (`5003b8ef`, `750386ac`, `dc87ce01`, `249016e4`, v1.6.14):
+  `Number(null) === 0` and `Number('') === 0` had made an unknown boundary/gap read as the
+  *valid* value `0`, casting real geometry around slot 0. `Format.toKnownNumber` keeps
+  `null`/`undefined`/`''` unknown (a genuine `0` stays `0`) across the gap-evacuation
+  candidates, `geometryTypeForSlotIndex`, evac stamping, `optimizeRebalanceActions`,
+  `planVacatedRailRefill`, `buildCowResultFromPlan`, the gap-band shadow and the guard
+  fallback; `validateBoundaryCommit` rejects every other non-numeric value (`'abc'`, `NaN`,
+  `Infinity`) as `non_integer_boundary` again (the 1.6.13 absent-aware rewrite had widened
+  "garbage" to "no proposal").
+- **The LAST-FILL reference survives regeneration** (`09dbaad7`, `f1c331bd`, v1.6.14): a
+  bot-scoped last-market-fill row (price/type/fillsAt) is restored at startup under a 24h TTL,
+  so a `clearGrid()`/regeneration no longer wipes the anti-through-trade pivot.
+  `evaluateSpreadCorrectionReadiness()` is the single verdict (cold book = hard refuse; stale
+  snapshot/unmatched orders = plan-but-withhold-the-bypass), with the NEWER of a live
+  order-book/ticker read and the fill anchor as the crossing floor;
+  `SPREAD_CORRECTION_SYNC_FRESH_MS` is the one trust window.
+
+#### 9.2 Pre-broadcast atomicity — Mode C now guarded (`552b3ed7`, v1.6.14)
+
+Mode C (§2.3) is the `Order does not exist … cannot update` abort that leaves a partially
+applied grid. Its pre-broadcast existence check — the second of Mode C's two "Need"s — is now
+implemented in `runPreBroadcastGuards`: every UPDATE action's tracked `orderId` is re-read
+(`batchReadOrders`), fail-open on a non-Map/errored read, then re-verified one by one
+(`readSingleOrder`) so a lagging node cannot manufacture an absence. Any target still missing
+aborts the whole batch (`UPDATE_TARGET_MISSING`), pops the working grid and requests a
+structural resync — the divergence is refused *before* the wire, never half-applied.
+
+Mode C's first "Need" (reject placement inside the gap band pre-broadcast) was deliberately
+**not** implemented as a block: spread correction legitimately places into the band (that is
+what the LAST-FILL-GUARD bypass is for), and a hard reject re-opens the P1 regression class.
+It ships as an observability **shadow** (`gapBandPlacementShadowCount`, warned, never gating).
+`COW_ORIGINS` (`eca90ce6`, v1.6.13) makes the bypass's `origin` keys a single frozen constant,
+so a typo can no longer silently disable the spread-correction / gap-evacuation bypass.
+
+#### 9.3 Don't churn orders the pipeline just placed
+
+- **Fresh-placement cancel grace** (`85a7e7f0`, v1.6.12): `SURPLUS_CANCEL_GRACE_MS` (15 min)
+  timestamps placements (`_placedAt`) and surplus/cancel-only sweeps skip orders inside the
+  window (covering the batched and serial paths; `grid-load`/`grid-init` excluded so restarts
+  still sweep).
+- **Spread correction repairs what it places** (`cd82cd8a`, v1.6.12): create-only, funded from
+  available balance; a distance-sorted windowed-rail ordering bridges contiguously from the
+  live window instead of leaving an interior hole. It tightens the spread rather than walking
+  to the rail edge (`67377d58`, v1.6.9) and is fund-driven (`589cb30e`, v1.6.4).
+- **Committed-size drift resize** (`16308f72`, `d8a97f76`, v1.6.14): an external
+  deposit/withdrawal shifting a side's budget ≥3% resizes all of that side's on-chain orders
+  on the next pipeline-empty tick; the trigger is unified in `checkAndUpdateGridIfNeeded` so the
+  ratio legs cannot be consumed in isolation.
+- **Orphan double-count pruned** (`1f272cee` v1.6.11, `073cceca` v1.6.12): slotless chain
+  orders are counted as committed funds, so adopting one *into* a slot must remove the stale
+  `_lastUnmatchedChainOrders` record; both success exits and the `createOrder` materialize
+  branch prune it by chain id.
+
+#### 9.4 Removing writers — the genesis cleanup (`b2f4a65f`, v1.6.8)
+
+Appendix A's writer chain is closed at the source: a persisted grid with no usable price
+ladder is **refused** at load (`MissingGenesisError` before any mutation;
+`MISSING_GENESIS_POLICY` `rebuild`/`halt`) instead of loading ladder-less and degrading every
+slot-price consumer to a tolerance matcher. The legacy tolerance matcher,
+`findMatchingGridOrderByOpenOrder`, the `price-drift-orphan` auto-cancel and the pass-1
+price-equality / duplicate-swap tolerance fallbacks are deleted, and `syncFromOpenOrders` is
+fail-closed behind `_assertGenesisInvariant`. This is R4's "removing writers and sources of
+truth" carried to its end: the no-ladder state that Appendix A's `slot.price` corruption
+required is no longer reachable at runtime.
+
+#### 9.5 Ledger (order-engine commits, v1.6.4 → v1.6.14)
+
+| Commit | Release | Change |
+|---|---|---|
+| `589cb30e` | 1.6.4 | Spread correction purely fund-driven with a balance refresh fallback |
+| `1f2fd7ae` | 1.6.4 | Fill/broadcast batch cap raised to `gapSlots + 1` |
+| `f90c4b6c` | 1.6.4 | Include VIRTUAL orders in RMS structural divergence |
+| `224f92ee` | 1.6.6 | Harden stale cancellation guards |
+| `b14a1fc8` | 1.6.7 | Persist/restore the LAST-FILL-GUARD pivot with the grid snapshot |
+| `cd6c15fb` | 1.6.7 | Fill-channel watchdog recovery and accounting |
+| `8c4baa69` | 1.6.7 | Recover dead-but-open sessions; stop stale COW re-broadcasts |
+| `b2f4a65f` | 1.6.8 | Refuse persisted grids with no usable price ladder (genesis policy) |
+| `dbd86cc8` | 1.6.8 | Bound the correction drain by wall-clock; surface long grid-lock holds |
+| `67377d58` | 1.6.9 | Spread correction tightens the spread instead of walking to the rail edge |
+| `1f272cee` | 1.6.11 | Five order-engine/lifecycle fixes (orphan accounting, double-count, grace, …) |
+| `85a7e7f0` | 1.6.12 | Defer cancels of freshly placed orders in COW reconcile/divergence |
+| `073cceca` | 1.6.12 | Prune the deferred-orphan record when createOrder linkage binds the slot |
+| `cd82cd8a` | 1.6.12 | Keep spread correction funded by repairing what it places |
+| `7eb65c8e` | 1.6.13 | Break resync cascades; suspended persistence is a deferral |
+| `edb53176` | 1.6.13 | Report spread-correction stall causes |
+| `6480923c` | 1.6.13 | Sync with the chain on every spread-correction stall |
+| `eca90ce6` | 1.6.13 | Centralize COW plan-origin labels in `COW_ORIGINS` |
+| `09dbaad7` | 1.6.14 | Never let spread correction trade through the last real fill |
+| `f1c331bd` | 1.6.14 | Single readiness gate + live market floor |
+| `16308f72` | 1.6.14 | Resize the full side when a deposit slips past the fund ratio |
+| `d8a97f76` | 1.6.14 | Harden committed-size drift; unify the fund trigger |
+| `552b3ed7` | 1.6.14 | COW pre-broadcast UPDATE-target guard + P2 counters |
+| `5003b8ef` | 1.6.14 | Guard unknown boundary/gap across gap-evacuation and COW shadow paths |
+| `750386ac` | 1.6.14 | Guard unknown boundary in the gap-band shadow |
+| `dc87ce01` | 1.6.14 | Close missed 1.6.13 regressions in absent geometry and the rebuild guard |
+| `249016e4` | 1.6.14 | Keep `validateBoundaryCommit` fail-closed for garbage boundaries |
+
+#### 9.6 Invariants added
+
+- **Uncertainty defers, it does not rebuild:** a resync requires a chain order unknown to
+  master, a non-suspension persist divergence, or a proven pre-broadcast UPDATE-target gap.
+- **Unknown geometry is unknown:** no code path may coerce absent boundary/gap to `0`.
+- **Atomic-or-refused:** a COW batch either applies wholly on chain or is refused before the
+  wire; no `limit_order_update` may abort a chunk.
+- **Placed is not surplus:** an order inside `SURPLUS_CANCEL_GRACE_MS` is never cancelled by a
+  sweep running on a stale snapshot.
 
 ---
 
