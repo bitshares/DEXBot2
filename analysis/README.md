@@ -39,7 +39,7 @@ Tools that inspect DEXBot trading behavior and the market data it operates on. O
 
 Common abbreviations used throughout: OHLC, AMA, ER, ATR, Kalman, Hurst, PE, R, LIFO, FIFO, PnL, SMA, VWMA. Full definitions below.
 
-<details><summary>Abbreviation glossary (click to expand)</summary>
+<details><summary><mark>Abbreviation glossary (click to expand)</mark></summary>
 
 | Term | Full name | Plain English |
 |------|-----------|---------------|
@@ -163,7 +163,7 @@ node dist/analysis/trade_profitability.js 1.2.123456 \
   --hours 168 --match-mode fifo
 ```
 
-<details><summary>Options (click to expand)</summary>
+<details><summary><mark>Options (click to expand)</mark></summary>
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -208,7 +208,7 @@ node dist/analysis/trade_profitability.js 1.2.123456 \
 
 **Metrics glossary** — `R` = the size of the average losing trade. A +3R trade earned 3× what a typical loser costs you.
 
-<details><summary>Per-metric definitions (click to expand)</summary>
+<details><summary><mark>Per-metric definitions (click to expand)</mark></summary>
 
 | Output line | Meaning |
 |-------------|---------|
@@ -278,7 +278,7 @@ npm run analysis:grid-check -- --bot-key <bot-key> --hours 168 --increment 0.5
 
 Exit code `0` = pass, `2` = violations found, `1` = fatal error. Bot keys resolve via `profiles/bots.json` (`--list-bots` to enumerate); the account defaults to the bot's stored `accountId` when present (no chain lookup — the ID is auto-saved next to `preferredAccount` after the first successful name resolution, re-verified with `--refresh-account`), otherwise `preferredAccount` is resolved on-chain, and can be overridden with `--account <1.2.x|name>`.
 
-<details><summary>Options (click to expand)</summary>
+<details><summary><mark>Options (click to expand)</mark></summary>
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -319,7 +319,7 @@ node dist/analysis/analyze_trade_heatmap.js \
   --slice-months 6
 ```
 
-<details><summary>Options (click to expand)</summary>
+<details><summary><mark>Options (click to expand)</mark></summary>
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -429,7 +429,7 @@ Shared analyzers and chart renderers for the dynamic-weight signal path. Core en
 - [README.md](trend_detection/README.md) — directory overview and module index
 - [DYNAMIC_WEIGHT_RESEARCH.md](trend_detection/DYNAMIC_WEIGHT_RESEARCH.md) — AMA+Kalman blend with Hurst/PE regime gating, formula reference, knob guide
 
-<details><summary>Modules (click to expand)</summary>
+<details><summary><mark>Modules (click to expand)</mark></summary>
 
 | Module | Purpose |
 |--------|---------|

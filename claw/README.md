@@ -43,7 +43,7 @@ npm install
 
 ## Files
 
-<details><summary>Module and file map (click to expand)</summary>
+<details><summary><mark>Module and file map (click to expand)</mark></summary>
 
 - Core BitShares runtime: `modules/bitshares_client.ts`, `modules/chain_queries.ts`, `modules/chain_broadcast.ts`, `modules/chain_actions.ts`
 - Strategy and state helpers: `modules/short_mpa_strategy.ts`, `modules/position_manager.ts`, `modules/position_manager_watch.ts`
@@ -188,7 +188,7 @@ Shared boundary notes live in `skills/shared/references/skill-boundaries.md`.
 | NullClaw | `SKILL.toml` skill manifest plus MCP server config | Zig-native workspace assistant with manifest loading | Strong fit for local workspace loading, but more dependent on NullClaw-specific config conventions |
 | memU | Subprocess bridge plus MCP server | Proactive memory and intent capture for AI agents | Python-based memory framework with LLM-powered extraction and vector search |
 
-<details><summary>Quick selection rule of thumb (click to expand)</summary>
+<details><summary><mark>Quick selection rule of thumb (click to expand)</mark></summary>
 
 - Choose **OpenClaw** for the broadest assistant platform.
 - Choose **Hermes** if you want a general-purpose assistant with memory, messaging, cron, and browser tooling that can also trade through Claw.
@@ -271,7 +271,7 @@ npm run openfang:skill -- --repo-root "$CLAW_ROOT" --profile-root "$DEXBOT_ROOT"
 
 OpenFang uses the same shared bridge surface through a local CLI wrapper.
 
-<details><summary>Compatibility command surface (click to expand)</summary>
+<details><summary><mark>Compatibility command surface (click to expand)</mark></summary>
 
 ```bash
 npm run openfang:bridge -- manifest
@@ -338,7 +338,7 @@ npm run nanoclaw:skill -- --repo-root "$CLAW_ROOT" --profile-root "$DEXBOT_ROOT"
 
 NanoClaw already ships its own `claw` skill, so keep this bridge skill named `bitshares-claw`.
 
-<details><summary>Compatibility command surface (click to expand)</summary>
+<details><summary><mark>Compatibility command surface (click to expand)</mark></summary>
 
 ```bash
 npm run nanoclaw:bridge -- manifest
@@ -359,7 +359,7 @@ DEXBOT_ROOT="$(cd .. && pwd)"
 npm run zeroclaw:skill -- --repo-root "$CLAW_ROOT" --profile-root "$DEXBOT_ROOT" --output ~/.zeroclaw/workspace/skills/ai-bots/SKILL.toml
 ```
 
-<details><summary>Compatibility command surface (click to expand)</summary>
+<details><summary><mark>Compatibility command surface (click to expand)</mark></summary>
 
 ```bash
 npm run zeroclaw:bridge -- manifest
@@ -383,7 +383,7 @@ DEXBOT_ROOT="$(cd .. && pwd)"
 npm run nullclaw:skill -- --repo-root "$CLAW_ROOT" --profile-root "$DEXBOT_ROOT" --output ~/.nullclaw/workspace/skills/bitshares-claw/SKILL.toml
 ```
 
-<details><summary>Compatibility command surface (click to expand)</summary>
+<details><summary><mark>Compatibility command surface (click to expand)</mark></summary>
 
 ```bash
 npm run nullclaw:bridge -- manifest
@@ -435,7 +435,7 @@ mcp_servers:
     args: ["/absolute/path/to/DEXBot2/dist/claw/scripts/memu_mcp_server.js", "--memu-dir", "/absolute/path/to/claw/data/memu"]
 ```
 
-<details><summary>Compatibility command surface (click to expand)</summary>
+<details><summary><mark>Compatibility command surface (click to expand)</mark></summary>
 
 ```bash
 # Via claw bridge

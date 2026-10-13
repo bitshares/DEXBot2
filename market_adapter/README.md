@@ -489,7 +489,7 @@ Per cycle, per processed bot, the adapter can produce:
 
 ### Files
 
-<details><summary>Config and state files (click to expand)</summary>
+<details><summary><mark>Config and state files (click to expand)</mark></summary>
 
 | File | Purpose |
 |------|---------|
@@ -574,7 +574,7 @@ Typical fields:
 
 ### Module Map
 
-<details><summary>Directory layout (click to expand)</summary>
+<details><summary><mark>Directory layout (click to expand)</mark></summary>
 
 ```text
 market_adapter/
@@ -798,7 +798,7 @@ snapshot.
 
 Main override knobs live in `profiles/market_adapter_settings.json`:
 
-<details><summary>Full settings table (click to expand)</summary>
+<details><summary><mark>Full settings table (click to expand)</mark></summary>
 
 | Setting | Meaning |
 |---------|---------|
@@ -987,7 +987,7 @@ removed manually.
 
 Important fields in `market_adapter/state/market_adapter_state.json`:
 
-<details><summary>Field reference (click to expand)</summary>
+<details><summary><mark>Field reference (click to expand)</mark></summary>
 
 | Field | Meaning |
 |-------|---------|

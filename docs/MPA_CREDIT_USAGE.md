@@ -73,7 +73,7 @@ Add `debtPolicy` to a bot entry in `profiles/bots.json`:
 
 ### Field Reference
 
-<details><summary>All config fields (click to expand)</summary>
+<details><summary><mark>All config fields (click to expand)</mark></summary>
 
 **Required Fields:**
 
@@ -305,7 +305,7 @@ You can switch a credit deal's collateral to a different asset on its next renew
 
 On each maintenance cycle, the runtime compares each deal's on-chain `auto_repay` against the policy's `autoRepay` value. If they differ, a `credit_deal_update` operation is broadcast. After a successful update, the local deal state is updated to prevent redundant broadcasts on the next cycle.
 
-<details><summary>BitShares auto-repay modes (click to expand)</summary>
+<details><summary><mark>BitShares auto-repay modes (click to expand)</mark></summary>
 
 BitShares core 7.0.2 defines three auto-repay modes:
 
@@ -364,7 +364,7 @@ Treat this file as runtime state, not primary configuration. The source of truth
 
 ## Related Files
 
-<details><summary>Source files and tests (click to expand)</summary>
+<details><summary><mark>Source files and tests (click to expand)</mark></summary>
 
 - `modules/credit_runtime.ts`: debt workflow executor (Phase 0 oversized-deal splitter lives here)
 - `modules/credit_pricing.ts`: canonical credit-pricing math (offer orientation, conversion rates, CR, fees) shared by runtime and analyzer
