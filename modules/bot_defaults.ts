@@ -31,9 +31,11 @@ interface SeedOptions {
  * DEFAULT_CONFIG keys the draft seed must NEVER add. Seeding these would change
  * persisted bots.json bytes for existing bots and pre-satisfy
  * `validateBotEntry`'s required-key check (assetA/assetB), hiding genuine
- * configuration mistakes from the validator.
+ * configuration mistakes from the validator. `activeOrders`/`reserveOrders` are
+ * legacy aliases migrated to `coreOrders`/`edgeOrders`, kept here so an older
+ * general.settings.json that still carries them does not fail the parity guard.
  */
-export const DRAFT_EXCLUDED_KEYS = ['assetA', 'assetB', 'creditOnly', 'min_BTS_value'];
+export const DRAFT_EXCLUDED_KEYS = ['assetA', 'assetB', 'creditOnly', 'min_BTS_value', 'activeOrders', 'reserveOrders'];
 
 /**
  * Draft seed order — kept identical to the historical if-chain so a freshly
