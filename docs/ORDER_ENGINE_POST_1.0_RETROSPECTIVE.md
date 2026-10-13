@@ -373,7 +373,12 @@ P2 additions (2026-10-11, counter-only — none gated behavior):
 - `restampBuyAboveAnchorCount` — `recordRestampBuyAboveAnchor` counts a BUY emitted at/above the last filled BUY pivot (guard bypass or unjudgeable pivot), warned once per batch; it never blocks.
 - `boundaryDriftExceedsWindowCount` — `calculateTargetGrid` counts a derived boundary that jumps more than the active window in one plan (the detached-boundary signal the removed ANCHOR-DIVERGENCE telemetry used to carry), rate-limited warn.
 - `gapBandPlacementShadowCount` — the Mode C(a) shadow above.
-All five surface through `getMetrics()`; four via the existing `...bot._metrics` spread, and `boundaryDriftExceedsWindowCount` via an explicit overlay of `manager._metrics` (`getMetrics()`), because `calculateTargetGrid` writes it on the manager's metrics object and has no bot reference.
+
+Spread-correction additions (counter-only, written on `manager._metrics` by `order/grid.ts` because the planner has no bot reference):
+- `spreadCorrectionRefusedCount` / `spreadCorrectionRefusalCauses` — every spread-correction batch that failed to land, plus the per-`SPREAD_CORRECTION_REFUSAL`-cause breakdown.
+- `spreadCorrectionRetryCount` — bounded fresh-master re-plan retries after a transient refusal.
+
+All eight surface through `getMetrics()`; the five baseline counters via the existing `...bot._metrics` spread, and the manager-owned set (`boundaryDriftExceedsWindowCount` plus the three spread counters) via the `managerOwnedCounters()` overlay in `dexbot_maintenance_runtime.ts`, because those engines write on the manager's metrics object and have no bot reference.
 
 #### 3.4 Key code references (from source table)
 

@@ -88,7 +88,7 @@ modules/
 │
 ├── order/                         order lifecycle and grid management
 │   ├── manager.ts                 OrderManager — central controller, COW rebalance
-│   ├── grid.ts                    grid generation, sizing, health
+│   ├── grid.ts                    grid generation, sizing, spread correction, health
 │   ├── working_grid.ts            COW grid wrapper for safe mutations
 │   ├── strategy.ts                grid rebalancing, consolidation, rotation
 │   ├── accounting.ts              fund tracking, fee accounting

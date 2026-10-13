@@ -248,7 +248,7 @@ Prefix tags used in log messages to help operators identify event types. To find
 | `[TARGETED-SYNC]` | `dexbot_maintenance_runtime.ts` | Targeted drift synchronization deferral |
 | `[MULTI-BOT]` | `chain_orders.ts` | Multi-bot shared-account coordination |
 | `[BTS-FEE]` | `order/accounting.ts` | BTS fee deferred accounting |
-| `[SPREAD-CORRECTION]` | `order/grid.ts` | Partial order spread correction |
+| `[SPREAD-CORRECTION]` | `order/grid.ts` | Spread correction, plan-time CREATE dedupe, and bounded fresh-master re-plan |
 | `[STRATEGY]` | `order/strategy.ts` | Fee event cache and strategy decisions |
 | `[RECONCILE]` | `order/utils/validate.ts` | Grid reconciliation ([GRID_RECONCILE.md](GRID_RECONCILE.md)) |
 | `[RMS]` | `order/grid.ts`, `dexbot_maintenance_runtime.ts` | RMS structural-divergence checks: per-side `metric vs threshold → TRIGGER-RESYNC/no trigger` at `debug` (plus a `checks disabled` variant when the threshold is 0), reset line with threshold + breaching sides at `info` |
@@ -294,6 +294,21 @@ Counter-only signals (none gate placement) surfaced through `getMetrics()`: `ref
 | `[RESTAMP-BUY] BUY emitted at ... at/above the last filled BUY ...` | A BUY at/above the last filled BUY pivot got past the LAST-FILL-GUARD (bypass or unjudgeable pivot). Counted, not blocked; warned once per batch |
 | `[COW-GAP-BAND] shadow: N non-spread-correction placement(s) inside the plan's gap band (...)` | Mode C(a) shadow: an in-gap rail placement that is not spread correction / gap evacuation. Counted, never blocked; warned once per batch |
 | `[BOUNDARY-DRIFT] committed boundary X -> planned Y (drift N slots) exceeds active window W; boundary is detached from the market anchor (observability only)` | A single plan moved the boundary more than the active window (absolute recovery anchor or geometry fault). Counted; rate-limited warn |
+
+### Spread-correction resilience
+
+Counter-only signals (none gate placement) surfaced through `getMetrics()`:
+`spreadCorrectionRefusedCount` (all refusals), `spreadCorrectionRefusalCauses`
+(per-`SPREAD_CORRECTION_REFUSAL` cause), and `spreadCorrectionRetryCount` (bounded
+re-plan retries). Kept separate from the generic `refusedCommitCount`.
+
+| Message | Meaning |
+|---------|---------|
+| `[SPREAD-CORRECTION] Plan-time dedupe: N planned slot(s) occupied since planning (...); re-planning from fresh master` | A planned CREATE destination was taken after planning; the plan is re-derived from fresh master |
+| `[SPREAD-CORRECTION] Plan-time dedupe: ...; no re-plan candidate — refusing this cycle` | Collision detected but no fresh candidate exists; the colliding plan is withheld (never broadcast) |
+| `[SPREAD-CORRECTION] Batch refused (cause); re-planning from fresh master (attempt 2/2)` | Transient refusal; the bounded fresh-master re-plan is in progress |
+| `Spread correction batch was prepared but not executed. Keeping local state unchanged. (cause=...)` | Terminal refusal; `cause` is the classified `SPREAD_CORRECTION_REFUSAL` value |
+| `Shutdown complete. Final metrics: ... spreadCorrectionRefusals=N [cause=count, ...], spreadCorrectionRetries=M` | Refusal breakdown on shutdown; the suffix appears only when at least one refusal occurred |
 
 ---
 

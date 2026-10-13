@@ -242,6 +242,7 @@ export interface BotLike {
   _gridLockHoldWarnAt: number;
   _outOfSpreadSince: number;
   _outOfSpreadStaleWarned: boolean;
+  _outOfSpreadTransientCount: number;
   _strandedHoldSince: Map<string, number>;
   _recoverySyncInFlight: number;
   _batchInFlight: number;
@@ -541,6 +542,12 @@ export interface BotMetrics extends UnknownRecord {
   boundaryDriftExceedsWindowCount: number;
   /** Non-spread-correction CREATE/UPDATE destinations inside the gap band (shadow). */
   gapBandPlacementShadowCount: number;
+  /** Every spread-correction batch that failed to land (executed !== true), any cause. */
+  spreadCorrectionRefusedCount: number;
+  /** Spread-correction refusal breakdown keyed by SPREAD_CORRECTION_REFUSAL value (commit-refused, version-mismatch, create-collision, update-target-missing, unmatched-chain-orders, shutdown, batch-not-executed). */
+  spreadCorrectionRefusalCauses: Record<string, number>;
+  /** Bounded re-plan retries attempted after a transient spread-correction refusal. */
+  spreadCorrectionRetryCount: number;
 }
 
 /** An unmatched chain order surfaced by a sync pass. */

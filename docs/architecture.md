@@ -487,8 +487,9 @@ The correction path is fund-only and never manufactures budget by shrinking a re
 5. If free funds cannot cover every target, place the affordable prefix, stop
    without shrinking inventory, and log the fund-constrained remainder.
 6. If neither side places an effective order, `checkSpreadCondition` reports a
-   `stall` cause (`no-free-funds` / `unfunded` / `no-candidates` /
-   `batch-not-executed` / `apply-error`). Every cause arms the targeted
+   `stall` cause (`no-free-funds` / `unfunded` / `no-candidates` / `cold-book` /
+   `unmatched-orders` / `readiness-gate` / `batch-not-executed` / `apply-error`).
+   Every cause arms the targeted
    balances + open-orders refresh: the local snapshot the check reasoned over
    may be stale (`no-candidates` can mean a missed fill left an ACTIVE slot
    occupying the window edge, so no tightening slot appears to exist), and only
@@ -524,6 +525,59 @@ const availableFund = Math.max(0, Math.min(
 - ✅ Constant, predictable spread width
 - ✅ Funds always respected (no forced allocation)
 - ✅ Natural smoothing over multiple rebalance cycles
+
+### Resilience: Atomic Broadcast, Plan-Time Dedupe, Bounded Re-Plan
+
+A correction is planned under `_gridLock` but broadcast *after* the lock is
+released, so a concurrent fill rebalance can invalidate it in that window. Left
+alone, the batch is refused fail-closed and the grid waits for a fill it cannot
+produce (an out-of-spread grid generates no fill) — the stale-grid pathology.
+`checkSpreadCondition` wraps the plan/broadcast in a bounded, region-held
+attempt loop so a stale plan heals in place:
+
+1. **Region hold (atomicity).** The refcounted broadcast region
+   (`startBroadcasting` / `stopBroadcasting`, released in `finally`) is held for
+   the whole attempt loop, so a fill rebalance defers instead of committing a
+   master-version bump between the plan and its broadcast. This narrows the
+   race; the COW commit guard remains the backstop.
+2. **Plan-time CREATE dedupe.** Before broadcasting, `getOccupiedCorrectionSlots`
+   checks whether a planned destination became a live order since planning, and
+   `resolveOccupiedCorrection` re-derives from fresh master or withholds the
+   colliding batch. A known-taken slot is never shipped (the COW build layer is
+   still authoritative against a false positive).
+3. **Bounded fresh-master re-plan.** On a **transient** refusal (stale plan /
+   duplicate CREATE / unclassified non-execution) the cycle re-plans once from
+   fresh master (`replanSpreadCorrectionFromFreshMaster`) and retries —
+   `TIMING.SPREAD_CORRECTION_MAX_ATTEMPTS` (default 2 = initial + one retry).
+   A **non-transient** refusal (commit-refused, update-target-missing, unmatched
+   chain orders, shutdown) is not retried and counts toward grid staleness.
+4. **Observability.** `spreadCorrectionRefusedCount`, per-cause
+   `spreadCorrectionRefusalCauses` (vocabulary `SPREAD_CORRECTION_REFUSAL`), and
+   `spreadCorrectionRetryCount`, surfaced through `getMetrics()` and the shutdown
+   line separately from the generic `refusedCommitCount`.
+
+**Retry invariant:** an `uncertain: true` COW result is retry-safe only while the
+COW layer adopts-or-defers-with-guard into master before returning. The
+adopt/discard path persists first; the ambiguous-read path keeps pending-broadcast
+protection (the existing orderId build guard is the fail-safe, not fail-fast).
+
+### Out-of-Spread Watchdog
+
+Independent of the in-cycle retry, the maintenance watchdog (`trackOutOfSpreadStaleness`)
+tracks how long the grid has been continuously out of tolerance **without an
+effective correction**:
+
+- warns once past `TIMING.SPREAD_STALE_WARN_MS`;
+- escalates to a structural re-center past `TIMING.SPREAD_STALE_ESCALATE_MS`
+  (cooldown `TIMING.SPREAD_STALE_RESYNC_COOLDOWN_MS`);
+- tolerates up to `TIMING.SPREAD_STALE_TRANSIENT_GRACE` consecutive **transient**
+  refusals (which reset the stale clock) before they count toward escalation, so a
+  retryable refusal is not mistaken for a structural dead end — a persistent one
+  still re-centers.
+
+These spread knobs (with `SPREAD_CORRECTION_SYNC_FRESH_MS`) are global `TIMING`
+keys, overridable under `TIMING` in `profiles/general.settings.json`; they are not
+per-bot settings.
 
 ---
 

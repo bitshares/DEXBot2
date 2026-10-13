@@ -110,7 +110,7 @@ Interactive tools and performance benchmarks (not part of CI).
 
 ### Edge Cases & Regression
 Tests targeting specific bugs, race conditions, and failure modes.
-*Examples:* `test_critical_bug_fixes.ts`, `test_race_condition_fixes_batch1.ts`, `test_patch17_invariants.ts`, `test_shutdown_reentrancy.ts`, `test_multifill_opposite_partial.ts`, `test_correction_queue_staleness.ts`, `test_spread_pure_fund_driven.ts`, `test_sync_lock_id_verification.ts`
+*Examples:* `test_critical_bug_fixes.ts`, `test_race_condition_fixes_batch1.ts`, `test_patch17_invariants.ts`, `test_shutdown_reentrancy.ts`, `test_multifill_opposite_partial.ts`, `test_correction_queue_staleness.ts`, `test_spread_pure_fund_driven.ts`, `test_spread_correction_resilience.ts`, `test_sync_lock_id_verification.ts`
 
 ### Utilities & Helpers
 Shared utility functions, precision handling, chain helpers.
@@ -128,6 +128,15 @@ Shared utility functions, precision handling, chain helpers.
 - Atomic commits apply changes only on success
 
 **Reference:** [docs/COPY_ON_WRITE_MASTER_PLAN.md](../docs/COPY_ON_WRITE_MASTER_PLAN.md)
+
+### Spread-Correction Resilience
+- Refusal-cause classification and the transient/non-transient split are centralized (`SPREAD_CORRECTION_REFUSAL`)
+- Plan-time CREATE dedupe withholds a plan whose destination was taken after planning
+- The bounded fresh-master re-plan lands a transiently-refused correction on the retry
+- The broadcast region is held across the plan/retry loop and released exactly once (including on throw)
+- The out-of-spread watchdog tolerates transient refusals only up to its grace budget
+
+**Reference:** [docs/architecture.md](../docs/architecture.md) (Spread Correction → Resilience)
 
 ### RMS Divergence Checking
 - Quadratic penalty for large errors

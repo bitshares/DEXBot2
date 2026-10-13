@@ -20,7 +20,7 @@
  */
 
 import { DEFAULT_CONFIG } from './constants.js';
-import type { UnknownRecord } from './types.js';
+import type { UnknownRecord, BotMetrics } from './types.js';
 
 interface SeedOptions {
     /** Defaults source; omit to use the merged DEFAULT_CONFIG. */
@@ -195,4 +195,32 @@ export function seedBotRuntimeConfig(config: UnknownRecord = {}, options: SeedOp
         if (!(key in out)) out[key] = config[key];
     }
     return out;
+}
+
+/**
+ * Fresh zeroed metrics for the bot and its order manager. Both layers used to
+ * declare the shared counters independently, so a new shared counter had to be
+ * added twice (and could drift). The manager spreads this base and adds its own
+ * runtime-only counters (lock stats, sync timing, start time); the bot uses it
+ * verbatim. Single source of truth for the shared `BotMetrics` defaults.
+ * @returns {Object} A new metrics object with every shared counter zeroed
+ */
+export function createDefaultBotMetrics(): BotMetrics {
+    return {
+        fillsProcessed: 0,
+        batchesExecuted: 0,
+        fillProcessingTimeMs: 0,
+        lockContentionEvents: 0,
+        maxQueueDepth: 0,
+        gridLockContention: 0,
+        fundRecalcCount: 0,
+        refusedCommitCount: 0,
+        orphanFillCreditedCount: 0,
+        restampBuyAboveAnchorCount: 0,
+        boundaryDriftExceedsWindowCount: 0,
+        gapBandPlacementShadowCount: 0,
+        spreadCorrectionRefusedCount: 0,
+        spreadCorrectionRefusalCauses: {},
+        spreadCorrectionRetryCount: 0
+    };
 }

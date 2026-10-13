@@ -359,6 +359,20 @@ let TIMING = {
     // by moving the boundary). Time-based so it holds for any tick cadence.
     SPREAD_STALE_WARN_MS: 10 * 60 * 1000,  // 10 minutes
     SPREAD_STALE_ESCALATE_MS: 30 * 60 * 1000,  // 30 minutes
+    // SPREAD_CORRECTION_MAX_ATTEMPTS: bounded attempts for one spread-correction
+    // cycle (initial broadcast + fresh-master re-plan retries). Kept next to the
+    // other SPREAD_* tunables so the retry budget is centralized; a value < 1
+    // falls back to 2. Overridable per deployment under TIMING in
+    // profiles/general.settings.json (TIMING is a shallow-merged section).
+    SPREAD_CORRECTION_MAX_ATTEMPTS: 2,
+    // SPREAD_STALE_TRANSIENT_GRACE: consecutive TRANSIENT spread-correction
+    // refusals (stale plan / duplicate CREATE / unclassified non-execution)
+    // tolerated before the out-of-spread watchdog stops treating them as
+    // retryable and lets the persistent-stale clock escalate to a structural
+    // re-center. checkSpreadCondition's bounded re-plan heals most transient
+    // refusals in-cycle; the grace keeps a genuinely deadlocked transient from
+    // hiding behind the retry path forever.
+    SPREAD_STALE_TRANSIENT_GRACE: 3,
     // SPREAD_CORRECTION_SYNC_FRESH_MS: how old the last completed open-orders
     // sync may be before a spread-correction CREATE loses its LAST-FILL-GUARD
     // bypass. A stale local snapshot (old sync or known-unmatched chain
@@ -971,6 +985,17 @@ let FILL_PROCESSING = {
     // NOTE: fill/broadcast batch sizing is derived from the grid gap-slot
     // count (DEXBot._getGapSlotBatchSize). There is deliberately no fixed
     // fill-batch or ops-per-broadcast constant here.
+
+    // COALESCE_BACKLOG_REPLAY: when true, a fill backlog larger than the
+    // gap-slot batch size is planned as ONE reconcile instead of the default
+    // chunked replay (each chunk mutating the boundary before broadcasting).
+    // Reuses the existing unified-plan path; the boundary-shift budget and
+    // _getMaxOpsPerBroadcast still bound the shift and split the broadcast
+    // into gapSlots+1-op transactions, so this only removes the intermediate
+    // plan/broadcast cycles (Stale-Restart #5). Default OFF: opt-in rollout
+    // for the live boundary engine, overridable per bot via
+    // `fillProcessing.COALESCE_BACKLOG_REPLAY` in general settings.
+    COALESCE_BACKLOG_REPLAY: false,
 
     // MAX_CONSECUTIVE_CONSUMER_FAILURES: Threshold for the _consumeFillQueue
     // watchdog. Below this count, the consumer re-schedules on every failure

@@ -40,7 +40,7 @@ import {
     COW_ACTIONS,
     GRID_LIMITS
 } from '../constants.js';
-import { seedBotRuntimeConfig } from '../bot_defaults.js';
+import { seedBotRuntimeConfig, createDefaultBotMetrics } from '../bot_defaults.js';
 import {
     getMinOrderSize,
     computeChainFundTotals,
@@ -790,24 +790,15 @@ class OrderManager implements OrderManagerLike {
         this._gapEvacStreaks = new Map();
         this._gapEvacCancelQueued = new Set();
 
+        // Shared counters come from the central factory (createDefaultBotMetrics);
+        // the manager-owned runtime counters are added on top.
         this._metrics = {
-            fillsProcessed: 0,
-            batchesExecuted: 0,
-            fillProcessingTimeMs: 0,
-            lockContentionEvents: 0,
-            maxQueueDepth: 0,
-            fundRecalcCount: 0,
+            ...createDefaultBotMetrics(),
             lockAcquisitions: 0,
             lockContentionSkips: 0,
-            gridLockContention: 0,
             spreadRoleConversionBlocked: 0,
             lastSyncDurationMs: 0,
-            metricsStartTime: Date.now(),
-            refusedCommitCount: 0,
-            orphanFillCreditedCount: 0,
-            restampBuyAboveAnchorCount: 0,
-            boundaryDriftExceedsWindowCount: 0,
-            gapBandPlacementShadowCount: 0
+            metricsStartTime: Date.now()
         };
 
         this._bootstrapping = 1;

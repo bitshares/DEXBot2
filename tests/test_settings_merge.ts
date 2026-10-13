@@ -111,6 +111,24 @@ const DEFAULTS = Object.freeze({
     assert.strictEqual(r.TIMING._comment, undefined);
 })();
 
+(function testSpreadTunablesAreProfileOverridable() {
+    // Contract: the spread-correction retry budget and the out-of-spread
+    // watchdog knobs are TIMING keys, and TIMING is a shallow-merged section —
+    // so a general.settings.json override reaches the runtime reader. Pinned
+    // here so a future merge-strategy change can't silently make them
+    // constants-only.
+    const r = mergeSettings({
+        TIMING: {
+            SPREAD_CORRECTION_MAX_ATTEMPTS: 3,
+            SPREAD_STALE_TRANSIENT_GRACE: 5,
+            SPREAD_CORRECTION_SYNC_FRESH_MS: 120000
+        }
+    }, DEFAULTS);
+    assert.strictEqual(r.TIMING.SPREAD_CORRECTION_MAX_ATTEMPTS, 3);
+    assert.strictEqual(r.TIMING.SPREAD_STALE_TRANSIENT_GRACE, 5);
+    assert.strictEqual(r.TIMING.SPREAD_CORRECTION_SYNC_FRESH_MS, 120000);
+})();
+
 // =============================================================================
 // 4. Deep merge (NATIVE_CLIENT, LOGGING_CONFIG, LAUNCHER, NODE_MANAGEMENT, MARKET_ADAPTER)
 // =============================================================================

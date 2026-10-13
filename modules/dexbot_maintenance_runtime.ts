@@ -31,7 +31,7 @@ import { BroadcastUncertainError } from './dexbot_credential_client.js';
 import * as configModule from './config.js';
 const { Config } = configModule;
 import { getErrorMessage } from './utils/errors.js';
-import type { BotLike, OrderManagerLike, ManagedOrder, OrderType, SpreadCorrectionStall } from './types.js';
+import type { BotLike, OrderManagerLike, ManagedOrder, OrderType, SpreadCorrectionStall, BotMetrics } from './types.js';
 
 /** Loose JSON-object view used across the maintenance runtime. */
 type JsonObj = Record<string, unknown>;
@@ -2750,7 +2750,7 @@ async function executeMaintenanceLogic(bot: BotLike, context: string) {
                 }
                 // Persistence watchdog: a correction that keeps placing nothing
                 // while the spread stays wide is a stale grid, not patience.
-                trackOutOfSpreadStaleness(bot, true, spreadPlaced);
+                trackOutOfSpreadStaleness(bot, true, spreadPlaced, spreadResult?.transient === true);
             }
         } catch (err) {
             bot._warn(`Error running divergence check during ${context}: ${getErrorMessage(err)}`);
@@ -2780,13 +2780,16 @@ async function executeMaintenanceLogic(bot: BotLike, context: string) {
  * @param {unknown} bot
  * @param {boolean} spreadChecked - Whether the spread check ran this tick
  * @param {number} ordersPlaced - Correction orders placed this tick
+ * @param {boolean} [transient=false] - True when the correction was refused for
+ *   a retryable reason (stale plan / duplicate CREATE / unclassified non-execution)
  * @returns {{staleMs: number, escalated: boolean}}
  */
-export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, ordersPlaced: number) {
+export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, ordersPlaced: number, transient = false) {
     const outOfSpread = Number(bot?.manager?.outOfSpread) || 0;
     if (ordersPlaced > 0 || outOfSpread === 0) {
         bot._outOfSpreadSince = 0;
         bot._outOfSpreadStaleWarned = false;
+        bot._outOfSpreadTransientCount = 0;
         return { staleMs: 0, escalated: false };
     }
     if (!spreadChecked) {
@@ -2794,6 +2797,31 @@ export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, 
         return { staleMs: since > 0 ? Date.now() - since : 0, escalated: false };
     }
     const now = Date.now();
+    // Transient refusals (stale plan / duplicate CREATE / unclassified
+    // non-execution) are retried by checkSpreadCondition's bounded re-plan, so
+    // they must not immediately count toward the persistent-stale clock — a
+    // single concurrent commit would otherwise force a structural re-center.
+    // Count them and restart the clock while under the grace budget; past it,
+    // fall through so a genuinely deadlocked transient still heals.
+    if (transient) {
+        const transientCount = (Number(bot._outOfSpreadTransientCount) || 0) + 1;
+        bot._outOfSpreadTransientCount = transientCount;
+        const grace = Number(TIMING?.SPREAD_STALE_TRANSIENT_GRACE) > 0
+            ? Number(TIMING.SPREAD_STALE_TRANSIENT_GRACE)
+            : 3;
+        if (transientCount <= grace) {
+            bot._outOfSpreadSince = now;
+            bot._outOfSpreadStaleWarned = false;
+            bot._log(
+                `[SPREAD-STALE] Transient spread-correction refusal ${transientCount}/${grace} ` +
+                `(outOfSpread=${outOfSpread}); retrying before any structural re-center`,
+                'warn'
+            );
+            return { staleMs: 0, escalated: false };
+        }
+    } else {
+        bot._outOfSpreadTransientCount = 0;
+    }
     if (!Number(bot._outOfSpreadSince)) bot._outOfSpreadSince = now;
     const staleMs = now - Number(bot._outOfSpreadSince);
     const staleMin = Math.round(staleMs / 60000);
@@ -3438,6 +3466,25 @@ function markGridActivity(bot: BotLike, reason: string = 'activity') {
 }
 
 /**
+ * Manager-owned counters overlaid onto the bot's metrics snapshot. The
+ * grid/strategy engines write these on the MANAGER because they have no bot
+ * reference. Kept in one function so wiring a new engine-owned counter does not
+ * mean copying the `manager ?? bot` fallback again.
+ * @param {Object} bot - DEXBot instance
+ * @returns {Object} The manager-owned counters, or {} when the manager has none
+ */
+function managerOwnedCounters(bot: BotLike): Partial<BotMetrics> {
+    const mgr = bot.manager?._metrics;
+    if (!mgr) return {};
+    return {
+        boundaryDriftExceedsWindowCount: mgr.boundaryDriftExceedsWindowCount ?? bot._metrics.boundaryDriftExceedsWindowCount,
+        spreadCorrectionRefusedCount: mgr.spreadCorrectionRefusedCount ?? bot._metrics.spreadCorrectionRefusedCount,
+        spreadCorrectionRefusalCauses: mgr.spreadCorrectionRefusalCauses ?? bot._metrics.spreadCorrectionRefusalCauses,
+        spreadCorrectionRetryCount: mgr.spreadCorrectionRetryCount ?? bot._metrics.spreadCorrectionRetryCount
+    };
+}
+
+/**
  * Get current metrics for monitoring and debugging.
  * @param {import('./dexbot_class.js').DEXBot} bot
  * @returns {Object}
@@ -3454,12 +3501,11 @@ function getMetrics(bot: BotLike) {
     const heldUnmatched = unmatched.filter((u) => isNonBlockingUnmatchedOrder(u));
     return {
         ...bot._metrics,
-        // The boundary-drift counter is written by the strategy engine on the
-        // MANAGER's metrics object (calculateTargetGrid has no bot reference),
-        // so overlay it here — otherwise the P2 signal is counted but never
-        // surfaced by getMetrics().
-        boundaryDriftExceedsWindowCount:
-            bot.manager?._metrics?.boundaryDriftExceedsWindowCount ?? bot._metrics.boundaryDriftExceedsWindowCount,
+        // Counters written by the grid/strategy engines on the MANAGER's metrics
+        // object (those engines have no bot reference). Overlay them here so
+        // they are actually surfaced by getMetrics(). Single wiring point: add
+        // a new engine-owned counter here, not as another inline fallback.
+        ...managerOwnedCounters(bot),
         queueDepth: bot._incomingFillQueue.length,
         fillProcessingLockActive: bot.manager?._fillProcessingLock?.isLocked() || false,
         divergenceLockActive: bot.manager?._divergenceLock?.isLocked() || false,

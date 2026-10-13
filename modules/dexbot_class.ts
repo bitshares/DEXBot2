@@ -88,8 +88,10 @@ import { ProcessedFillStore } from './order/processed_fill_store.js';
 import {
     TIMING,
     DAEMON_CODES,
+    FILL_PROCESSING,
 } from './constants.js';
 import { normalizeBotEntry } from './bot_settings.js';
+import { createDefaultBotMetrics } from './bot_defaults.js';
 import type { FillOpLike, FillLike, ReplaySafeFillAccountingOptions } from './dexbot_fill_runtime.js';
 import { getErrorMessage, getErrorCode } from './utils/errors.js';
 import type {BotLike, AssetPair, IncomingFill, UnknownRecord, GridConfig, OrderManagerLike, AccountOrdersLike, BotMetrics, ProcessedFillStoreLike, CreditRuntimeLike, FillBatchResult, SigningToken, SpreadCorrectionStall} from './types.js';
@@ -100,6 +102,28 @@ const hasExecutableActions = lazyShim('./order/utils/validate', 'hasExecutableAc
 const getRecalculateTriggerFile = lazyShim('./paths', 'getRecalculateTriggerFile');
 const cloneWeightDistribution = lazyShim('./order/utils/math', 'cloneWeightDistribution');
 const resolveBotRuntimeSettings = lazyShim('./runtime_settings', 'resolveBotRuntimeSettings');
+
+/**
+ * Resolve the COALESCE_BACKLOG_REPLAY opt-in.
+ *
+ * Reads the bot config override first, then the manager config, then the
+ * frozen FILL_PROCESSING default (mirrors order/utils readFillProcessingNumber
+ * precedence). Accepts the literal boolean true, the string 'true', or 1.
+ * Default OFF, so the live boundary engine is unchanged unless an operator
+ * opts a bot in via `fillProcessing.COALESCE_BACKLOG_REPLAY`.
+ *
+ * @param {unknown} config - DEXBot config
+ * @param {unknown} managerConfig - OrderManager config (may differ in tests)
+ * @returns {boolean}
+ */
+export function shouldCoalesceBacklogReplay(config: unknown, managerConfig: unknown): boolean {
+    const pick = (c: unknown): unknown =>
+        (c as { fillProcessing?: Record<string, unknown> } | null | undefined)?.fillProcessing?.COALESCE_BACKLOG_REPLAY;
+    const raw = pick(config)
+        ?? pick(managerConfig)
+        ?? (FILL_PROCESSING as unknown as Record<string, unknown>)?.COALESCE_BACKLOG_REPLAY;
+    return raw === true || raw === 'true' || raw === 1;
+}
 
 class DEXBot implements BotLike {
     static normalizeBotEntry: typeof normalizeBotEntry;
@@ -205,6 +229,7 @@ class DEXBot implements BotLike {
     _marketAdapterWatchdogInFlight!: boolean;
     _outOfSpreadSince!: number;
     _outOfSpreadStaleWarned!: boolean;
+    _outOfSpreadTransientCount!: number;
     _postRecoveryRebalanceDefers!: number;
     _skipEmptyReadConfirmDelay!: boolean;
     _spreadFundsExhausted!: boolean;
@@ -264,6 +289,14 @@ class DEXBot implements BotLike {
         this._pendingProcessedFillWrites = this._processedFillStore.pendingWrites;
 
         this._incomingFillQueue = [];
+        // Out-of-spread persistence watchdog state (declared with `!` above):
+        // initialize explicitly so a fresh bot never reads `undefined` before
+        // the first maintenance tick. Values mirror the lazy fallbacks in
+        // trackOutOfSpreadStaleness.
+        this._lastSpreadStaleResyncAt = 0;
+        this._outOfSpreadSince = 0;
+        this._outOfSpreadStaleWarned = false;
+        this._outOfSpreadTransientCount = 0;
         this.logPrefix = options.logPrefix || '';
         this._credentialDaemonWatchdogInterval = null;
         this._credentialDaemonDown = false;
@@ -278,21 +311,9 @@ class DEXBot implements BotLike {
         this._staleCleanedOrderIds = new Map();
         this._staleCleanupRetentionMs = Math.max(this._fillDedupeWindowMs || 0, 5 * 60 * 1000);
 
-        // Metrics for monitoring lock contention and fill processing
-        this._metrics = {
-            fillsProcessed: 0,
-            fillProcessingTimeMs: 0,
-            batchesExecuted: 0,
-            lockContentionEvents: 0,
-            gridLockContention: 0,
-            fundRecalcCount: 0,
-            maxQueueDepth: 0,
-            refusedCommitCount: 0,
-            orphanFillCreditedCount: 0,
-            restampBuyAboveAnchorCount: 0,
-            boundaryDriftExceedsWindowCount: 0,
-            gapBandPlacementShadowCount: 0
-        };
+        // Metrics for monitoring lock contention and fill processing. Shared
+        // counters come from the central factory; the bot adds none of its own.
+        this._metrics = createDefaultBotMetrics();
 
         // Shutdown state
         this._shuttingDown = false;
@@ -1148,8 +1169,14 @@ class DEXBot implements BotLike {
         const managerLog = this.manager?.logger?.log?.bind(this.manager.logger) || (() => {});
         const maxBatch = this._getMaxFillBatchSize();
         const totalFills = fillList.length;
-        const useUnifiedPlan = totalFills <= maxBatch;
-        const modeLabel = useUnifiedPlan ? 'unified' : 'chunked';
+        // P5 (Stale-Restart #5): optionally coalesce a backlog into a single
+        // reconcile instead of a chunked replay that mutates the boundary
+        // between broadcasts. Default OFF (opt-in) — see
+        // shouldCoalesceBacklogReplay for the override precedence.
+        const coalesceBacklog = totalFills > maxBatch
+            && shouldCoalesceBacklogReplay(this.config, this.manager?.config);
+        const useUnifiedPlan = totalFills <= maxBatch || coalesceBacklog;
+        const modeLabel = coalesceBacklog ? 'coalesced' : (useUnifiedPlan ? 'unified' : 'chunked');
 
         managerLog(
             `Processing ${totalFills} filled orders (${modeLabel}, baseBatch=${useUnifiedPlan ? totalFills : maxBatch})...`,
@@ -2244,12 +2271,26 @@ class DEXBot implements BotLike {
             }
         }
 
-        // Log final metrics
+        // Log final metrics. Spread-correction refusals are surfaced
+        // separately from refusedCommitCount (the generic post-broadcast commit
+        // refusals) so an operator can tell a commit-guard rejection apart from
+        // a stale-plan / collision / update-target-missing refusal. Only shown
+        // when any occurred, to keep the common-case line short.
         const metrics = this.getMetrics();
+        const spreadRefusals = Number(metrics.spreadCorrectionRefusedCount) || 0;
+        const refusalBreakdown = Object.entries(metrics.spreadCorrectionRefusalCauses || {})
+            .map(([cause, count]) => `${cause}=${count}`)
+            .join(', ');
+        const refusalSuffix = spreadRefusals > 0
+            ? `, spreadCorrectionRefusals=${spreadRefusals}` +
+              (refusalBreakdown ? ` [${refusalBreakdown}]` : '') +
+              `, spreadCorrectionRetries=${Number(metrics.spreadCorrectionRetryCount) || 0}`
+            : '';
         this._log(`Shutdown complete. Final metrics: fills=${metrics.fillsProcessed}, batches=${metrics.batchesExecuted}, ` +
             `avgProcessingTime=${metrics.fillsProcessed > 0 ? Format.formatMetric2(metrics.fillProcessingTimeMs / metrics.fillsProcessed) : 0}ms, ` +
             `lockContentions=${metrics.lockContentionEvents}, maxQueueDepth=${metrics.maxQueueDepth}, ` +
-            `heldChainOrders=${metrics.heldChainOrders ?? 0}, blockingChainOrders=${metrics.blockingChainOrders ?? 0}`);
+            `heldChainOrders=${metrics.heldChainOrders ?? 0}, blockingChainOrders=${metrics.blockingChainOrders ?? 0}` +
+            refusalSuffix);
 
         await this.manager?.logger?.flush?.();
     }

@@ -157,6 +157,199 @@ function classifySpreadStall(c: SpreadCorrection | null | undefined): SpreadCorr
     return 'no-candidates';
 }
 
+/**
+ * Spread-correction refusal causes — the single vocabulary shared by
+ * classifySpreadRefusalCause, the retry/transience decision and the
+ * spreadCorrectionRefusalCauses metric key. Keep every reader/writer keyed off
+ * this map so a new cause cannot leave classification and transience out of
+ * sync.
+ */
+export const SPREAD_CORRECTION_REFUSAL = Object.freeze({
+    /** Post-broadcast working-grid commit rejected (orders may already be on chain). */
+    COMMIT_REFUSED: 'commit-refused',
+    /** Plan went stale / skipped before broadcast (base-version mismatch). */
+    VERSION_MISMATCH: 'version-mismatch',
+    /** A tracked UPDATE target was gone on chain (COW pre-broadcast guard). */
+    UPDATE_TARGET_MISSING: 'update-target-missing',
+    /** Destination slot already held an active order (plan-time dedupe). */
+    CREATE_COLLISION: 'create-collision',
+    /** Unmatched chain orders blocked the CREATE batch. */
+    UNMATCHED_CHAIN_ORDERS: 'unmatched-chain-orders',
+    /** Shutdown began while the batch was in flight. */
+    SHUTDOWN: 'shutdown',
+    /** Unclassified non-execution (fallback). */
+    BATCH_NOT_EXECUTED: 'batch-not-executed'
+} as const);
+
+export type SpreadCorrectionRefusalCause =
+    (typeof SPREAD_CORRECTION_REFUSAL)[keyof typeof SPREAD_CORRECTION_REFUSAL];
+
+/**
+ * Causes the bounded in-cycle re-plan can heal. `commit-refused` is deliberately
+ * EXCLUDED: the batch reached the chain (chain adoption runs), so it is not a
+ * clean pre-broadcast staleness a fresh-master re-plan repairs — it should count
+ * toward the persistent-stale watchdog instead.
+ */
+const TRANSIENT_SPREAD_CORRECTION_REFUSALS: ReadonlySet<SpreadCorrectionRefusalCause> = new Set([
+    SPREAD_CORRECTION_REFUSAL.VERSION_MISMATCH,
+    SPREAD_CORRECTION_REFUSAL.CREATE_COLLISION,
+    SPREAD_CORRECTION_REFUSAL.BATCH_NOT_EXECUTED
+]);
+
+/**
+ * Whether a refusal cause is retryable by the bounded spread-correction re-plan.
+ * @param {string} cause - A SPREAD_CORRECTION_REFUSAL value
+ * @returns {boolean}
+ */
+export function isTransientSpreadRefusal(cause: SpreadCorrectionRefusalCause): boolean {
+    return TRANSIENT_SPREAD_CORRECTION_REFUSALS.has(cause);
+}
+
+/**
+ * P0 observability: classify WHY a spread-correction batch did not land
+ * (executed !== true) from the COW batch result. Counter-only — never gates
+ * placement. Returns a SPREAD_CORRECTION_REFUSAL value so the metric key, the
+ * retry decision and the log all share one vocabulary.
+ * @param {Object|null} batchResult - The COW batch result
+ * @returns {string} A SPREAD_CORRECTION_REFUSAL value
+ */
+export function classifySpreadRefusalCause(batchResult: unknown): SpreadCorrectionRefusalCause {
+    const r = (batchResult ?? {}) as Record<string, unknown>;
+    const reason = String(r.reason ?? '').toUpperCase();
+    if (r.commitRefused === true) return SPREAD_CORRECTION_REFUSAL.COMMIT_REFUSED;
+    if (reason === 'UPDATE_TARGET_MISSING') return SPREAD_CORRECTION_REFUSAL.UPDATE_TARGET_MISSING;
+    if (reason === 'UNMATCHED_CHAIN_ORDERS') return SPREAD_CORRECTION_REFUSAL.UNMATCHED_CHAIN_ORDERS;
+    if (reason === 'SHUTDOWN_IN_PROGRESS') return SPREAD_CORRECTION_REFUSAL.SHUTDOWN;
+    if (r.skippedStalePlan === true || reason.includes('STALE') || reason.includes('MISMATCH') || reason.includes('BASE VERSION')) return SPREAD_CORRECTION_REFUSAL.VERSION_MISMATCH;
+    if (reason.includes('COLLISION') || reason.includes('EXISTING') || reason.includes('DUPLICATE')) return SPREAD_CORRECTION_REFUSAL.CREATE_COLLISION;
+    return SPREAD_CORRECTION_REFUSAL.BATCH_NOT_EXECUTED;
+}
+
+/**
+ * P0 observability: record a spread-correction refusal on the manager's
+ * metrics (the only object reachable from this planner; getMetrics overlays
+ * these onto the bot's counters). Counter-only; never throws, never gates.
+ * @param {Object} manager - OrderManager instance
+ * @param {string} cause - A SPREAD_CORRECTION_REFUSAL value
+ */
+export function recordSpreadCorrectionRefusal(manager: OrderManagerLike, cause: SpreadCorrectionRefusalCause): void {
+    try {
+        const m = (manager as unknown as { _metrics?: Record<string, unknown> })?._metrics;
+        if (!m) return;
+        m.spreadCorrectionRefusedCount = (Number(m.spreadCorrectionRefusedCount) || 0) + 1;
+        const causes: Record<string, number> = (m.spreadCorrectionRefusalCauses && typeof m.spreadCorrectionRefusalCauses === 'object')
+            ? m.spreadCorrectionRefusalCauses as Record<string, number>
+            : (m.spreadCorrectionRefusalCauses = {});
+        causes[cause] = (Number(causes[cause]) || 0) + 1;
+    } catch { /* metrics are best-effort */ }
+}
+
+/**
+ * P5 observability: count a bounded spread-correction re-plan retry. Churn
+ * signal — a rising retry rate means concurrent commits are repeatedly
+ * invalidating corrections. Counter-only; never throws.
+ * @param {Object} manager - OrderManager instance
+ */
+export function recordSpreadCorrectionRetry(manager: OrderManagerLike): void {
+    try {
+        const m = (manager as unknown as { _metrics?: Record<string, unknown> })?._metrics;
+        if (!m) return;
+        m.spreadCorrectionRetryCount = (Number(m.spreadCorrectionRetryCount) || 0) + 1;
+    } catch { /* metrics are best-effort */ }
+}
+
+/**
+ * P2 plan-time dedupe: which of a correction's planned CREATE destinations are
+ * now occupied by a live (ACTIVE/PARTIAL) order with a chain id?
+ *
+ * The correction is planned under _gridLock, then broadcast after the lock is
+ * released. A concurrent fill rebalance can commit an order onto one of the
+ * planned slots in that window; the COW build layer then rejects the whole
+ * batch (`Rejecting CREATE … existing orderId`). Detecting it here turns that
+ * into a cheap plan-time re-derive (see the retry loop in checkSpreadCondition)
+ * instead of a mid-broadcast refusal and structural resync.
+ *
+ * Pure and never throws. A missing/non-Map orders store selects the empty set.
+ * @param {Object} manager - OrderManager instance
+ * @param {Object|null} correction - Prepared spread correction
+ * @returns {string[]} Occupied planned slot ids
+ */
+export function getOccupiedCorrectionSlots(manager: OrderManagerLike, correction: SpreadCorrection | null | undefined): string[] {
+    const occupied: string[] = [];
+    try {
+        const orders = (manager as unknown as { orders?: Map<string, ManagedOrder> }).orders;
+        if (!(orders instanceof Map) || !correction) return occupied;
+        for (const o of correction.ordersToPlace || []) {
+            const cur = orders.get(o.id);
+            if (!cur) continue;
+            const liveState = cur.state === ORDER_STATES.ACTIVE || cur.state === ORDER_STATES.PARTIAL;
+            if (liveState && cur.orderId) occupied.push(o.id);
+        }
+    } catch { /* best-effort detection */ }
+    return occupied;
+}
+
+/**
+ * P1/P3 shared re-plan: derive a spread correction from the CURRENT master
+ * state (side chosen from fresh on-chain book, opposite-side starvation
+ * fallback). Used both for the plan-time collision dedupe and the bounded
+ * refusal retry. Read-only against the grid; no _gridLock needed (matches the
+ * existing TOCTOU fund re-plan contract).
+ * @param {Object} manager - OrderManager instance
+ * @returns {Promise<Object|null>} A correction with at least one create, or null
+ */
+export async function replanSpreadCorrectionFromFreshMaster(manager: OrderManagerLike): Promise<SpreadCorrection | null> {
+    const freshOnChain = _getOnChainOrders(manager);
+    const freshBest = getGridBestPrices(freshOnChain.onChainBuys, freshOnChain.onChainSells);
+    const freshPrice = (freshBest.bestBuy !== null && freshBest.bestSell !== null)
+        ? (freshBest.bestBuy + freshBest.bestSell) / 2
+        : Number(manager.config.startPrice) || 0;
+    const decision = determineOrderSideByFunds(manager, freshPrice);
+    if (!decision.side) return null;
+    let c = await prepareSpreadCorrectionOrders(manager, decision.side, manager.outOfSpread);
+    if ((c?.ordersToPlace?.length || 0) === 0) {
+        const opposite = decision.side === ORDER_TYPES.BUY ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
+        const oc = await prepareSpreadCorrectionOrders(manager, opposite, manager.outOfSpread);
+        if ((oc?.ordersToPlace?.length || 0) > 0) c = oc;
+    }
+    return c;
+}
+
+/**
+ * Outcome of the P2 plan-time collision resolution.
+ * - 'broadcast': no occupied destination (or the final attempt) — ship the plan.
+ * - 'replanned': a destination was taken and a fresh correction was derived.
+ * - 'blocked': a destination was taken and no fresh correction exists — refuse.
+ */
+export type OccupiedCorrectionResolution =
+    | { action: 'broadcast' }
+    | { action: 'replanned'; correction: SpreadCorrection; occupied: string[] }
+    | { action: 'blocked'; occupied: string[] };
+
+/**
+ * P2: resolve a planned correction whose CREATE destination(s) were taken after
+ * planning. Detects the collision, re-derives once from fresh master, and
+ * reports whether the caller should broadcast, swap in the re-plan, or refuse.
+ *
+ * Extracted from checkSpreadCondition so the branch is a real, production-called
+ * unit that tests can drive directly (no test-only hook in the production path).
+ *
+ * @param {Object} manager - OrderManager instance
+ * @param {Object|null} correction - The plan about to broadcast
+ * @param {number} attempt - 1-based attempt index
+ * @param {number} maxAttempts - Total attempts allowed
+ * @returns {Promise<OccupiedCorrectionResolution>}
+ */
+export async function resolveOccupiedCorrection(manager: OrderManagerLike, correction: SpreadCorrection | null | undefined, attempt: number, maxAttempts: number): Promise<OccupiedCorrectionResolution> {
+    const occupied = getOccupiedCorrectionSlots(manager, correction);
+    if (!(occupied.length > 0 && attempt < maxAttempts)) return { action: 'broadcast' };
+    const replanned = await replanSpreadCorrectionFromFreshMaster(manager);
+    if (replanned && (replanned.ordersToPlace?.length || 0) > 0) {
+        return { action: 'replanned', correction: replanned, occupied };
+    }
+    return { action: 'blocked', occupied };
+}
+
 interface AmaSnapshot {
     gridCenterPrice?: number;
     gridPriceOffsetPct?: number;
@@ -2568,7 +2761,7 @@ export function calculateCurrentSpread(manager: OrderManagerLike): number {
      * @param {Function|null} [updateOrdersOnChainBatch=null] - Optional batch update function
      * @returns {Promise<any>}
      */
-export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares: unknown, updateOrdersOnChainBatch: ((correction: SpreadCorrection) => Promise<{ executed?: boolean }>) | null = null): Promise<{ ordersPlaced: number; partialsMoved: number; stall?: SpreadCorrectionStall }> {
+export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares: unknown, updateOrdersOnChainBatch: ((correction: SpreadCorrection) => Promise<{ executed?: boolean; reason?: unknown; commitRefused?: boolean; skippedStalePlan?: boolean; [key: string]: unknown } | null | undefined>) | null = null): Promise<{ ordersPlaced: number; partialsMoved: number; stall?: SpreadCorrectionStall; transient?: boolean }> {
         // CRITICAL: Acquire corrections lock to serialize spread correction operations
         // This prevents concurrent fill processing from modifying funds while we're making decisions
         let correction: SpreadCorrection | null = null;
@@ -2797,12 +2990,15 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
         // Pre-flight fund verification mitigates TOCTOU between lock release and broadcast.
         if (shouldApplyCorrection && updateOrdersOnChainBatch && correction && fundSnapshot) {
             let activeCorrection: SpreadCorrection = correction;
-            let activeSnapshot: FundStateSnapshot = fundSnapshot;
+            // Explicit non-null alias: fundSnapshot is assigned inside the
+            // executeSpreadCheck closure, so TS control-flow cannot prove it
+            // non-null here even though the guard above checked it.
+            const baseFundSnapshot: FundStateSnapshot = fundSnapshot;
             const currentFunds = _snapshotFundState(manager);
-            const fundChanged = activeSnapshot.buyFree !== currentFunds.buyFree
-                || activeSnapshot.sellFree !== currentFunds.sellFree
-                || activeSnapshot.buyLocked !== currentFunds.buyLocked
-                || activeSnapshot.sellLocked !== currentFunds.sellLocked;
+            const fundChanged = baseFundSnapshot.buyFree !== currentFunds.buyFree
+                || baseFundSnapshot.sellFree !== currentFunds.sellFree
+                || baseFundSnapshot.buyLocked !== currentFunds.buyLocked
+                || baseFundSnapshot.sellLocked !== currentFunds.sellLocked;
             if (fundChanged) {
                 // TOCTOU: fund state changed between lock release and broadcast.
                 // Lock-free re-plan — no _gridLock needed because the fund read
@@ -2832,7 +3028,6 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                 const rePlanCorrection = await prepareSpreadCorrectionOrders(manager, rePlanDecision.side, manager.outOfSpread);
                 if (rePlanCorrection && (rePlanCorrection.ordersToPlace?.length || 0) > 0) {
                     activeCorrection = rePlanCorrection;
-                    activeSnapshot = currentFunds;
                     manager.logger?.log?.(
                         `[SPREAD] Fund state changed between lock release and broadcast — ` +
                         `re-planned with updated funds: ${activeCorrection.ordersToPlace?.length || 0} creates`,
@@ -2851,22 +3046,89 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                     return { ordersPlaced: 0, partialsMoved: 0, stall };
                 }
             }
+            // P1: hold the broadcast/placement region across the whole attempt
+            // loop (re-plan + broadcast). A defer-if-broadcasting fill rebalance
+            // yields while this region is held, and a waiting one parks on
+            // _awaitBroadcastIdle, so a concurrent commit is far less likely to
+            // bump master between this correction's plan and its broadcast — the
+            // race that made the commit guard refuse the batch. This narrows the
+            // window rather than closing it absolutely (the idle wait is bounded
+            // and proceeds on timeout), so the commit guard stays the backstop
+            // and the retry below re-plans from fresh master. The COW batch
+            // refcounts the region internally; this is the outer holder.
+            const MAX_SPREAD_ATTEMPTS = Number(TIMING?.SPREAD_CORRECTION_MAX_ATTEMPTS) > 0
+                ? Number(TIMING.SPREAD_CORRECTION_MAX_ATTEMPTS)
+                : 2;
+            let attempts = 0;
+            // Whether the most recent refusal is retryable — reported to the P4
+            // watchdog so a non-transient cause (commit-refused /
+            // update-target-missing) counts toward staleness instead of being
+            // waved through as a retry. Defaults to transient for the P2
+            // collision-blocked path, which has no batch result.
+            let lastTransient = true;
+            let lastResult: { executed?: boolean; reason?: unknown; commitRefused?: boolean; skippedStalePlan?: boolean; [key: string]: unknown } | null = null;
+            const canHoldRegion = typeof (manager as unknown as { startBroadcasting?: unknown }).startBroadcasting === 'function'
+                && typeof (manager as unknown as { stopBroadcasting?: unknown }).stopBroadcasting === 'function';
+            if (canHoldRegion) (manager as unknown as { startBroadcasting: () => void }).startBroadcasting();
             try {
-                const batchResult = await updateOrdersOnChainBatch(activeCorrection);
-                if (!batchResult || batchResult.executed !== true) {
-                    manager.logger?.log?.(`Spread correction batch was prepared but not executed. Keeping local state unchanged.`, 'warn');
-                    // Nothing landed: ask the caller to refresh account totals +
-                    // open orders (stale holds/balances can make the same plan
-                    // re-derive every cycle).
-                    return { ordersPlaced: 0, partialsMoved: 0, stall: 'batch-not-executed' };
+                while (attempts < MAX_SPREAD_ATTEMPTS) {
+                    attempts++;
+                    // P2: before broadcasting, detect a planned CREATE whose
+                    // destination was taken by a competing batch after planning,
+                    // and re-derive instead of shipping a known collision.
+                    const resolution = await resolveOccupiedCorrection(manager, activeCorrection, attempts, MAX_SPREAD_ATTEMPTS);
+                    if (resolution.action !== 'broadcast') {
+                        manager.logger?.log?.(
+                            `[SPREAD-CORRECTION] Plan-time dedupe: ${resolution.occupied.length} planned slot(s) occupied since planning ` +
+                            `(${resolution.occupied.slice(0, 8).join(', ')}${resolution.occupied.length > 8 ? ', …' : ''}); ` +
+                            (resolution.action === 'replanned' ? 're-planning from fresh master' : 'no re-plan candidate — refusing this cycle'),
+                            'warn'
+                        );
+                        recordSpreadCorrectionRefusal(manager, SPREAD_CORRECTION_REFUSAL.CREATE_COLLISION);
+                        if (resolution.action === 'replanned') {
+                            recordSpreadCorrectionRetry(manager);
+                            activeCorrection = resolution.correction;
+                            continue;
+                        }
+                        break;
+                    }
+                    const batchResult = await updateOrdersOnChainBatch(activeCorrection);
+                    lastResult = batchResult ?? null;
+                    if (batchResult && batchResult.executed === true) {
+                        await manager.recalculateFunds();
+                        const placed = activeCorrection.ordersToPlace?.length || 0;
+                        return { ordersPlaced: placed, partialsMoved: 0 };
+                    }
+                    const cause = classifySpreadRefusalCause(batchResult);
+                    recordSpreadCorrectionRefusal(manager, cause);
+                    const transient = isTransientSpreadRefusal(cause);
+                    lastTransient = transient;
+                    if (!transient || attempts >= MAX_SPREAD_ATTEMPTS) break;
+                    manager.logger?.log?.(
+                        `[SPREAD-CORRECTION] Batch refused (${cause}); re-planning from fresh master ` +
+                        `(attempt ${attempts + 1}/${MAX_SPREAD_ATTEMPTS})`,
+                        'warn'
+                    );
+                    const replanned = await replanSpreadCorrectionFromFreshMaster(manager);
+                    if (!replanned || (replanned.ordersToPlace?.length || 0) === 0) break;
+                    recordSpreadCorrectionRetry(manager);
+                    activeCorrection = replanned;
                 }
-            await manager.recalculateFunds();
-                const placed = activeCorrection.ordersToPlace?.length || 0;
-                return { ordersPlaced: placed, partialsMoved: 0 };
             } catch (err) {
                 manager.logger?.log?.(`Error applying spread correction on-chain: ${getErrorMessage(err)}`, 'warn');
                 return { ordersPlaced: 0, partialsMoved: 0, stall: 'apply-error' };
+            } finally {
+                if (canHoldRegion) (manager as unknown as { stopBroadcasting: () => void }).stopBroadcasting();
             }
+            manager.logger?.log?.(
+                `Spread correction batch was prepared but not executed. Keeping local state unchanged.` +
+                (lastResult ? ` (cause=${classifySpreadRefusalCause(lastResult)})` : ''),
+                'warn'
+            );
+            // Retryable only when the last refusal cause was transient; a
+            // commit-refused / update-target-missing / unmatched / shutdown
+            // refusal counts toward the persistent-stale watchdog.
+            return { ordersPlaced: 0, partialsMoved: 0, stall: 'batch-not-executed', transient: lastTransient };
         }
         return { ordersPlaced: 0, partialsMoved: 0, stall };
     }

@@ -111,7 +111,7 @@ A **phantom order** is an order in ACTIVE/PARTIAL state WITHOUT a valid `orderId
 | **WorkingGrid** | Mutable clone of the master grid used during planning. Created by `new WorkingGrid(masterGrid)`. Discarded on failure; committed on success. Lives in `modules/order/working_grid.ts`. |
 | **COW Rebalance** | The full plan→broadcast→commit cycle: `_applySafeRebalanceCOW()` → `_updateOrdersOnChainBatchCOW()` → `_commitWorkingGrid()` |
 | **Atomic Commit** | `_commitWorkingGrid(workingGrid, indexes, boundary, options = {})` swaps master to the working copy in a single operation, then increments `_gridVersion`. |
-| **Staleness / Version Mismatch** | If a fill mutates the master grid while a rebalance is in progress, the working grid is marked stale. The commit guard rejects stale or version-mismatched working grids. |
+| **Staleness / Version Mismatch** | If a fill mutates the master grid while a rebalance is in progress, the working grid is marked stale. The commit guard rejects stale or version-mismatched working grids. Spread correction additionally holds the broadcast region across a bounded fresh-master re-plan ([architecture.md](architecture.md) → Spread Correction → Resilience). |
 | **`_gridVersion`** | Integer counter incremented on every master-grid mutation. Used by commit guards to detect concurrent master changes. |
 | **`_gridLock`** | `AsyncLock` that serializes all master-grid mutations to prevent races. |
 | **`syncFromMaster()`** | WorkingGrid method that selectively syncs one order from the master into the working copy during fills, avoiding a full abort. |
@@ -786,6 +786,10 @@ checkAndUpdateGridIfNeeded(manager)
 // Drift-only async accessor (refreshes funds first); its core is folded into
 // checkAndUpdateGridIfNeeded above
 checkCommittedSizeDrift(manager)
+
+// Spread correction: plan-time dedupe + bounded fresh-master re-plan retry,
+// wrapped in a held broadcast region (see architecture.md → Resilience)
+checkSpreadCondition(manager, BitShares, batchCb)
 
 // Compare ideal vs. persisted grid
 compareGrids(calculatedGrid, persistedGrid, manager)

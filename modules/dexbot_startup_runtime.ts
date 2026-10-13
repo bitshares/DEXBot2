@@ -5,6 +5,7 @@ import { path } from './path_api.js';
 import * as chainOrders from './chain_orders.js';
 import { readOpenOrdersGuarded } from './chain_orders.js';
 import { ORDER_STATES, TIMING } from './constants.js';
+import { Config } from './config.js';
 import { PATHS } from './paths.js';
 import { getStorage } from './storage/index.js';
 import { normalizeBotEntry } from './bot_settings.js';
@@ -485,7 +486,7 @@ async function finishStartupSequence(bot: BotLike, startupState: Awaited<ReturnT
             } else {
                 bot._log('Open-orders sync loop disabled by configuration');
             }
-            bot._log(`DEXBot started. OrderManager running (dryRun=${!!bot.config.dryRun})`);
+            bot._log(`DEXBot v${Config.VERSION} started. OrderManager running (dryRun=${!!bot.config.dryRun})`);
             return;
         }
 
@@ -814,7 +815,7 @@ async function finishStartupSequence(bot: BotLike, startupState: Awaited<ReturnT
         } else {
             bot._log('Open-orders sync loop disabled by configuration');
         }
-        bot._log(`DEXBot started. OrderManager running (dryRun=${!!bot.config.dryRun})`);
+        bot._log(`DEXBot v${Config.VERSION} started. OrderManager running (dryRun=${!!bot.config.dryRun})`);
 
     } catch (err) {
         bot._warn(`Error during grid initialization: ${getErrorMessage(err)}`);
