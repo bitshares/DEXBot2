@@ -118,6 +118,7 @@ Add `debtPolicy` to a bot entry in `profiles/bots.json`:
 | `allowedOfferIds` | `string[]` | No | Whitelist of credit offer object IDs (1.21.x) the bot may accept. |
 | `disallowedDealIds` | `string[]` | No | Denylist of credit deal object IDs (1.22.x) the bot must not reborrow from. Repay is unaffected — the bot can still repay deals in this list. |
 | `renewOnly` | `boolean` | No | If `true`, the bot only reborrows existing deals — standalone credit borrows are refused. Default `false`. |
+| `useFreeCollateral` | `boolean` | No | Defaults to `true`: a renewal locks the borrower's free balance of the collateral asset in addition to the collateral the repay released, so the reborrow can keep the original principal when the offer's collateral price moved. Set to `false` to opt out and cap each reborrow to the released collateral only. |
 | `minDurationSeconds` | `number` | No | Minimum acceptable offer duration in seconds. Offers with `duration_seconds` below this value are skipped. |
 
 **Global Fields:**
@@ -277,11 +278,15 @@ The repay leg is funded from the borrower's *free* debt-asset balance before the
 
 The reborrow snapshots the pre-repay deal IDs, so the stale-entry guard only drops a request when a deal *appeared after* the repay on the same offer — sibling deals no longer block a legitimate reborrow.
 
-#### Collateral Shortfall Scaling
+#### Collateral Top-Up and Shortfall Scaling
 
-A reborrow can only lock the collateral the repay just released. If the market moved against the collateral, the full debt needs more than the deal holds, so the runtime clamps the borrow to the released collateral rather than emit an op that fails the collateral check:
+A reborrow starts from the collateral the repay just released. If the offer's collateral price moved, the full debt may need more collateral than the deal holds. By default (`useFreeCollateral: true`) the runtime adds the borrower's free balance of the same collateral asset to that budget, so the reborrow re-locks the original principal instead of shrinking. Set `useFreeCollateral: false` on the lending item to keep the legacy released-collateral-only ceiling and let the position deleverage on a price move.
+
+The top-up stays within the position's `assignedCollateralBudget`, so it cannot take collateral allocated to sibling positions on a shared account. If the collateral asset is also a grid asset (for example BTS), the top-up locks funds the grid would otherwise have free — that is the intended trade-off of the feature.
 
 - `buildCreditOfferAcceptOperation` takes an optional raw `availableCollateralAmount` budget and shrinks the borrow to the maximum that budget can back at the offer price (`capBorrowToCollateral`). It lives in the shared builder, so original, fallback, and deferred reborrows all get it.
+- With `useFreeCollateral: false`, only `floor(repay * collateral / debt)` from the repaid deal is available, so a price move against the collateral scales the borrow down. The free-balance read is skipped when the released collateral already backs the borrow at the current offer price.
+- A deferred reborrow re-reads the current free balance and position budget on each retry, so its ceiling tracks the live state rather than a queue-time snapshot. The collateral-switch flow is the exception: its budget is the new asset's total balance, not freed collateral, so a retry reuses the stored value instead of adding the free balance again.
 - A clamped borrow below `min_deal_amount` is deferred and retried (up to `TIMING.CREDIT_REBORROW_MAX_ATTEMPTS`, default `6`) so a price recovery can revive it; after the limit it is dropped. The repay still proceeds, so the position deleverages.
 - The collateral-switch flow passes the new asset's balance as the budget.
 - Each accept records `requestedBorrowAmount` vs `borrowAmount` and `clampedByCollateral` in `lastBorrowRequest`.

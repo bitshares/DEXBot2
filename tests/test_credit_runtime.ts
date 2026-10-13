@@ -4850,6 +4850,300 @@ async function testProactiveRenewalScalesDownWhenCollateralShort() {
   }
 }
 
+const PROACTIVE_RENEWAL_POLICY = {
+  asset: 'HONEST.USD',
+  collateralAsset: 'BTS',
+  type: 'creditOffer',
+  outputWeight: 1,
+  maxBorrowAmount: 1000,
+  maxCollateralAmount: 10000,
+  maxCollateralRatio: 2.5,
+  maxFeeRatePerDay: 0.05,
+  autoReborrow: true,
+  autoRepay: 2,
+  renewOnly: true,
+};
+
+// Shared fixture for the free-collateral renewal scenarios: one deal at offer
+// rate 0.5 (debt per collateral), with configurable deal size, free collateral
+// and assigned budget. Returns the runtime plus a cleanup that restores mocks.
+async function setupProactiveRenewalScenario(options: {
+  botKey: string;
+  policy?: Record<string, unknown>;
+  assetBalances: Record<string, unknown>;
+  assignedCollateralBudget?: number;
+  debtAmount?: number;
+  collateralAmount?: number;
+}) {
+  const calls: any[] = [];
+  const dbCalls: any[] = [];
+  const warnings: any[] = [];
+  const logs: any[] = [];
+  const dealId = '1.19.77';
+  const offerId = '1.18.42';
+  const debtAmount = options.debtAmount ?? 100;
+  const collateralAmount = options.collateralAmount ?? 150;
+  const repayTime = new Date(Date.now() - 3600000).toISOString();
+  const activeDeal = {
+    id: dealId,
+    borrower: '1.2.3',
+    offer_id: offerId,
+    offer_owner: '1.2.9',
+    debt_asset: '1.3.10',
+    debt_amount: debtAmount,
+    collateral_asset: '1.3.0',
+    collateral_amount: collateralAmount,
+    fee_rate: 0,
+    latest_repay_time: repayTime,
+    auto_repay: 2,
+  };
+  const restore = installStubs(calls, dbCalls, {
+    dealResponses: [[activeDeal], []],
+    assetBalances: options.assetBalances,
+    offersById: {
+      '1.18.42': {
+        id: offerId,
+        asset_type: '1.3.10',
+        current_balance: 10000,
+        fee_rate: 0,
+        min_deal_amount: 10,
+        enabled: true,
+        max_duration_seconds: 86400,
+        acceptable_collateral: {
+          '1.3.0': {
+            base: { amount: 2, asset_id: '1.3.0' },
+            quote: { amount: 1, asset_id: '1.3.10' },
+          },
+        },
+      },
+    },
+  });
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-proactive-'));
+  delete require.cache[creditRuntimePath];
+  const CreditRuntime = require('../modules/credit_runtime').default;
+  const policy = { ...PROACTIVE_RENEWAL_POLICY, ...(options.policy || {}) };
+  const runtime = new CreditRuntime({
+    config: createBaseBotConfig({
+      botKey: options.botKey,
+      debtPolicy: { lending: [policy] },
+      TIMING: { CREDIT_DEAL_EXPIRY_THRESHOLD_HOURS: 168 },
+    }),
+    account: { id: '1.2.3', name: 'alice' },
+    accountId: '1.2.3',
+    privateKey: 'WIF-KEY',
+    manager: {
+      _fillProcessingLock: {
+        acquire: async (fn: any) => fn(),
+        isReentrant: () => false,
+      },
+      fetchAccountTotals: async () => {},
+    },
+    _runGridMaintenance: async () => ({ checked: true }),
+    _log(message: unknown) { logs.push(message); },
+    _warn(message: unknown) { warnings.push(message); },
+  }, { stateDir: path.join(baseDir, 'credit_runtime') });
+
+  await runtime.refreshState();
+
+  runtime.state.positions['1.3.10:1.3.0'] = {
+    assignedCollateralBudget: options.assignedCollateralBudget ?? collateralAmount,
+    creditConversionRate: 0.5,
+    creditDeals: [{
+      id: dealId,
+      debtAssetId: '1.3.10',
+      debtAmount: debtAmount,
+      collateralAssetId: '1.3.0',
+      collateralAmount: collateralAmount,
+      latestRepayTime: repayTime,
+      feeRate: 0,
+      offerId: offerId,
+      autoRepay: 2,
+    }],
+  };
+
+  const cleanup = () => {
+    restore();
+    try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch (err) { }
+  };
+  return { runtime: runtime as any, policy, calls, dbCalls, warnings, logs, cleanup };
+}
+
+function spyFreeCollateralReads(runtime: any): () => number {
+  let count = 0;
+  const original = runtime._getFreeCollateralBalance.bind(runtime);
+  runtime._getFreeCollateralBalance = async (...args: any[]) => {
+    count++;
+    return original(...args);
+  };
+  return () => count;
+}
+
+async function testProactiveRenewalTopsUpFromFreeCollateral() {
+  const s = await setupProactiveRenewalScenario({
+    botKey: 'credit-bot-proactive-topup',
+    assetBalances: {
+      '1.3.10': { free: 1000, locked: 0, total: 1000 },
+      // 150 currently locked in the deal + 50 free = enough to re-lock the
+      // same principal after the offer price moved.
+      '1.3.0': { free: 50, locked: 150, total: 200 },
+    },
+    assignedCollateralBudget: 200,
+  });
+  try {
+    const reads = spyFreeCollateralReads(s.runtime);
+    const execCallCount = s.calls.length;
+    await s.runtime._runCreditMaintenance(s.policy, '1.3.10');
+
+    const batch = s.calls.slice(execCallCount)[0];
+    assert.strictEqual(batch.operations.length, 2, 'batch should contain repay + reborrow');
+    const acceptOp = batch.operations[1];
+    assert.strictEqual(acceptOp.op_data.borrow_amount.amount, 100, 'free collateral should preserve the full principal');
+    assert.strictEqual(acceptOp.op_data.collateral.amount, 200, 'reborrow should lock released + free collateral');
+    assert.strictEqual(reads(), 1, 'the free balance should be read once');
+    assert.strictEqual(s.logs.filter((m) => String(m).includes('shrinking reborrow')).length, 0, 'no scale-down when free collateral covers the gap');
+    assert.strictEqual(s.runtime.state.lastBorrowRequest?.clampedByCollateral, false, 'the reborrow must not be marked clamped');
+    assert.strictEqual(s.runtime.state.lastBorrowRequest?.borrowAmount, 100, 'lastBorrowRequest should record the full borrow');
+  } finally {
+    s.cleanup();
+  }
+}
+
+async function testProactiveRenewalSkipsFreeReadWhenReleasedCoversBorrow() {
+  const s = await setupProactiveRenewalScenario({
+    botKey: 'credit-bot-proactive-skip-read',
+    // Deal rate 100/250 = 0.4 is better than the current offer rate 0.5, so the
+    // released collateral already backs the borrow.
+    collateralAmount: 250,
+    assetBalances: {
+      '1.3.10': { free: 1000, locked: 0, total: 1000 },
+      '1.3.0': { free: 50, locked: 250, total: 300 },
+    },
+    assignedCollateralBudget: 250,
+  });
+  try {
+    const reads = spyFreeCollateralReads(s.runtime);
+    const execCallCount = s.calls.length;
+    await s.runtime._runCreditMaintenance(s.policy, '1.3.10');
+
+    const acceptOp = s.calls.slice(execCallCount)[0].operations[1];
+    assert.strictEqual(acceptOp.op_data.borrow_amount.amount, 100, 'borrow should stay full when released collateral covers it');
+    assert.strictEqual(acceptOp.op_data.collateral.amount, 250, 'released collateral should be kept as the floor');
+    assert.strictEqual(reads(), 0, 'no free read when released collateral already backs the borrow');
+  } finally {
+    s.cleanup();
+  }
+}
+
+async function testProactiveRenewalScalesDownWhenFreeCollateralOptOut() {
+  const s = await setupProactiveRenewalScenario({
+    botKey: 'credit-bot-proactive-optout',
+    policy: { useFreeCollateral: false },
+    assetBalances: {
+      '1.3.10': { free: 1000, locked: 0, total: 1000 },
+      '1.3.0': { free: 50, locked: 150, total: 200 },
+    },
+    assignedCollateralBudget: 150,
+  });
+  try {
+    const reads = spyFreeCollateralReads(s.runtime);
+    const execCallCount = s.calls.length;
+    await s.runtime._runCreditMaintenance(s.policy, '1.3.10');
+
+    const batch = s.calls.slice(execCallCount)[0];
+    assert.strictEqual(batch.operations.length, 2, 'opt-out renewal should still broadcast one atomic batch');
+    const acceptOp = batch.operations[1];
+    assert.strictEqual(acceptOp.op_data.borrow_amount.amount, 75, 'opt-out should scale the borrow to the released collateral');
+    assert.strictEqual(acceptOp.op_data.collateral.amount, 150, 'opt-out should lock only the released collateral');
+    assert.strictEqual(reads(), 0, 'opt-out must not read the free collateral balance');
+    assert.ok(s.logs.some((m) => String(m).includes('shrinking reborrow from 100 to 75')), 'the scale-down should still be logged');
+  } finally {
+    s.cleanup();
+  }
+}
+
+async function testProactiveRenewalCapsTopUpAtAssignedBudget() {
+  const s = await setupProactiveRenewalScenario({
+    botKey: 'credit-bot-proactive-budget-cap',
+    assetBalances: {
+      '1.3.10': { free: 1000, locked: 0, total: 1000 },
+      '1.3.0': { free: 50, locked: 150, total: 200 },
+    },
+    // 50 free would support 200 collateral, but the position budget caps it at 160.
+    assignedCollateralBudget: 160,
+  });
+  try {
+    const execCallCount = s.calls.length;
+    await s.runtime._runCreditMaintenance(s.policy, '1.3.10');
+
+    const acceptOp = s.calls.slice(execCallCount)[0].operations[1];
+    assert.strictEqual(acceptOp.op_data.collateral.amount, 160, 'top-up must stay within the assigned collateral budget');
+    assert.strictEqual(acceptOp.op_data.borrow_amount.amount, 80, 'the borrow scales to the budgeted collateral');
+  } finally {
+    s.cleanup();
+  }
+}
+
+async function testPendingReborrowBudgetRefreshesFreeCollateral() {
+  const s = await setupProactiveRenewalScenario({
+    botKey: 'credit-bot-pending-budget-refresh',
+    assetBalances: {
+      '1.3.10': { free: 1000, locked: 0, total: 1000 },
+      '1.3.0': { free: 50, locked: 150, total: 200 },
+    },
+    assignedCollateralBudget: 200,
+  });
+  try {
+    const request = {
+      offerId: '1.18.42',
+      availableCollateralAmount: 200,
+      releasedCollateralAmount: 150,
+      useFreeCollateral: true,
+      collateralAssetId: '1.3.0',
+      debtAssetId: '1.3.10',
+    };
+    assert.strictEqual(await s.runtime._refreshReborrowBudget(request), 200, 'free top-up is recomputed from the current balance');
+    s.runtime._getFreeCollateralBalance = async () => 10;
+    assert.strictEqual(await s.runtime._refreshReborrowBudget(request), 160, 'a shrunken free balance lowers the replay budget');
+    s.runtime._getFreeCollateralBalance = async () => 500;
+    assert.strictEqual(await s.runtime._refreshReborrowBudget(request), 200, 'a grown free balance is bounded by the position budget');
+    assert.strictEqual(await s.runtime._refreshReborrowBudget({ ...request, availableCollateralAmount: 150 }), 200, 'a grown free balance raises the replay budget above the queued snapshot');
+    s.runtime.state.positions['1.3.10:1.3.0'].assignedCollateralBudget = 160;
+    assert.strictEqual(await s.runtime._refreshReborrowBudget(request), 160, 'a shrunken position budget lowers the replay budget');
+    assert.strictEqual(await s.runtime._refreshReborrowBudget({ availableCollateralAmount: 150 }), 150, 'legacy entries keep their stored budget');
+    assert.strictEqual(await s.runtime._refreshReborrowBudget({ ...request, useFreeCollateral: false }), 150, 'opt-out drops the free top-up');
+
+    // A collateral-switch budget is the new asset's total balance, not
+    // collateral freed by a repay — it must not add free collateral on retry.
+    assert.strictEqual(await s.runtime._refreshReborrowBudget({
+      offerId: '1.18.42',
+      availableCollateralAmount: 200,
+      releasedCollateralAmount: null,
+      useFreeCollateral: true,
+      collateralAssetId: '1.3.0',
+      debtAssetId: '1.3.10',
+    }), 200, 'a collateral-switch budget must not add free collateral on retry');
+    const switchBudget = await s.runtime._computeCollateralBudget(
+      { debtAssetId: '1.3.10', collateralAssetId: '1.3.0' },
+      0,
+      { availableCollateralAmount: 200, collateralAsset: '1.3.0', useFreeCollateral: true },
+    );
+    assert.strictEqual(switchBudget.released, null, 'a collateral-switch budget exposes no released base');
+    assert.strictEqual(switchBudget.budget, 200, 'a collateral-switch budget is the explicit raw value');
+
+    // needsFree compares the requested reborrow, not the repay.
+    const offer = await s.runtime._getOfferById('1.18.42');
+    s.runtime._getFreeCollateralBalance = async () => 50;
+    const readSpy = spyFreeCollateralReads(s.runtime);
+    const dealArgs = { debtAssetId: '1.3.10', collateralAssetId: '1.3.0', debtAmount: 100, collateralAmount: 250 };
+    await s.runtime._computeCollateralBudget(dealArgs, 100, { offer, collateralAsset: '1.3.0', useFreeCollateral: true, reborrowAmount: 200 });
+    assert.strictEqual(readSpy(), 1, 'a larger reborrow keeps the free-balance read');
+    await s.runtime._computeCollateralBudget(dealArgs, 100, { offer, collateralAsset: '1.3.0', useFreeCollateral: true });
+    assert.strictEqual(readSpy(), 1, 'a reborrow equal to the repay skips the free-balance read');
+  } finally {
+    s.cleanup();
+  }
+}
+
 async function testPendingReborrowAppliesCollateralBudget() {
   const calls = [];
   const dbCalls = [];
@@ -5178,6 +5472,11 @@ const STAGES = {
   proactive_repay_prunes_stale_pending_reborrow: testProactiveRepayPrunesStalePendingReborrow,
   proactive_renewal_rolls_affordable_piece: testProactiveRenewalRollsAffordablePieceWhenBalanceShort,
   proactive_renewal_scales_down_when_collateral_short: testProactiveRenewalScalesDownWhenCollateralShort,
+  proactive_renewal_tops_up_from_free_collateral: testProactiveRenewalTopsUpFromFreeCollateral,
+  proactive_renewal_skips_free_read_when_released_covers: testProactiveRenewalSkipsFreeReadWhenReleasedCoversBorrow,
+  proactive_renewal_scales_down_when_free_collateral_opt_out: testProactiveRenewalScalesDownWhenFreeCollateralOptOut,
+  proactive_renewal_caps_top_up_at_assigned_budget: testProactiveRenewalCapsTopUpAtAssignedBudget,
+  pending_reborrow_budget_refreshes_free_collateral: testPendingReborrowBudgetRefreshesFreeCollateral,
   pending_reborrow_keeps_sibling_deals: testPendingReborrowKeepsSiblingDealsOnSameOffer,
   pending_reborrow_applies_collateral_budget: testPendingReborrowAppliesCollateralBudget,
   fallback_offer_applies_collateral_budget: testFallbackOfferAppliesCollateralBudget,

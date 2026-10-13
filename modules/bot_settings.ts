@@ -319,6 +319,9 @@ function validateBotEntry(b: BotEntry, i: number, src: string): string | null {
                         if ('renewOnly' in item && typeof item.renewOnly !== 'boolean') {
                             problems.push(`debtPolicy.lending[${idx}].renewOnly must be a boolean`);
                         }
+                        if ('useFreeCollateral' in item && typeof item.useFreeCollateral !== 'boolean') {
+                            problems.push(`debtPolicy.lending[${idx}].useFreeCollateral must be a boolean`);
+                        }
                         if ('allowedOfferIds' in item) {
                             if (!Array.isArray(item.allowedOfferIds)) {
                                 problems.push(`debtPolicy.lending[${idx}].allowedOfferIds must be an array`);
