@@ -24,7 +24,8 @@ const {
     resolveGapBand,
     validateBoundaryCommit,
     isSlotInRail,
-    getSellStartIdx
+    getSellStartIdx,
+    resolveGapSlots
 } = require('../modules/order/utils/math');
 const {
     toRailHolePlaceholder,
@@ -568,6 +569,13 @@ async function testEVAC021_UnknownPlanGeometryDoesNotStamp() {
     const optUnknown = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: null, gapSlots: GAP_SLOTS });
     const rotUnknown = optUnknown.find((a: any) => a.type === COW_ACTIONS.UPDATE);
     assert.ok(rotUnknown && !rotUnknown.origin, 'unknown boundary must not stamp via optimizeRebalanceActions');
+    // '' is equally unknown (Number('') === 0) and must not stamp either.
+    const optEmpty = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: '' as any, gapSlots: GAP_SLOTS });
+    const rotEmpty = optEmpty.find((a: any) => a.type === COW_ACTIONS.UPDATE);
+    assert.ok(rotEmpty && !rotEmpty.origin, 'empty-string boundary must not stamp via optimizeRebalanceActions');
+    const optEmptyGap = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: 0, gapSlots: '' as any });
+    const rotEmptyGap = optEmptyGap.find((a: any) => a.type === COW_ACTIONS.UPDATE);
+    assert.ok(rotEmptyGap && !rotEmptyGap.origin, 'empty-string gapSlots must not stamp via optimizeRebalanceActions');
     const optZero = optimizeRebalanceActions(actions, optMaster, { boundaryIdx: 0, gapSlots: GAP_SLOTS });
     const rotZero = optZero.find((a: any) => a.type === COW_ACTIONS.UPDATE);
     assert.strictEqual(rotZero.origin, 'gap-evacuation', 'genuine boundary 0 still stamps via optimizeRebalanceActions');
@@ -627,6 +635,31 @@ async function testEVAC022_SharedGeometryHelpersAbsentAware() {
     console.log('✓ EVAC-022 passed');
 }
 
+async function testEVAC023_HelperLevelAbsentAwareness() {
+    console.log('\n[EVAC-023] getSellStartIdx / resolveGapSlots treat absent geometry as unknown...');
+    // getSellStartIdx previously coerced Number(boundaryIdx ?? 0): a null or ''
+    // boundary read as slot 0 and manufactured a SELL-rail start at gapSlots+1.
+    // The helper itself must now fail closed (NaN) so no future caller can
+    // bypass the per-call-site guards.
+    assert.ok(Number.isNaN(getSellStartIdx(null, GAP_SLOTS)), 'null boundary is unknown, not 0');
+    assert.ok(Number.isNaN(getSellStartIdx('' as any, GAP_SLOTS)), "'' boundary is unknown, not 0");
+    assert.ok(Number.isNaN(getSellStartIdx(undefined, GAP_SLOTS)), 'undefined boundary is unknown');
+    assert.ok(Number.isNaN(getSellStartIdx(BOUNDARY, null)), 'null gap is unknown, not 0');
+    assert.ok(Number.isNaN(getSellStartIdx(BOUNDARY, '' as any)), "'' gap is unknown, not 0");
+    assert.strictEqual(getSellStartIdx(BOUNDARY, GAP_SLOTS), 144, 'known geometry unchanged');
+    assert.strictEqual(getSellStartIdx(0, GAP_SLOTS), GAP_SLOTS + 1, 'genuine boundary 0 preserved');
+
+    // resolveGapSlots previously accepted '' as a finite 0 (Number('') === 0);
+    // '' must fall back to the config-derived gap like null/undefined.
+    assert.strictEqual(resolveGapSlots({ _gapSlots: GAP_SLOTS } as any), GAP_SLOTS, 'known gap preserved');
+    assert.strictEqual(resolveGapSlots({ _gapSlots: 0 } as any), 0, 'genuine gap 0 preserved');
+    const derived = resolveGapSlots({} as any);
+    assert.strictEqual(resolveGapSlots({ _gapSlots: null } as any), derived, 'null gap falls back to config-derived');
+    assert.strictEqual(resolveGapSlots({ _gapSlots: '' as any } as any), derived, "'' gap falls back to config-derived, not 0");
+    assert.ok(derived > 0, 'config-derived fallback is a real gap width');
+    console.log('✓ EVAC-023 passed');
+}
+
 async function runAllTests() {
     console.log('=== Gap-Evacuation Test Suite ===\n');
     await testEVAC001_AllowsSellOutwardNonGrowing();
@@ -651,6 +684,7 @@ async function runAllTests() {
     await testEVAC020_StampedSizeReproof();
     await testEVAC021_UnknownPlanGeometryDoesNotStamp();
     await testEVAC022_SharedGeometryHelpersAbsentAware();
+    await testEVAC023_HelperLevelAbsentAwareness();
     console.log('\n=== All gap-evacuation tests passed! ===');
 }
 

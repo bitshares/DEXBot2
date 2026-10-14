@@ -2698,9 +2698,10 @@ export function consumePendingFillCrawls(manager: OrderManagerLike): { applied: 
             try { manager._markGridDirty(); } catch { /* best-effort */ }
         }
     };
-    // NB: Number(null) === 0 — check null/undefined explicitly, or a
+    // NB: Number(null) === 0 and Number('') === 0 — check null/undefined/''
+    // explicitly (the '' case matches runPreBroadcastGuards), or a
     // boundary-less manager would "apply" onto slot 0.
-    if (manager?.boundaryIdx === null || manager?.boundaryIdx === undefined) {
+    if (manager?.boundaryIdx === null || manager?.boundaryIdx === undefined || (manager?.boundaryIdx as unknown) === '') {
         clear();
         return { applied: false, reason: 'null-boundary' };
     }

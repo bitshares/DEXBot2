@@ -1429,9 +1429,21 @@ function calculateGapSlots(incrementPercent: number | undefined, targetSpreadPer
 /**
  * Calculate sell start index from boundary index and gap slots.
  * sellStartIdx = boundaryIdx + gapSlots + 1
+ *
+ * Absent-aware: Number(null) === 0 and Number('') === 0 would read "no
+ * boundary" as boundary 0 and manufacture a SELL-rail start at gapSlots+1.
+ * Unknown geometry (null/undefined/'') returns NaN so any unguarded caller
+ * fails closed via Number.isFinite instead of silently rail-biasing slot 0.
+ * Every current caller guards first (resolveGapBand, isSlotInRail,
+ * isSlotIndexInGapBand, geometryTypeForSlotIndex, the COW stamp paths);
+ * this carries the same contract in the helper itself so a future caller
+ * cannot bypass it. A genuine 0 boundary still yields gapSlots + 1.
  */
-function getSellStartIdx(boundaryIdx: number | null, gapSlots: number | null): number {
-    return Number(boundaryIdx ?? 0) + Number(gapSlots) + 1;
+function getSellStartIdx(boundaryIdx: number | string | null | undefined, gapSlots: number | string | null | undefined): number {
+    const b = Format.toKnownNumber(boundaryIdx);
+    const g = Format.toKnownNumber(gapSlots);
+    if (!Number.isFinite(b) || !Number.isFinite(g)) return NaN;
+    return b + g + 1;
 }
 
 /**
@@ -1441,9 +1453,13 @@ function getSellStartIdx(boundaryIdx: number | null, gapSlots: number | null): n
  * two can never disagree on band width.
  */
 function resolveGapSlots(manager: { _gapSlots?: number | null; config?: GridConfig | null }): number {
-    const configured = manager._gapSlots;
-    if (configured != null && Number.isFinite(Number(configured))) {
-        return Math.max(0, Math.floor(Number(configured)));
+    // Absent-aware: Number('') === 0 is finite, so a '' _gapSlots would pass
+    // the finite test as a valid 0 and collapse the band. '' is unknown →
+    // fall back to the config-derived gap (same contract as
+    // consumePendingFillCrawls' dc87ce01 fallback).
+    const raw = Format.toKnownNumber(manager._gapSlots);
+    if (Number.isFinite(raw)) {
+        return Math.max(0, Math.floor(raw));
     }
     return calculateGapSlots(
         manager.config?.incrementPercent,

@@ -1407,7 +1407,10 @@ class SyncEngine {
             // legitimate in-rail orphan waits one sync cycle
             // post-boundary-commit before adoption. Strictly better than
             // adopting a gap stray into the wrong slot.
-            if (boundaryIdx == null || !Number.isFinite(Number(boundaryIdx))) {
+            // '' guard: Number('') === 0 is finite, so an empty-string
+            // boundary would read as boundary 0 (same trap guarded in
+            // runPreBroadcastGuards / resolveGapBand).
+            if (boundaryIdx == null || (boundaryIdx as unknown) === '' || !Number.isFinite(Number(boundaryIdx))) {
                 unmatchedChainOrders.push({ chainOrderId, type: chainOrder.type, price: chainOrder.price, size: chainOrder.size, raw: rawChainOrders.get(chainOrderId), reason: 'boundary-unknown-deferred', candidateSlotId: slotId });
                 mgr.logger?.log?.(`[SYNC] Orphaned chain order ${chainOrderId} (${chainOrder.type}, price=${chainOrder.price}, size=${chainOrder.size}) — NOT adopted: boundary unknown, deferred until boundary commits (nearest slot ${slotId})`, 'warn');
                 continue;

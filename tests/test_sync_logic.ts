@@ -512,6 +512,15 @@ async function runTests() {
         assert(!slotAfterDefer.orderId, 'Slot must not be adopted on pre-boundary defer');
         assert.strictEqual(result1.ordersNeedingCorrection.length, 0, 'Pre-boundary defer must not queue any correction (no cancelOnly)');
 
+        // '' boundary: Number('') === 0 is finite, so this must ALSO defer
+        // (same trap as runPreBroadcastGuards / resolveGapBand).
+        manager.boundaryIdx = '' as any;
+        const result1b = await manager.sync.syncFromOpenOrders(chainOrders);
+        const deferredB = result1b.unmatchedChainOrders.find(u => u.chainOrderId === 'c-l2-orphan');
+        assert(deferredB, 'Empty-string boundary must be recorded in unmatchedChainOrders');
+        assert.strictEqual(deferredB.reason, 'boundary-unknown-deferred', 'Empty-string boundary must defer as unknown, not boundary 0');
+        assert(!manager.orders.get('slot-1')?.orderId, 'Empty-string boundary must not adopt onto slot 0 geometry');
+
         // Sync 2 — boundary committed: the same orphan adopts normally.
         manager.boundaryIdx = 0; // slot-1 is SELL-side of boundary 0 → in-rail
         const result2 = await manager.sync.syncFromOpenOrders(chainOrders);

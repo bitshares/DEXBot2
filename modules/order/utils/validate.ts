@@ -726,13 +726,15 @@ function optimizeRebalanceActions(actions: CowAction[], masterGrid: Map<string, 
     // Explicit null/undefined guard BEFORE Number(): Number(null) === 0 is
     // finite and would turn an absent boundary into a valid slot-0 geometry,
     // stamping a bogus gap-evacuation bypass (undefined already fails open via
-    // NaN, so only null was hazardous).
+    // NaN, so only null was hazardous). '' is equally hazardous (Number('')
+    // === 0) and is guarded here the same way as in
+    // stampGapEvacuationRotation.
     const rawOptBoundary = options?.boundaryIdx;
     const rawOptGapSlots = options?.gapSlots;
-    const optBoundary = (rawOptBoundary === null || rawOptBoundary === undefined)
+    const optBoundary = (rawOptBoundary === null || rawOptBoundary === undefined || (rawOptBoundary as unknown) === '')
         ? NaN
         : Number(rawOptBoundary);
-    const optGapSlots = (rawOptGapSlots === null || rawOptGapSlots === undefined)
+    const optGapSlots = (rawOptGapSlots === null || rawOptGapSlots === undefined || (rawOptGapSlots as unknown) === '')
         ? NaN
         : Number(rawOptGapSlots);
     const hasOptGeometry = Number.isFinite(optBoundary) && Number.isFinite(optGapSlots) && optGapSlots >= 0;

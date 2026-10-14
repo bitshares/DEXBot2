@@ -226,6 +226,16 @@ async function testConsume_DropsOnNull() {
     console.log('✓ PEND-007 passed');
 }
 
+async function testConsume_DropsOnEmptyStringBoundary() {
+    console.log('\n[PEND-007b] empty-string boundary drops entries (Number("") === 0 trap)...');
+    const mgr = mockManager('' as any, buildMaster(), [{ slotId: 'slot-93', side: ORDER_TYPES.BUY, ts: 1 }]);
+    const result = consumePendingFillCrawls(mgr);
+    assert.strictEqual(result.applied, false, 'must not apply an empty-string boundary');
+    assert.strictEqual(result.reason, 'null-boundary', `reason must name the cause (got ${result.reason})`);
+    assert.deepStrictEqual(mgr._pendingFillCrawls, [], 'stale entries must clear');
+    console.log('✓ PEND-007b passed');
+}
+
 async function testConsume_DropsUnsafe() {
     console.log('\n[PEND-008] apply refuses to strand a placed order...');
     // A live SELL sits at slot-95: crawling 96 -> 92 would strand it in-band.
@@ -619,6 +629,7 @@ async function main() {
     await testPending_ReserveEntriesSkipped();
     await testConsume_AppliesOntoRestored();
     await testConsume_DropsOnNull();
+    await testConsume_DropsOnEmptyStringBoundary();
     await testConsume_DropsUnsafe();
     await testConsume_LiveAnchorClassifies();
     await testPersist_RoundTripAndClear();
