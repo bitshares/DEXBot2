@@ -173,7 +173,23 @@ interface TvChartInput extends AmaDefaultsInput {
 
 function generateHTML(data: TvChartInput, title: string = 'TradingView Style Research') {
     const rawCandles = Array.isArray(data.candles) ? data.candles : [];
-    const candles = rawCandles.map(normalizeCandle).filter(Boolean);
+    const normalizedCandles = rawCandles
+        .map(normalizeCandle)
+        .filter((c): c is NonNullable<ReturnType<typeof normalizeCandle>> => c != null);
+    // Data-quality guard: uPlot, inferBaseIntervalSeconds and aggregateCandles all
+    // assume ascending bucket time, and an out-of-order series silently corrupts
+    // the chart (zig-zag lines, wrong base interval, buckets split during
+    // aggregation). Normalize order at the single entry point so every source is
+    // safe. A stable sort is a no-op for already-ascending input, so valid charts
+    // render unchanged; only bad input is reordered (and reported).
+    let outOfOrder = false;
+    for (let i = 1; i < normalizedCandles.length; i++) {
+        if (normalizedCandles[i].time < normalizedCandles[i - 1].time) { outOfOrder = true; break; }
+    }
+    const candles = outOfOrder
+        ? normalizedCandles.slice().sort((a, b) => a.time - b.time)
+        : normalizedCandles;
+    if (outOfOrder) console.warn('[TradingView] candle input was out of order; sorted ascending before rendering');
     if (candles.length === 0) throw new Error('No candle data in input');
 
     const meta = data.meta || {};
