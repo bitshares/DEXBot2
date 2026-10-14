@@ -48,6 +48,7 @@ The sections below cover manual usage (explicit candle files, direct runner flag
 - Volume badge (bottom-right of the volume chart, same small type): visible-window max volume, always with the currency suffix (`1.2M BTS`); click the badge, the legend `Vol` value, or the toolbar unit button to switch base/quote units (quote ≈ base × close, persisted per chart like the AMA settings; feed charts show publish counts and disable the switch)
 - Bottom volume panel with `Volume` toggle and per-bar hover tooltip
 - Crosshair legend with current candle values
+- Live data-age badge next to the title: the age of the newest candle is recomputed every minute in the browser (minutes under an hour, hours and minutes under a day, days and hours beyond), so a chart saved or opened later shows its own staleness — green under 24h, amber 1–7 days, red over a week (unknown when the source carries no candle time or `meta.updatedAt`)
 
 ## Quick Start
 

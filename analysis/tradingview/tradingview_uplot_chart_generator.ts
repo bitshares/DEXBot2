@@ -285,6 +285,16 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         ? data.storageKey
         : resolveChartStorageKey(meta, baseIntervalSeconds);
 
+    // Data-freshness anchor for the in-page live age badge: the newest candle's
+    // bucket time (epoch seconds), falling back to the source file's
+    // `meta.updatedAt`. Null hides the age (non-JSON sources may carry neither).
+    const lastCandleEntry = candles.length ? (candles[candles.length - 1] as { time?: unknown } | null) : null;
+    const lastCandleSec = Number(lastCandleEntry?.time);
+    const metaUpdatedMs = Date.parse(String((meta as { updatedAt?: unknown }).updatedAt ?? ''));
+    const dataUpdatedAtSec = Number.isFinite(lastCandleSec) && lastCandleSec > 0
+        ? Math.floor(lastCandleSec)
+        : (Number.isFinite(metaUpdatedMs) ? Math.floor(metaUpdatedMs / 1000) : null);
+
     const payload = {
         storageKey,
         syncKey: TRADINGVIEW_SYNC_KEY,
@@ -321,6 +331,8 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         pairLabelInverse,
         poolLabel,
         intervalLabel,
+        intervalSeconds: baseIntervalSeconds,
+        dataUpdatedAtSec,
         amaDefaultsSource: marketProfiles ? 'market_profiles' : 'constants',
         volumeIsCount: !!meta?.feed,
     };
@@ -355,8 +367,16 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             backdrop-filter: blur(10px);
         }
         #brand { display: flex; flex-direction: column; gap: 4px; min-width: 240px; }
+        #title-row { display: flex; align-items: baseline; gap: 10px; }
         #title { font-size: 15px; font-weight: 700; color: #f5f8fb; }
-        #subtitle { font-size: 11px; color: #b9c6d4; text-transform: uppercase; letter-spacing: 0.6px; }
+        #subtitle { font-size: 12px; color: #b9c6d4; text-transform: uppercase; letter-spacing: 0.6px; }
+        #data-age { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #8290a2; letter-spacing: 0.2px; }
+        #data-age::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.18); }
+        #data-age.is-stale { color: #d8b36a; }
+        #data-age.is-stale::before { background: #f59e0b; box-shadow: 0 0 0 2px rgba(245,158,11,0.18); }
+        #data-age.is-outdated { color: #e08585; }
+        #data-age.is-outdated::before { background: #ef5350; box-shadow: 0 0 0 2px rgba(239,83,80,0.18); }
+        #data-age.is-unknown::before { background: #475569; box-shadow: none; }
         #toolbar { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
         .toolbar-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; align-items: center; }
         .group { display: inline-flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid #263241; }
@@ -597,7 +617,10 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
     <div id="app">
         <div id="topbar">
             <div id="brand">
-                <div id="title">${escapeHtml(title)}</div>
+                <div id="title-row">
+                    <div id="title">${escapeHtml(title)}</div>
+                    <span id="data-age" title="Age of the newest candle, recomputed live in the browser. Fresh: under 24h, stale: 1–7 days, out of date: over a week.">—</span>
+                </div>
                 <div id="subtitle">${escapeHtml(poolLabel)} · ${escapeHtml(pairLabelNormal)} · ${escapeHtml(intervalLabel)} base · indicators from 1h · volume · uPlot</div>
             </div>
             <div id="toolbar">
@@ -716,6 +739,37 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         const volumeEl = document.getElementById('volume-chart');
         const baseCandles = Array.isArray(payload.candles) ? payload.candles.slice() : [];
         const baseCloseValues = baseCandles.map((c) => c.close);
+        // Live data-age badge: recomputed from the clock every minute, so a chart
+        // saved or opened later shows how stale its newest candle is. The
+        // freshness anchor is the newest candle's bucket time, embedded at
+        // generation time; the interval sets the color thresholds.
+        const dataAgeEl = document.getElementById('data-age');
+        const dataUpdatedAtSec = Number(payload.dataUpdatedAtSec) > 0 ? Number(payload.dataUpdatedAtSec) : NaN;
+        function formatDataAge(sec) {
+            const totalMin = Math.floor(sec / 60);
+            if (totalMin < 60) return totalMin + 'm';
+            const totalHours = Math.floor(totalMin / 60);
+            if (totalHours < 24) return totalHours + 'h ' + String(totalMin % 60).padStart(2, '0') + 'm';
+            return Math.floor(totalHours / 24) + 'd ' + (totalHours % 24) + 'h';
+        }
+        function refreshDataAge() {
+            if (!dataAgeEl) return;
+            if (!Number.isFinite(dataUpdatedAtSec)) {
+                dataAgeEl.className = 'is-unknown';
+                dataAgeEl.textContent = '—';
+                return;
+            }
+            const ageSec = Math.max(0, Date.now() / 1000 - dataUpdatedAtSec);
+            // Fresh: under 24h. Stale: 1d–7d. Out of date: over a week.
+            const DAY = 86400;
+            const level = ageSec < DAY ? 'fresh'
+                : ageSec < DAY * 7 ? 'stale' : 'outdated';
+            dataAgeEl.className = level === 'fresh' ? '' : 'is-' + level;
+            dataAgeEl.textContent = formatDataAge(ageSec);
+            dataAgeEl.title = 'Newest candle in this chart is ' + Math.round(ageSec / 60) + ' minute(s) old (computed live in the browser).';
+        }
+        refreshDataAge();
+        setInterval(refreshDataAge, 60000);
         const timeframes = Array.isArray(payload.timeframes) ? payload.timeframes.slice() : [];
         const timeframeMap = new Map(timeframes.map((item) => [item.label, item]));
         const STORAGE_KEY = typeof payload.storageKey === 'string' && payload.storageKey.length > 0
