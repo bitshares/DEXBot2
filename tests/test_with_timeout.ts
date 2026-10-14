@@ -3,7 +3,9 @@ const assert = require('assert');
 const { withTimeout } = require('../modules/order/utils/timeout');
 
 async function testRejectsOnTimeout() {
-    const slow = new Promise<string>((resolve) => setTimeout(() => resolve('done'), 200));
+    // A never-settling promise is enough to outlive the timeout; using a 200 ms
+    // timer would keep the event loop alive after the assertion.
+    const slow = new Promise<string>(() => {});
     await assert.rejects(
         () => withTimeout(slow, 10),
         (err: any) => {
@@ -15,7 +17,7 @@ async function testRejectsOnTimeout() {
 }
 
 async function testRejectsWithLabel() {
-    const slow = new Promise<string>((resolve) => setTimeout(() => resolve('done'), 200));
+    const slow = new Promise<string>(() => {});
     await assert.rejects(
         () => withTimeout(slow, 10, { label: 'fetchAccount' }),
         (err: any) => {
@@ -32,7 +34,7 @@ async function testResolvesBeforeTimeout() {
 }
 
 async function testResolveModeReturnsDefault() {
-    const slow = new Promise<string>((resolve) => setTimeout(() => resolve('late'), 200));
+    const slow = new Promise<string>(() => {});
     const result = await withTimeout(slow, 10, { onTimeout: 'resolve', defaultValue: 'fallback' });
     assert.strictEqual(result, 'fallback');
 }
@@ -46,7 +48,7 @@ async function testResolveModeSwallowsLateRejection() {
 
 async function testOnTimeoutCallbackFires() {
     let callbackFired = false;
-    const slow = new Promise<void>((resolve) => setTimeout(resolve, 200));
+    const slow = new Promise<void>(() => {});
     await withTimeout(slow, 10, {
         onTimeout: 'resolve',
         defaultValue: undefined as any,
@@ -56,7 +58,7 @@ async function testOnTimeoutCallbackFires() {
 }
 
 async function testOnTimeoutCallbackThrowDoesNotCrash() {
-    const slow = new Promise<void>((resolve) => setTimeout(resolve, 200));
+    const slow = new Promise<void>(() => {});
     // Should not throw despite callback throwing
     const result = await withTimeout(slow, 10, {
         onTimeout: 'resolve',
@@ -67,7 +69,7 @@ async function testOnTimeoutCallbackThrowDoesNotCrash() {
 }
 
 async function testRejectModeCallbackThrowPropagates() {
-    const slow = new Promise<void>((resolve) => setTimeout(resolve, 200));
+    const slow = new Promise<void>(() => {});
     // In reject mode, a callback throw should be swallowed (non-fatal) and
     // the timeout Error should still be thrown.
     await assert.rejects(

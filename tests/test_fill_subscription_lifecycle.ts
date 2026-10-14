@@ -210,7 +210,9 @@ function instance(id) {
             },
         };
 
-        const manager = createSubscriptionManager(client);
+        // Collapse the production 250 ms coalesce window so the test asserts on
+        // scan delivery without sleeping a full notice window.
+        const manager = createSubscriptionManager(client, { noticeCoalesceMs: 20 });
         await manager.subscribe('alice', (fills) => { delivered.push(fills); });
         historyCalls.length = 0;
 
@@ -218,8 +220,8 @@ function instance(id) {
         // object IDs or ordinary full objects, not the 1.11.x fill object itself.
         await makeNotice(noticeHandler, 1, ['1.7.501']);
 
-        // Wait for coalesced history scan (NOTICE_COALESCE_MS = 250ms)
-        await new Promise(r => setTimeout(r, 300));
+        // Wait for the collapsed coalesced history scan.
+        await new Promise(r => setTimeout(r, 30));
 
         assertEqual(delivered.length, 1, 'object-change notice should trigger a history scan delivery');
         assertEqual(delivered[0].length, 1, 'history scan should deliver one fill');

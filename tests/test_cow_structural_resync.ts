@@ -87,11 +87,19 @@ function createOrder(id, overrides = {}) {
     };
 }
 
-function waitForResync(maxMs = 200) {
-    return new Promise((resolve) => {
-        const start = Date.now();
+/**
+ * Wait until `predicate` is true, yielding to the event loop between checks.
+ * Unlike a fixed-duration sleep this returns as soon as the resync sequence
+ * settles, so the test asserts on state instead of padding wall-clock time.
+ */
+function waitFor(predicate, message, maxMs = 2000) {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
         const tick = () => {
-            if (Date.now() - start >= maxMs) return resolve(undefined);
+            let done = false;
+            try { done = !!predicate(); } catch (err) { reject(err); return; }
+            if (done) return resolve(undefined);
+            if (Date.now() - start >= maxMs) return reject(new Error(`Timed out waiting for ${message}`));
             setImmediate(tick);
         };
         setImmediate(tick);
@@ -207,8 +215,10 @@ async function runTests() {
             'COW guard must set the structural resync latch so other paths see a resync is in progress'
         );
 
-        await waitForResync(120);
-
+        await waitFor(
+            () => requestGridResetCalls.length >= 1,
+            'structural resync to call requestGridReset'
+        );
         assert.strictEqual(
             requestGridResetCalls.length,
             1,
@@ -294,7 +304,10 @@ async function runTests() {
         assert.strictEqual(second.skipped, true, 'Second call should be deduped (skipped)');
         assert.strictEqual(second.reason, 'structural grid resync already scheduled', 'Dedup reason should reference existing schedule');
 
-        await waitForResync(120);
+        await waitFor(
+            () => !bot._structuralGridResyncRunning && !bot._structuralGridResyncTimer && requestGridResetCalls.length >= 1,
+            'first structural resync to complete'
+        );
 
         assert.strictEqual(
             requestGridResetCalls.length,
@@ -305,7 +318,10 @@ async function runTests() {
         const third = await (manager as any).requestStructuralGridResync('after completion', { unmatchedChainOrders: unmatched });
         assert.strictEqual(third.scheduled, true, 'After completion a fresh schedule should be accepted');
 
-        await waitForResync(120);
+        await waitFor(
+            () => requestGridResetCalls.length >= 2,
+            'second structural resync to call requestGridReset'
+        );
 
         assert.strictEqual(
             requestGridResetCalls.length,
@@ -372,7 +388,9 @@ async function runTests() {
 
         await bot.shutdown();
 
-        await waitForResync(120);
+        // The pending 0 ms resync timer was cleared by shutdown; give the event
+        // loop a beat to prove it does not fire a late requestGridReset.
+        await new Promise((r) => setTimeout(r, 10));
 
         assert.strictEqual(
             requestGridResetCalls.length,

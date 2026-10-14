@@ -93,6 +93,25 @@ const { ORDER_TYPES, ORDER_STATES, COW_ACTIONS } = require('../modules/constants
 
 let testsComplete = false;
 
+/**
+ * Yield until `predicate` is true, returning as soon as it holds. Tests assert
+ * on state transitions instead of padding fixed wall-clock delays, so they
+ * finish as soon as the event loop has drained the relevant work.
+ */
+function waitFor(predicate, message, maxMs = 2000) {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+        const tick = () => {
+            let done = false;
+            try { done = !!predicate(); } catch (err) { reject(err); return; }
+            if (done) return resolve(undefined);
+            if (Date.now() - start >= maxMs) return reject(new Error(`Timed out waiting for ${message}`));
+            setImmediate(tick);
+        };
+        setImmediate(tick);
+    });
+}
+
 process.on('unhandledRejection', (reason) => {
     if (testsComplete) return;
     console.error('Test failed:', reason);
@@ -150,6 +169,9 @@ function makeBot() {
     bot.manager = manager;
     bot.account = 'test-account';
     bot.privateKey = 'test-private-key';
+    // The single-flight wait polls this cadence; 1 ms lets a test release the
+    // in-flight batch and resume the deferred one without a 250 ms stall.
+    (bot as any)._cowSingleFlightPollMs = 1;
     return { bot, manager, logEntries };
 }
 
@@ -216,10 +238,7 @@ async function testSingleFlightDefersSecondBroadcast() {
 
         const p1 = bot._updateOrdersOnChainBatchCOW(first.cowResult);
         // Wait until the first broadcast is actually on the wire (flag set).
-        const deadline = Date.now() + 10000;
-        while (broadcastCalls < 1 && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 10));
-        }
+        await waitFor(() => broadcastCalls >= 1, 'first batch to broadcast');
         assert.strictEqual(broadcastCalls, 1, 'first batch must broadcast');
         assert.strictEqual(bot._cowBroadcastInFlight, true, 'flag must be set while first broadcast is in flight');
 
@@ -227,11 +246,11 @@ async function testSingleFlightDefersSecondBroadcast() {
         const p2 = bot._updateOrdersOnChainBatchCOW(second.cowResult);
 
         // Wait for the second batch to reach (and log) the single-flight wait.
-        let deferLog;
-        const deferDeadline = Date.now() + 2000;
-        while (!(deferLog = logEntries.find((l) => l.msg.includes('already in flight') || l.msg.includes('deferring this batch'))) && Date.now() < deferDeadline) {
-            await new Promise((r) => setTimeout(r, 5));
-        }
+        await waitFor(
+            () => logEntries.some((l) => l.msg.includes('already in flight') || l.msg.includes('deferring this batch')),
+            'second batch to defer'
+        );
+        const deferLog = logEntries.find((l) => l.msg.includes('already in flight') || l.msg.includes('deferring this batch'));
         assert.strictEqual(broadcastCalls, 1, 'second batch must NOT broadcast while first is in flight');
         assert.ok(deferLog, 'single-flight defer log must be emitted');
 
@@ -298,15 +317,18 @@ async function testPreBroadcastRaceRecheck() {
     let releaseFirst: (() => void) | null = null;
     const firstBlocked = new Promise((resolve) => { releaseFirst = resolve as any; });
 
-    // First buildCreateOrderOp call (the slower-started batch) is delayed so
-    // the other batch can pass the entry single-flight check (flag still
-    // clear), plan, and claim the broadcast slot before the first batch
-    // reaches its own pre-broadcast check.
+    // First buildCreateOrderOp call (the slower-started batch) is parked here so
+    // the other batch can pass the entry single-flight check (flag still clear),
+    // plan, and claim the broadcast slot before the first batch reaches its own
+    // pre-broadcast check. Parking (rather than a fixed delay) makes the ordering
+    // deterministic instead of racing wall-clock time.
     let buildCalls = 0;
+    let releaseSlowBuild: (() => void) | null = null;
+    const slowBuildGate = new Promise<void>((resolve) => { releaseSlowBuild = resolve; });
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 80));
+            await slowBuildGate;
         }
         return {
             op: {
@@ -338,27 +360,24 @@ async function testPreBroadcastRaceRecheck() {
         // Start the slow batch first: it passes the entry check (flag clear)
         // and then blocks inside buildCreateOrderOp.
         const pSlow = bot._updateOrdersOnChainBatchCOW(slow.cowResult);
-        // Let the slow batch get past its entry check and into build.
-        await new Promise((r) => setTimeout(r, 30));
+        // The slow batch is parked in build as soon as it enters it.
+        await waitFor(() => buildCalls >= 1, 'slow batch to enter build');
         // Start the fast batch: it also passes the entry check (flag still
         // clear), finishes planning, and claims the broadcast slot first.
         const pFast = bot._updateOrdersOnChainBatchCOW(fast.cowResult);
 
         // Wait for the fast batch to claim the slot and start broadcasting.
-        const deadline = Date.now() + 10000;
-        while (broadcastCalls < 1 && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 10));
-        }
+        await waitFor(() => broadcastCalls >= 1, 'fast batch to broadcast');
         assert.strictEqual(broadcastCalls, 1, 'only one broadcast may be in flight during the planning race');
         assert.strictEqual(bot._cowBroadcastInFlight, true, 'slot must be claimed by the fast batch');
 
-        // The slow batch finishes building and must now wait at the
-        // pre-broadcast recheck instead of broadcasting alongside.
-        let preBroadcastLog;
-        const preBroadcastDeadline = Date.now() + 2000;
-        while (!(preBroadcastLog = logEntries.find((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight'))) && Date.now() < preBroadcastDeadline) {
-            await new Promise((r) => setTimeout(r, 5));
-        }
+        // Let the slow batch out of build; it must now defer at pre-broadcast.
+        releaseSlowBuild!();
+        await waitFor(
+            () => logEntries.some((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight')),
+            'slow batch to defer at pre-broadcast'
+        );
+        const preBroadcastLog = logEntries.find((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight'));
         assert.strictEqual(broadcastCalls, 1, 'slow batch must NOT broadcast while fast batch is in flight');
         assert.ok(preBroadcastLog, 'pre-broadcast defer log must be emitted for the racing batch');
 
@@ -390,13 +409,15 @@ async function testEarlyReturnDoesNotClearAnotherBatchSlot() {
     let releaseFirst: (() => void) | null = null;
     const firstBlocked = new Promise((resolve) => { releaseFirst = resolve as any; });
 
-    // The first (slower) batch blocks inside build so the second batch can
+    // The first (slower) batch parks inside build so the second batch can
     // pass the entry single-flight check while the flag is still clear.
     let buildCalls = 0;
+    let releaseSlowBuild: (() => void) | null = null;
+    const slowBuildGate = new Promise<void>((resolve) => { releaseSlowBuild = resolve; });
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 80));
+            await slowBuildGate;
         }
         return {
             op: {
@@ -425,17 +446,14 @@ async function testEarlyReturnDoesNotClearAnotherBatchSlot() {
         const slow = makeCreateAction(bot, 'slot-sf-004-slow');
         const fast = makeCreateAction(bot, 'slot-sf-004-fast');
 
-        // Batch B (slow) passes the entry check (flag clear) and blocks in build.
+        // Batch B (slow) passes the entry check (flag clear) and parks in build.
         const pSlow = bot._updateOrdersOnChainBatchCOW(slow.cowResult);
-        await new Promise((r) => setTimeout(r, 30));
+        await waitFor(() => buildCalls >= 1, 'slow batch to enter build');
 
         // Batch A (fast) also passes the entry check (flag still clear), claims
         // the broadcast slot, and starts broadcasting (blocked on the wire).
         const pFast = bot._updateOrdersOnChainBatchCOW(fast.cowResult);
-        const deadline = Date.now() + 10000;
-        while (broadcastCalls < 1 && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 10));
-        }
+        await waitFor(() => broadcastCalls >= 1, 'fast batch to broadcast');
         assert.strictEqual(broadcastCalls, 1, 'only A may be broadcasting');
         assert.strictEqual(bot._cowBroadcastInFlight, true, 'A must hold the broadcast slot');
 
@@ -444,6 +462,7 @@ async function testEarlyReturnDoesNotClearAnotherBatchSlot() {
         bot.manager.getChainFundsSnapshot = () => ({ chainFreeSell: 0, chainFreeBuy: 0 });
 
         // B resumes, validates funds (fails), and returns without claiming.
+        releaseSlowBuild!();
         const bResult = await pSlow;
         assert.strictEqual(bResult.executed, false, 'B must early-return on fund validation failure');
         assert.strictEqual(broadcastCalls, 1, 'B must never broadcast');
@@ -492,13 +511,15 @@ async function testPostWaitStalenessTriggersReplan() {
         return { actions: [], workingGrid: wg, workingBoundary: 0, aborted: false };
     };
 
-    // The slow (deferred) batch blocks in build so the fast batch can pass the
+    // The slow (deferred) batch parks in build so the fast batch can pass the
     // entry check and claim the broadcast slot first.
     let buildCalls = 0;
+    let releaseSlowBuild: (() => void) | null = null;
+    const slowBuildGate = new Promise<void>((resolve) => { releaseSlowBuild = resolve; });
     chainOrders.buildCreateOrderOp = async (_account, amountToSell, sellAssetId, minToReceive, receiveAssetId) => {
         buildCalls++;
         if (buildCalls === 1) {
-            await new Promise((r) => setTimeout(r, 80));
+            await slowBuildGate;
         }
         return {
             op: {
@@ -529,24 +550,22 @@ async function testPostWaitStalenessTriggersReplan() {
         // The deferred batch is fill-driven, so a stale plan can be re-planned.
         (slow.cowResult as any).fills = [{ orderId: '1.7.1' }];
 
-        // Slow passes the ENTRY check (flag still clear) then blocks in build.
+        // Slow passes the ENTRY check (flag still clear) then parks in build.
         const pSlow = bot._updateOrdersOnChainBatchCOW(slow.cowResult);
-        await new Promise((r) => setTimeout(r, 30));
+        await waitFor(() => buildCalls >= 1, 'slow batch to enter build');
         // Fast also passes the entry check, plans, and claims the slot.
         const pFast = bot._updateOrdersOnChainBatchCOW(fast.cowResult);
 
-        const deadline = Date.now() + 10000;
-        while (broadcastCalls < 1 && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 10));
-        }
+        await waitFor(() => broadcastCalls >= 1, 'fast batch to broadcast');
         assert.strictEqual(broadcastCalls, 1, 'only the fast batch may be broadcasting');
         assert.strictEqual(bot._cowBroadcastInFlight, true, 'the fast batch must hold the broadcast slot');
 
         // Let slow finish building and reach the pre-broadcast single-flight wait.
-        const preWaitDeadline = Date.now() + 2000;
-        while (!logEntries.some((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight')) && Date.now() < preWaitDeadline) {
-            await new Promise((r) => setTimeout(r, 5));
-        }
+        releaseSlowBuild!();
+        await waitFor(
+            () => logEntries.some((l) => l.msg.includes('pre-broadcast') && l.msg.includes('already in flight')),
+            'slow batch to defer at pre-broadcast'
+        );
         assert.strictEqual(broadcastCalls, 1, 'the slow batch must defer at pre-broadcast while the fast batch is in flight');
 
         // Release fast: it commits (advancing the master version) and clears the slot.

@@ -50,7 +50,7 @@ defineEsmMockAbs(require.resolve('../modules/launcher/credential_bootstrap'), ['
 
 const { ensureDir, unlink: safeUnlink } = require('../modules/storage').getStorage();
 
-const TEST_ROOT = path.join(__dirname, '..', 'tmp', 'test-stale-daemon');
+const TEST_ROOT = path.join(__dirname, '..', 'tmp', `test-stale-daemon-${process.pid}`);
 const SOCKET_PATH = path.join(TEST_ROOT, 'test.sock');
 const READY_FILE = path.join(TEST_ROOT, 'test.ready');
 

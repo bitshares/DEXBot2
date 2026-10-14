@@ -47,7 +47,7 @@ async function testAmaBotsStartAdapterService() {
     const supervisor = createBotSupervisor({
         bots: [{ name: 'AMA-BOT', gridPrice: 'ama', active: true }],
         controlSocket: false,
-        staggerDelayMs: 10,
+        staggerDelayMs: 0,
         log: () => {},
         logError: () => {},
         spawnFn: (command, args, options) => {
@@ -59,7 +59,7 @@ async function testAmaBotsStartAdapterService() {
     });
 
     await supervisor.start();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await supervisor.shutdown();
 
     for (const call of calls) assertCompiledNodeInvocation(call);
@@ -78,7 +78,7 @@ async function testMemoryLimitRestartsProcess() {
     const supervisor = createBotSupervisor({
         bots: [{ name: 'MEM-BOT', active: true }],
         controlSocket: false,
-        staggerDelayMs: 10,
+        staggerDelayMs: 0,
         memoryCheckIntervalMs: 5,
         getChildRss: () => 300 * 1024 * 1024,
         log: () => {},
@@ -90,7 +90,7 @@ async function testMemoryLimitRestartsProcess() {
     });
 
     await supervisor.start();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 15));
     await supervisor.shutdown();
 
     const botStarts = calls.filter((call) => getScriptArg(call.args).endsWith('bot.js') && call.args.includes('MEM-BOT'));
@@ -102,7 +102,7 @@ async function testRestartControlsExcludeUpdaterJob() {
     const supervisor = createBotSupervisor({
         bots: [{ name: 'CTRL-BOT', active: true }],
         controlSocket: false,
-        staggerDelayMs: 10,
+        staggerDelayMs: 0,
         log: () => {},
         logError: () => {},
         spawnFn: (command, args, options) => {
@@ -117,16 +117,16 @@ async function testRestartControlsExcludeUpdaterJob() {
     });
 
     await supervisor.start();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     supervisor.restartRunning();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     supervisor.stopAll();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     supervisor.restartAll();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await supervisor.shutdown();
 
     for (const call of calls) assertCompiledNodeInvocation(call);
@@ -145,7 +145,7 @@ async function testAdapterRestartDoesNotKillReplacementChild() {
     const supervisor = createBotSupervisor({
         bots: [{ name: 'AMA-RACE-BOT', gridPrice: 'ama', active: true }],
         controlSocket: false,
-        staggerDelayMs: 10,
+        staggerDelayMs: 0,
         log: () => {},
         logError: () => {},
         spawnFn: (command, args) => {
@@ -168,10 +168,10 @@ async function testAdapterRestartDoesNotKillReplacementChild() {
     });
 
     await supervisor.start();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     await supervisor.restartRunning();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await supervisor.shutdown();
 
     assert.ok(replacementAdapter, 'adapter close during lock-file stop should spawn a replacement');

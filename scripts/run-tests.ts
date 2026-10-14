@@ -1,5 +1,6 @@
-import { globSync, mkdirSync, appendFileSync } from 'node:fs';
+import { globSync, mkdirSync, appendFileSync, readFileSync, rmSync } from 'node:fs';
 import { spawn } from 'child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 // ── Intentionally uses process.env directly, NOT Config ───────────
@@ -94,13 +95,54 @@ interface TestResult {
 // stall the whole sequential run. Override with DEXBOT_TEST_TIMEOUT_MS.
 const TEST_TIMEOUT_MS = Number(process.env.DEXBOT_TEST_TIMEOUT_MS || 240000);
 
+// ── ESM-mock preload ──────────────────────────────────────────────
+// Tests that call esmMockEntry() re-exec themselves with --import loader hooks
+// when the hooks are not yet active. The runner can install those hooks up
+// front, letting the test run in the process it was already spawned into and
+// skipping one full node startup + module-graph load per file. Stage-based
+// tests are excluded: their stages need per-stage worker isolation and the
+// preload would defeat it.
+const ESM_HOOKS_FILE = path.join(process.cwd(), 'dist', 'tests', 'helpers', 'esm_mock_hooks.mjs');
+const ESM_ENV_ACTIVE = 'DEXBOT_ESM_MOCKS_ACTIVE';
+const ESM_ENV_MANIFEST = 'DEXBOT_ESM_MOCK_MANIFEST';
+const esmPreloadCache = new Map<string, boolean>();
+
+function needsEsmPreload(testFile: string): boolean {
+    const cached = esmPreloadCache.get(testFile);
+    if (cached !== undefined) return cached;
+    let needed = false;
+    try {
+        const src = readFileSync(testFile, 'utf8');
+        needed = src.includes('esmMockEntry(') && !src.includes('runEsmMockStages');
+    } catch { needed = false; }
+    esmPreloadCache.set(testFile, needed);
+    return needed;
+}
+
 function runOne(testFile: string): Promise<TestResult> {
     return new Promise((resolve) => {
         const start = performance.now();
-        const child = spawn(process.execPath, [testFile], {
+        const preload = needsEsmPreload(testFile);
+        let manifestPath: string | null = null;
+        let childArgs: string[] = [testFile];
+        let childEnv: NodeJS.ProcessEnv = process.env;
+        if (preload) {
+            const manifestDir = path.join(logDir, 'esm-mock-manifests');
+            mkdirSync(manifestDir, { recursive: true });
+            const stamp = path.basename(testFile).replace(/\W+/g, '_');
+            manifestPath = path.join(manifestDir, `${stamp}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
+            childArgs = ['--import', ESM_HOOKS_FILE, testFile];
+            childEnv = { ...process.env, [ESM_ENV_ACTIVE]: '1', [ESM_ENV_MANIFEST]: manifestPath };
+        }
+        const cleanupManifest = () => {
+            if (!manifestPath) return;
+            try { rmSync(manifestPath, { force: true }); } catch { /* best effort */ }
+            manifestPath = null;
+        };
+        const child = spawn(process.execPath, childArgs, {
             stdio: ['inherit', 'pipe', 'pipe'],
             cwd: process.cwd(),
-            env: process.env,
+            env: childEnv,
         });
         let timedOut = false;
 
@@ -126,6 +168,7 @@ function runOne(testFile: string): Promise<TestResult> {
 
         child.on('close', (code, signal) => {
             clearTimeout(killTimer);
+            cleanupManifest();
             // Slice the buffered output into lines and scan for diagnostics.
             const seenForTest = new Set<string>();
             for (const line of buffer.split(/\r?\n/)) {
@@ -153,6 +196,7 @@ function runOne(testFile: string): Promise<TestResult> {
 
         child.on('error', (err) => {
             clearTimeout(killTimer);
+            cleanupManifest();
             resolve({
                 test: testFile,
                 elapsedMs: performance.now() - start,
@@ -173,7 +217,16 @@ async function main() {
     let startTotal = performance.now();
     const concurrency = (() => {
         const raw = Number(process.env.DEXBOT_TEST_CONCURRENCY);
-        return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+        if (Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+        // Default to a small parallel fan-out. With one node process per test,
+        // sequential runs spend most of their wall time in per-process startup
+        // and module-graph evaluation. Files are isolated (per-PID tests/tmp),
+        // so bounded parallelism is safe. Set DEXBOT_TEST_CONCURRENCY=1 to force
+        // the old sequential behavior.
+        const cores = typeof os.availableParallelism === 'function'
+            ? os.availableParallelism()
+            : os.cpus().length;
+        return Math.max(1, Math.min(cores, 4));
     })();
 
     const toRun: string[] = [];

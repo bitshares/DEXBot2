@@ -381,7 +381,7 @@ async function launchDetachedSupervisor({ botName = null, credentialDaemonPid = 
     }
 }
 
-async function runIsolated({ botName, botEntry = null, stayResident = false, startupGraceMs = DEFAULT_STARTUP_GRACE_MS }: { botName?: string; botEntry?: BotEntry | null; stayResident?: boolean; startupGraceMs?: number } = {}): Promise<number> {
+async function runIsolated({ botName, botEntry = null, stayResident = false, startupGraceMs = DEFAULT_STARTUP_GRACE_MS, isolatedPollIntervalMs = 1000 }: { botName?: string; botEntry?: BotEntry | null; stayResident?: boolean; startupGraceMs?: number; isolatedPollIntervalMs?: number } = {}): Promise<number> {
     let supervisor: ReturnType<typeof createBotSupervisor>;
 
     if (botName) {
@@ -450,7 +450,7 @@ async function runIsolated({ botName, botEntry = null, stayResident = false, sta
                 cleanupSignalHandlers();
                 reject(err);
             }
-        }, 1000);
+        }, isolatedPollIntervalMs);
     });
 }
 
@@ -512,7 +512,7 @@ async function runStartOnboardingIfNeeded({ allowInteractive = true, nonInteract
     return true;
 }
 
-async function main({ argv = process.argv, startupGraceMs = DEFAULT_STARTUP_GRACE_MS, exitAfterOnboarding = false, onboard = false }: { argv?: string[]; startupGraceMs?: number; exitAfterOnboarding?: boolean; onboard?: boolean } = {}): Promise<void> {
+async function main({ argv = process.argv, startupGraceMs = DEFAULT_STARTUP_GRACE_MS, isolatedPollIntervalMs = 1000, exitAfterOnboarding = false, onboard = false }: { argv?: string[]; startupGraceMs?: number; isolatedPollIntervalMs?: number; exitAfterOnboarding?: boolean; onboard?: boolean } = {}): Promise<void> {
     if (typeof chainKeys.checkKeysFileSecurity === 'function') chainKeys.checkKeysFileSecurity();
     if (typeof credentialPolicy.checkPolicyFileSecurity === 'function') credentialPolicy.checkPolicyFileSecurity(PATHS.PROFILES.DAEMON_POLICIES_JSON);
 
@@ -698,6 +698,7 @@ async function main({ argv = process.argv, startupGraceMs = DEFAULT_STARTUP_GRAC
                     botEntry: selectedBot,
                     stayResident: isDetachedSupervisorChild,
                     startupGraceMs,
+                    isolatedPollIntervalMs,
                 });
                 return;
             }

@@ -1328,10 +1328,11 @@ function makeAccountRecord(account) {
             const aliceSub = manager.getSubscriptions().get('alice');
 
             const start = Date.now();
-            // Generous wall-clock budget: the assertion is that the runaway case
-            // issues more reconnects than the cap, not how fast. A stalled CI box
-            // must not turn this into a flaky under-count.
-            while (Date.now() - start < 800) {
+            // Poll (yielding to the 1 ms retry ladder) until the runaway has
+            // issued more reconnects than the refill cap. Condition-driven rather
+            // than a fixed 800 ms burn, with a bounded budget so a regression
+            // fails an assertion instead of hanging.
+            while (forceReconnectCalls.length <= maxRefills && Date.now() - start < 2000) {
                 await poll();
                 await new Promise(r => setTimeout(r, 2));
             }
@@ -1340,10 +1341,12 @@ function makeAccountRecord(account) {
                 'precondition: the runaway case issues more reconnects than the refill cap');
             assert.ok(aliceSub._channelRetryRefills <= maxRefills,
                 `refills must be capped, saw ${aliceSub._channelRetryRefills}`);
-            // The decisive property: once the cap is hit, fast retries stop and
-            // the failure run stops growing on its own.
+            // Let any in-flight 1 ms fast retry fire and settle before sampling
+            // the steady state. Once the cap is reached no new fast retry is
+            // scheduled, so a second short window must see no further growth.
+            await new Promise(r => setTimeout(r, 30));
             const settledFailures = aliceSub._channelFailures;
-            await new Promise(r => setTimeout(r, 60));
+            await new Promise(r => setTimeout(r, 30));
             assert.strictEqual(aliceSub._channelFailures, settledFailures,
                 'a capped, dead channel must stop self-driving scans and fall back to the poll cadence');
             assert.strictEqual(aliceSub._channelRetryTimer, null,

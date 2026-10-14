@@ -13,9 +13,9 @@ const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
     const start1 = Date.now();
     setTimeout(async () => {
         await mgr1.setAccountTotals({ buy: 123.45, sell: 67.89, buyFree: 120.0, sellFree: 60.0 });
-    }, 50);
+    }, 20);
 
-    await mgr1.waitForAccountTotals(500);
+    await mgr1.waitForAccountTotals(200);
     const elapsed1 = Date.now() - start1;
     assert(elapsed1 < 250, 'waitForAccountTotals should resolve quickly once free totals arrive');
     assert.strictEqual(Number(mgr1.accountTotals.buy), 123.45);
@@ -26,12 +26,12 @@ const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
     mgr2.accountTotals = { buy: null, sell: null };
     setTimeout(async () => {
         await mgr2.setAccountTotals({ buy: 10, sell: 20 });
-    }, 25);
+    }, 10);
 
     const start2 = Date.now();
-    await mgr2.waitForAccountTotals(100);
+    await mgr2.waitForAccountTotals(40);
     const elapsed2 = Date.now() - start2;
-    assert(elapsed2 >= 90, 'waitForAccountTotals should wait for free totals, not buy/sell totals only');
+    assert(elapsed2 >= 30, 'waitForAccountTotals should wait for free totals, not buy/sell totals only');
 
     // Test: concurrent waiters should share timeout window (no lock-serialization)
     const mgr3 = new OrderManager({ botFunds: { buy: 0, sell: 0 } });
@@ -39,12 +39,12 @@ const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
 
     const start3 = Date.now();
     await Promise.all([
-        mgr3.waitForAccountTotals(120),
-        mgr3.waitForAccountTotals(120),
-        mgr3.waitForAccountTotals(120)
+        mgr3.waitForAccountTotals(40),
+        mgr3.waitForAccountTotals(40),
+        mgr3.waitForAccountTotals(40)
     ]);
     const elapsed3 = Date.now() - start3;
-    assert(elapsed3 < 260, `concurrent waiters should not serialize (elapsed=${elapsed3}ms)`);
+    assert(elapsed3 < 150, `concurrent waiters should not serialize (elapsed=${elapsed3}ms)`);
 
     // Test: explicit zero allocation should cap available funds to zero
     const mgr4 = new OrderManager({ botFunds: { buy: 0, sell: '0%' }, coreOrders: { buy: 1, sell: 1 } });

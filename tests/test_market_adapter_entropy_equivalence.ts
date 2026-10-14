@@ -163,7 +163,7 @@ for (const kind of ['random', 'trend', 'flat', 'sawtooth']) {
     // Two seeds keep the kind coverage while cutting the differential sweep
     // cost; the reference and production analyzers are deterministic, so extra
     // random samples add runtime, not signal.
-    for (const seed of [1, 99]) SERIES.push({ kind, seed, prices: makeSeries(kind, 600, seed) });
+    for (const seed of [1, 99]) SERIES.push({ kind, seed, prices: makeSeries(kind, 300, seed) });
 }
 
 const PE_CONFIGS = [

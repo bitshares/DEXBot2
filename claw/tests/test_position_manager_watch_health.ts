@@ -74,7 +74,7 @@ async function testHealthWritesStayOrdered() {
     });
 
     const started = await watcher.start();
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     await started.stop();
 
     const health = JSON.parse(await fs.readFile(healthPath, 'utf8'));

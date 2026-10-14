@@ -134,7 +134,7 @@ async function runTests() {
             unhandledRejectionListenersBefore,
             'Open-orders sync loop must not install global unhandledRejection handlers'
         );
-        await new Promise((resolve) => setTimeout(resolve, 90));
+        await new Promise((resolve) => setTimeout(resolve, 40));
 
         assert(syncCalls >= 1, 'Main loop should run synchronizeWithChain at least once');
         assert.strictEqual(processCalls, 1, 'Main loop should process sync-detected fills');
@@ -153,7 +153,7 @@ async function runTests() {
         // Hook returns null — the same defer signal the truncated-read guard
         // produces — so the sync must never reach synchronizeWithChain.
         bot._readOpenOrdersHook = async () => null;
-        await new Promise((resolve) => setTimeout(resolve, 90));
+        await new Promise((resolve) => setTimeout(resolve, 40));
         assert.strictEqual(syncCalls, 0, 'Truncated reads must never reach synchronizeWithChain');
         assert.strictEqual(processCalls, 0, 'Truncated reads must not trigger fill processing');
         console.log('✓ Main loop defers synchronizeWithChain on truncated reads');

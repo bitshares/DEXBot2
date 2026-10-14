@@ -75,6 +75,10 @@ async function runIsolatedPollRejectStage() {
             unlock.main({
                 argv: ['node', 'unlock', '--isolated'],
                 startupGraceMs: 0,
+                // Poll fast: the contract under test is that a throwing
+                // getStatus() rejects at the first poll, not the wall-clock
+                // cadence of the production 1s supervisor poll.
+                isolatedPollIntervalMs: 5,
             })
                 .then(() => ({ settled: true, reason: 'resolved' }))
                 .catch(() => ({ settled: true, reason: 'rejected' })),

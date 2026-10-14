@@ -138,7 +138,7 @@ async function testRETRY003_RetryFiresWithoutNewFillOrRegionEnd() {
             10,
             'retryDelayMs: 10 must resolve to 10'
         );
-        await sleep(250);
+        await sleep(40);
         assert.ok(watchdogCalls >= 1, 'retry must refresh the stale-broadcast watchdog outside maintenance');
         assert.ok(consumeCalls >= 1, 'retry must re-invoke the consumer with no new fill and no region end');
         assert.strictEqual(bot._deferredFillRetryTimer, null, 'timer must settle once fired');

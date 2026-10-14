@@ -3133,9 +3133,15 @@ async function waitForCowBroadcastSingleFlight(bot: BotLike, label: string): Pro
         'warn'
     );
     const waitDeadline = Date.now() + SINGLE_FLIGHT_MAX_WAIT_MS;
+    // Test seam: a caller may shorten the poll cadence via
+    // bot._cowSingleFlightPollMs. Production leaves it unset and keeps the
+    // 250 ms rung, but tests that release the in-flight batch immediately must
+    // not pay a full poll interval after the slot clears.
+    const configuredPollMs = Number((bot as { _cowSingleFlightPollMs?: number })._cowSingleFlightPollMs);
+    const pollMs = Number.isFinite(configuredPollMs) && configuredPollMs > 0 ? configuredPollMs : 250;
     while (bot._cowBroadcastInFlight) {
         if (bot._shuttingDown || Date.now() > waitDeadline) break;
-        await sleep(250);
+        await sleep(pollMs);
     }
     if (bot._shuttingDown) {
         bot.manager.logger.log(

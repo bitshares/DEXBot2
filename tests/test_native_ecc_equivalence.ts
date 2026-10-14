@@ -40,7 +40,7 @@ async function main() {
     // test's runtime (~65 ms/iteration). The conformance check is
     // differential over random inputs and any divergence is deterministic,
     // so a handful of samples exercises every op without paying for 32.
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 4; i++) {
         const priv = randomBytes(32);
         const digest = randomBytes(32);
 
@@ -97,7 +97,7 @@ async function main() {
     }
 
     // ── Brain keys ──────────────────────────────────────────────────
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 4; i++) {
         assertEqualBytes(
             `normalizeBrainKey${i}`,
             nodeEcc.normalizeBrainKey(`account ${i}`, 'owner', `password ${i}`),

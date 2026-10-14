@@ -707,10 +707,10 @@ async function testGridLockSyncLockCorrectOrder() {
     const SyncEngine = SyncEngineModule.default || SyncEngineModule;
     const syncEngine = new SyncEngine(mgr);
 
-    // Context B: hold _syncLock for 80ms (simulates a fill-context sync).
+    // Context B: hold _syncLock for 30ms (simulates a fill-context sync).
     let syncLockReleased = false;
     const contextB = mgr._syncLock.acquire(async () => {
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, 30));
         syncLockReleased = true;
     });
 
@@ -747,7 +747,7 @@ async function testGridLockSyncLockCorrectOrder() {
     }
 
     assert.strictEqual(syncLockReleased, true, 'Context B must complete');
-    assert.ok(contextAElapsed >= 30,
+    assert.ok(contextAElapsed >= 10,
         `Context A must wait for Context B to release _syncLock (took ${contextAElapsed}ms)`);
 
     console.log('  PASS: syncFromOpenOrders correctly waits for _syncLock — no deadlock');

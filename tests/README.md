@@ -46,7 +46,7 @@ claw/tests/         # Claw integration tests (same conventions, run by npm test)
 `scripts/run-tests.ts` runs each compiled `test_*.js` file as its own `node` process (no shared state between tests). Knobs:
 
 - `RUN_LIVE_BITSHARES_TESTS=1` — also run the live-chain tests; without it they are skipped and counted as `skippedLive`. The live set is the `liveTestFiles` allow-list in `scripts/run-tests.ts`.
-- `DEXBOT_TEST_CONCURRENCY=N` — run N files in parallel (default `1`; several tests share `tests/tmp` paths, so parallelism must be requested deliberately).
+- `DEXBOT_TEST_CONCURRENCY=N` — run N files in parallel (default `min(cores, 4)`; files are isolated with per-PID `tests/tmp` scratch space, so bounded parallelism is safe). Set `DEXBOT_TEST_CONCURRENCY=1` to force the old sequential order, which is useful when debugging an interleaved log.
 - `DEXBOT_TEST_TIMEOUT_MS=N` — per-file watchdog (default `240000`); on expiry the child is `SIGTERM`/`SIGKILL`ed and marked `TIMEOUT`.
 - `DEXBOT_SUPPRESS_WARNINGS=1` — add `--no-warnings` to children (hides the warnings the diagnostics summary is meant to surface).
 

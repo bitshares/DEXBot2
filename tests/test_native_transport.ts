@@ -429,7 +429,9 @@ async function testKeepAlive() {
     try {
         await transport.connect([`ws://127.0.0.1:${port}/ws`]);
         const callsAfterConnect = loginCalls;
-        await new Promise(resolve => setTimeout(resolve, 90));
+        // One keep-alive interval is 30 ms; 40 ms guarantees at least one
+        // lightweight login RPC without padding three full intervals.
+        await new Promise(resolve => setTimeout(resolve, 40));
         assert.ok(loginCalls > callsAfterConnect, 'keepalive should send lightweight login RPCs while idle');
         transport.disconnect();
         console.log('  PASS: Idle keepalive');
@@ -671,8 +673,8 @@ async function testNodeFailureReportsOnce() {
         assert.strictEqual(failures[0].source, 'keep-alive', 'first failure source is keep-alive');
         // The close triggered by the keep-alive trip must not produce a second
         // (connection) strike for the same event. The keep-alive interval is
-        // 30 ms, so a duplicate would surface well inside a few intervals.
-        await new Promise(r => setTimeout(r, 80));
+        // 30 ms, so a duplicate would surface within the first interval.
+        await new Promise(r => setTimeout(r, 40));
         assert.strictEqual(failures.filter(f => f.source === 'connection').length, 0,
             'keep-alive trip must not double-report as a connection failure');
         transport.disconnect();
@@ -698,7 +700,7 @@ async function testCloseClassification() {
         });
         await transport.connect([benignServer.url], false);
         benignServer.sendClose(1000);
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, 40));
         assert.strictEqual(benignFailures.length, 0, 'normal close (1000) must not count as a node failure');
         transport.disconnect();
         console.log('  PASS: Benign close not reported');
