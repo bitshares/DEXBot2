@@ -594,7 +594,6 @@ async function main() {
     const ignoredRows = crRows.filter((r) => !r.supported);
     const pricedSupported = supportedRows.filter((r) => r.cr !== null && r.value !== null && r.debtFloat !== null);
     const unpricedSupported = supportedRows.filter((r) => r.cr === null);
-    const avgCr = averageCreditCr(pricedSupported.map((r) => ({ debt: r.debtFloat as number, value: r.value as number })));
 
     async function fmtParts(m: Map<string, { total: number; count: number; max?: number; earliest?: number | null }>, showBiggest = false): Promise<string[]> {
       if (m.size === 0) return [];
@@ -641,39 +640,55 @@ async function main() {
       console.log('');
       await printAssetLines('Credit coll', creditSumAll.coll, true, colors.buy);
       if (creditPairs.length > 0) console.log('');
-      // Compact CR summary: one Avar. CR line per bot, then one Curr. CR
-      // line per whitelisted pair. A CR exists only for pairs both whitelisted
-      // in bots.json and listed on the current credit offer.
+      // Compact CR summary: one Avar. CR line per borrowed credit (debt
+      // asset), then one Curr. CR line per whitelisted pair. A CR exists only
+      // for pairs both whitelisted in bots.json and listed on the current
+      // credit offer.
       const feeDenom = Number(FEE_PARAMETERS?.GRAPHENE_FEE_RATE_DENOM) || 1000000;
       const walletRaw = await fetchWalletRaw(account);
       const matchPair = (pair: { debtId: string | null; debtSym: string; collId: string | null; collSym: string }, r: CrRow): boolean =>
         (pair.debtId !== null && r.debtId !== null && pair.debtId === r.debtId && pair.collId !== null && r.collId !== null && pair.collId === r.collId) ||
         (isSameAssetSymbol(pair.debtSym, r.debtSym) && isSameAssetSymbol(pair.collSym, r.collSym));
-      if (avgCr !== null) {
-        // Label in orange to distinguish from Curr. CR; value keeps the
-        // original health color (single shared max → green/red, mixed or
-        // undefined max → white).
-        const avgMaxSet = new Set<number>();
+      if (pricedSupported.length > 0) {
+        // Group by borrowed credit (debt asset) so unrelated debt assets are
+        // not blended into one figure; each line carries its own
+        // value-weighted average CR.
+        const debtGroups = new Map<string, { debtSym: string; rows: CrRow[] }>();
         for (const r of pricedSupported) {
-          const pair = creditPairs.find((p) => matchPair(p, r));
-          if (pair?.maxCR != null) avgMaxSet.add(pair.maxCR);
+          const key = r.debtId ?? `sym:${normalizeAssetSymbol(r.debtSym)}`;
+          if (!debtGroups.has(key)) debtGroups.set(key, { debtSym: r.debtSym, rows: [] });
+          debtGroups.get(key)!.rows.push(r);
         }
-        const avgMax = avgMaxSet.size === 1 ? [...avgMaxSet][0] : null;
-        const avgColor = avgMax === null ? colors.white : avgCr > avgMax ? colors.sell : colors.buy;
-        const pairTotals = new Map<string, { debtSym: string; collSym: string; debt: number; coll: number }>();
-        for (const r of pricedSupported) {
-          const key = `${r.debtSym}←${r.collSym}`;
-          if (!pairTotals.has(key)) {
-            pairTotals.set(key, { debtSym: r.debtSym, collSym: r.collSym, debt: 0, coll: 0 });
+        // Largest borrowed credit first so the biggest exposure leads.
+        const debtOrder = [...debtGroups.values()].sort((a, b) =>
+          b.rows.reduce((s, r) => s + (r.debtFloat || 0), 0)
+          - a.rows.reduce((s, r) => s + (r.debtFloat || 0), 0));
+        for (const group of debtOrder) {
+          const groupCr = averageCreditCr(group.rows.map((r) => ({ debt: r.debtFloat as number, value: r.value as number })));
+          if (groupCr === null) continue;
+          // Label in orange to distinguish from Curr. CR; value keeps the
+          // original health color (single shared max → green/red, mixed or
+          // undefined max → white).
+          const groupMaxSet = new Set<number>();
+          for (const r of group.rows) {
+            const pair = creditPairs.find((p) => matchPair(p, r));
+            if (pair?.maxCR != null) groupMaxSet.add(pair.maxCR);
           }
-          const t = pairTotals.get(key)!;
-          t.debt += r.debtFloat || 0;
-          t.coll += r.collFloat || 0;
+          const groupMax = groupMaxSet.size === 1 ? [...groupMaxSet][0] : null;
+          const groupColor = groupMax === null ? colors.white : groupCr > groupMax ? colors.sell : colors.buy;
+          const collTotals = new Map<string, { collSym: string; debt: number; coll: number }>();
+          for (const r of group.rows) {
+            const key = r.collId ?? `sym:${normalizeAssetSymbol(r.collSym)}`;
+            if (!collTotals.has(key)) collTotals.set(key, { collSym: r.collSym, debt: 0, coll: 0 });
+            const t = collTotals.get(key)!;
+            t.debt += r.debtFloat || 0;
+            t.coll += r.collFloat || 0;
+          }
+          const segments = [...collTotals.values()]
+            .map((t) => `${formatAmount(t.debt)} ${group.debtSym} ← ${formatAmount(t.coll)} ${t.collSym}`)
+            .join(' + ');
+          console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} ${groupColor}${formatAmount(groupCr)}${colors.reset}, ${segments} ${colors.gray}(x${group.rows.length})${colors.reset}`);
         }
-        const segments = [...pairTotals.values()]
-          .map((t) => `${formatAmount(t.debt)} ${t.debtSym} ← ${formatAmount(t.coll)} ${t.collSym}`)
-          .join(' + ');
-        console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} ${avgColor}${formatAmount(avgCr)}${colors.reset}, ${segments} ${colors.gray}(x${pricedSupported.length})${colors.reset}`);
       } else if (supportedRows.length > 0) {
         console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} n/a (no priced, available credit)`);
       }
@@ -685,7 +700,7 @@ async function main() {
         if (unpriced > 0) reasons.push(`${unpriced} no offer price`);
         console.log(`   ${colors.gray}Excluded: ${ignored + unpriced} deal${ignored + unpriced === 1 ? '' : 's'} (${reasons.join(', ')})${colors.reset}`);
       }
-      if ((avgCr !== null || supportedRows.length > 0) && creditPairs.length > 0) console.log('');
+      if (supportedRows.length > 0 && creditPairs.length > 0) console.log('');
       for (const pair of creditPairs) {
         const pairRows = supportedRows.filter((r) => matchPair(pair, r));
         const pricedPair = pairRows.filter((r) => r.cr !== null && r.value !== null && r.debtFloat !== null);
