@@ -276,6 +276,9 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
     ${uplotInlineTags()}
     <style>
         ${sharedChartCSS()}
+        /* Panel titles sit at the top-right; make them clearly readable
+           (shared CSS uses a very dark #30363d that vanishes on the dark bg). */
+        .section-label { color: #c9d1d9; font-size: 10px; }
         #price-panel  { flex: 0 0 34%; min-height: 0; position: relative; border-bottom: 1px solid #30363d; }
         #ama-panel    { flex: 0 0 14%; min-height: 0; position: relative; border-bottom: 1px solid #30363d; }
         #kalman-panel { flex: 0 0 21%; min-height: 0; position: relative; border-bottom: 1px solid #30363d; }
@@ -333,11 +336,12 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
         .ctrl.off .val { color: #3fb950; }
         .ctrl.nz input[type="range"] { accent-color: #8b949e; }
         .ctrl.nz .val { color: #8b949e; }
-        .copy-btn, .paste-btn { pointer-events: auto; margin-left: 6px; padding: 2px 10px; font-size: 10px; background: #21262d; color: #8b949e; border: 1px solid #30363d; border-radius: 4px; cursor: pointer; }
-        .copy-btn:hover, .paste-btn:hover { background: #30363d; color: #e6edf3; }
+        .copy-btn, .paste-btn, .reset-btn { pointer-events: auto; margin-left: 6px; padding: 2px 10px; font-size: 10px; background: #21262d; color: #8b949e; border: 1px solid #30363d; border-radius: 4px; cursor: pointer; }
+        .copy-btn:hover, .paste-btn:hover, .reset-btn:hover { background: #30363d; color: #e6edf3; }
         .copy-btn.copied { color: #3fb950; border-color: #3fb950; }
         .paste-btn.pasted { color: #58a6ff; border-color: #58a6ff; }
         .paste-btn.error  { color: #f85149; border-color: #f85149; }
+        .reset-btn.reset  { color: #d29922; border-color: #d29922; }
         #paste-confirm { display: none; position: fixed; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px 16px; z-index: 1000; box-shadow: 0 4px 24px rgba(0,0,0,0.7); min-width: 200px; }
         #paste-confirm-title { font-size: 10px; color: #8b949e; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
         #paste-confirm-vals { font-size: 11px; font-family: monospace; color: #e6edf3; line-height: 1.7; margin-bottom: 12px; }
@@ -423,6 +427,7 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
                 <div class="ctrl regime"><label for="regime-slider">regi</label><input type="range" id="regime-slider" min="0" max="${REGI_MAX * 100}" value="${regimeInitSlider}" title="Regime Sensitivity"><span class="val" id="regime-value">${defaultRegimeSensitivity.toFixed(2)}</span></div>
                 <button class="copy-btn" id="copy-params-btn">copy</button>
                 <button class="paste-btn" id="paste-params-btn">paste</button>
+                <button class="reset-btn" id="reset-params-btn">reset</button>
             </div>
             <div id="output-chart"></div>
         </div>
@@ -1362,6 +1367,27 @@ function applyParams(p, btn) {
 
             const LS_KEY = 'dw_research_params';
 
+            // Factory defaults captured server-side; the reset button restores
+            // every knob to these values.
+            const RESET_PARAMS = ${JSON.stringify({
+                alpha: defaultAlpha,
+                amaMaxSlopePct: defaultAmaMaxSlopePct,
+                kalmanMaxSlopePct: defaultKalmanMaxSlopePct,
+                minOutputThreshold: defaultMinOutputThreshold,
+                gain: defaultGain,
+                kalmanSmoothPct: defaultKalmanSmoothPct,
+                kalmanDispScaleMult: defaultKalmanDispScaleMult,
+                dispScaleMinPct: defaultDispScaleMinPct,
+                kalmanDispThresholdMult: defaultKalmanDispThresholdMult,
+                kalmanSmoothSpanPct: defaultKalmanSmoothSpanPct,
+                signalConfirmBars: defaultSignalConfirmBars,
+                clipPct: defaultClipPct,
+                neutralZonePct: defaultNeutralZone,
+                regimeSensitivity: defaultRegimeSensitivity,
+                dispWeight: defaultDispWeight,
+                lookbackBars,
+            })};
+
             document.getElementById('copy-params-btn').addEventListener('click', () => {
                 const btn = document.getElementById('copy-params-btn');
                 const params = {
@@ -1416,6 +1442,14 @@ function applyParams(p, btn) {
                 }, { once: true });
                 ta.addEventListener('keydown', (e) => { if (e.key === 'Escape') cleanup(); });
                 setTimeout(cleanup, 10000);
+            });
+
+            document.getElementById('reset-params-btn').addEventListener('click', () => {
+                const btn = document.getElementById('reset-params-btn');
+                applyParams(RESET_PARAMS);
+                btn.textContent = 'reset!';
+                btn.classList.add('reset');
+                setTimeout(() => { btn.textContent = 'reset'; btn.classList.remove('reset'); }, 1500);
             });
         }
 
