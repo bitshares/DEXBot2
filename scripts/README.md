@@ -111,13 +111,31 @@ bash scripts/reset-settings.sh
 
 ## 📊 DIAGNOSTICS & VALIDATION
 
-### Configuration Audit
-**File:** `validate_bots.ts`
-**Purpose:** Check `bots.json` for schema errors or missing required fields.
+### Grid Order Analysis
+**File:** `analyze-orders.ts` (CLI: `dexbot order`)
+**Purpose:** Analyze grid order metrics and order distribution patterns.
 ```bash
-# Validate the live bot configuration
-node dist/scripts/validate_bots.js
+# Analyzes spread accuracy, geometric consistency, and fund distribution
+node dist/scripts/analyze-orders.js
 ```
+
+For AMA bots (`gridPrice: ama`) the analyzer reads `<botKey>.dynamicgrid.json`
+and, when fresh (`2 × MARKET_ADAPTER.RUNTIME_DEFAULTS.pollSeconds`, default 2h),
+shows live weights with color: higher = red (losing), lower = green (winning),
+static = grey. Stale snapshot appends a red `(adapter offline)` alert to the
+static weights.
+
+### Credit Analysis
+**File:** `analyze-credit.ts` (CLI: `dexbot credit`)
+**Purpose:** Live-chain overview of active MPA (margin) and credit (borrowed-deal) positions, summed per asset per bot — the credit counterpart to `analyze-orders.ts` / `dexbot order`.
+```bash
+# Credit-enabled bots only
+node dist/scripts/analyze-credit.js
+
+# Single bot (name or key)
+node dist/scripts/analyze-credit.js <bot>
+```
+Credit deals report per-pair and average CR, but only for pairs whitelisted in `bots.json` (`debtPolicy.lending`) and listed on the current credit offer; everything else is shown as ignored/unpriced and excluded from the average. A borrow-now preview per configured pair shows today's rate.
 
 ### Asset Rich List / Top Holder
 **File:** `rich_list.ts` (CLI: `dexbot rich`, npm: `npm run richlist`)
@@ -144,6 +162,14 @@ the rename. Note:
 `get_asset_holders_count` is reported by the node as `distance(range) - 1`, so
 the `holders=` figure can be off by one.
 
+### Configuration Audit
+**File:** `validate_bots.ts`
+**Purpose:** Check `bots.json` for schema errors or missing required fields.
+```bash
+# Validate the live bot configuration
+node dist/scripts/validate_bots.js
+```
+
 ### Grid Divergence Audit
 **File:** `divergence-calc.ts`
 **Purpose:** Measure the "drift" between in-memory grid and disk state using RMS divergence metric.
@@ -153,50 +179,6 @@ the `holders=` figure can be off by one.
 node dist/scripts/divergence-calc.js
 ```
 **Reference:** RMS threshold interpretation in [Grid Recalculation docs](../docs/GRID_RECALCULATION.md)
-
-### Grid Trading Analysis
-**File:** `analyze-orders.ts`
-**Purpose:** Analyze grid trading metrics and order distribution patterns.
-```bash
-# Analyzes spread accuracy, geometric consistency, and fund distribution
-node dist/scripts/analyze-orders.js
-```
-
-For AMA bots (`gridPrice: ama`) the analyzer reads `<botKey>.dynamicgrid.json`
-and, when fresh (`2 × MARKET_ADAPTER.RUNTIME_DEFAULTS.pollSeconds`, default 2h),
-shows live weights with color: higher = red (losing), lower = green (winning),
-static = grey. Stale snapshot appends a red `(adapter offline)` alert to the
-static weights.
-
-### Credit Analysis
-**File:** `analyze-credit.ts` (CLI: `dexbot credit`)
-**Purpose:** Live-chain overview of active MPA (margin) and credit (borrowed-deal) positions, summed per asset per bot — the credit counterpart to `analyze-orders.ts` / `dexbot order`.
-```bash
-# Credit-enabled bots only
-node dist/scripts/analyze-credit.js
-
-# Single bot (name or key)
-node dist/scripts/analyze-credit.js <bot>
-```
-Credit deals report per-pair and average CR, but only for pairs whitelisted in `bots.json` (`debtPolicy.lending`) and listed on the current credit offer; everything else is shown as ignored/unpriced and excluded from the average. A borrow-now preview per configured pair shows today's rate.
-
-### Pool History Diagnostics
-**File:** `diagnose-pool-history.ts`
-**Purpose:** Inspect raw BitShares pool history API responses.
-```bash
-# Inspect pool history (default pool 1.19.133)
-node dist/scripts/diagnose-pool-history.js
-
-# Custom pool, limit, and time range
-node dist/scripts/diagnose-pool-history.js --pool 1.19.x --limit 100 --hours 48 --maxPages 5
-```
-
-### Print Grid Sample
-**File:** `print_grid.ts`
-**Purpose:** Demonstrate the grid structure — shows consecutive price levels with percentage differences between adjacent slots.
-```bash
-node dist/scripts/print_grid.js
-```
 
 ### Grid Calculation Runner
 **File:** `runner.ts`
@@ -210,6 +192,25 @@ LIVE_BOT_NAME=my-bot CALC_CYCLES=10 CALC_DELAY_MS=1000 node dist/scripts/runner.
 ```
 Useful for verifying config produces the expected grid, testing price derivation, and debugging fund allocation.
 Requires a live BitShares connection (asset metadata lookups and price derivation are on-chain).
+
+### Print Grid Sample
+**File:** `print_grid.ts`
+**Purpose:** Demonstrate the grid structure — shows consecutive price levels with percentage differences between adjacent slots.
+```bash
+node dist/scripts/print_grid.js
+```
+
+### Pool History Diagnostics
+**File:** `diagnose-pool-history.ts`
+**Purpose:** Inspect raw BitShares pool history API responses.
+```bash
+# Inspect pool history (default pool 1.19.133)
+node dist/scripts/diagnose-pool-history.js
+
+# Custom pool, limit, and time range
+node dist/scripts/diagnose-pool-history.js --pool 1.19.133 --limit 100 --hours 48 --maxPages 5
+```
+`--pool` must be a concrete numeric liquidity-pool object ID (`1.19.N`). Placeholders such as `1.19.x` are rejected up front, because the node parses the instance part as a `uint64` and otherwise fails with `Parse Error: Couldn't parse uint64_t`.
 
 ### Native Release Gates
 **File:** `native_release_gates.ts` (+ `generate_mainnet_corpus_report.ts`)

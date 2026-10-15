@@ -5,9 +5,12 @@ const require = createRequire(import.meta.url);
 'use strict';
 
 /**
- * Diagnostic: Inspect raw BitShares pool history API responses for pool 1.19.133.
+ * Diagnostic: Inspect raw BitShares pool history API responses for a liquidity pool.
  *
- * Usage: node dist/scripts/diagnose-pool-history.js [--pool <id>] [--limit <n>] [--hours <n>] [--maxPages <n>]
+ * The pool ID must be a concrete object ID (e.g. 1.19.133); placeholders such as
+ * "1.19.x" are rejected up front because the node cannot parse them as a uint64.
+ *
+ * Usage: node dist/scripts/diagnose-pool-history.js [--pool <1.19.N>] [--limit <n>] [--hours <n>] [--maxPages <n>]
  */
 
 const { BitShares, waitForConnected } = require('../modules/bitshares_client');
@@ -31,6 +34,16 @@ const MAX_PAGES = process.argv.includes('--maxPages')
     : 20;
 
 const LP_OP_TYPE = 63;
+
+// Fail fast on non-numeric pool IDs: the node parses the instance of a 1.19.N
+// object ID as a uint64, so a placeholder like "1.19.x" surfaces as an opaque
+// remote "Parse Error: Couldn't parse uint64_t".
+if (!/^1\.19\.\d+$/.test(POOL_ID)) {
+    console.error(`Invalid pool ID: "${POOL_ID}"`);
+    console.error('Expected a numeric liquidity-pool object ID, e.g. 1.19.133 (not "1.19.x").');
+    console.error('Usage: node dist/scripts/diagnose-pool-history.js [--pool <1.19.N>] [--limit <n>] [--hours <n>] [--maxPages <n>]');
+    process.exit(1);
+}
 
 interface HistoryRow {
     sequence?: unknown;
@@ -221,45 +234,36 @@ async function main() {
         console.log(`Could not list methods: ${getErrorMessage(err)}`);
     }
 
-    // ── Test 4: Try get_account_history for pool account ───────────
-    console.log(`\n\n═══ TEST 4: get_account_history_by_operations for pool account ═══`);
+    // ── Test 4: get_liquidity_pool_history_by_sequence (pagination) ──
+    // Account-history APIs (get_account_history_by_operations,
+    // get_relative_account_history) do NOT apply here: a liquidity pool
+    // (1.19.N) is not an account (1.2.N). Their object IDs as the start/stop
+    // sequence arguments is what produced the old "Couldn't parse uint64_t".
+    console.log(`\n\n═══ TEST 4: get_liquidity_pool_history_by_sequence(poolId, startSeq, null, ${LIMIT}, 63) ═══`);
     try {
-        // Pool "account" is 1.19.133 — try account history API
-        if (typeof BitShares.history.get_account_history_by_operations === 'function') {
-            const rows = await BitShares.history.get_account_history_by_operations(
-                POOL_ID, [LP_OP_TYPE], '1.19.0', '1.19.999', LIMIT
+        const firstPage = await BitShares.history.get_liquidity_pool_history(
+            POOL_ID, null, null, LIMIT, LP_OP_TYPE
+        );
+        const firstRows = Array.isArray(firstPage) ? firstPage : [];
+        const lastSeq = Number((firstRows[firstRows.length - 1] as HistoryRow | undefined)?.sequence);
+        if (!Number.isFinite(lastSeq) || lastSeq <= 1) {
+            console.log(`No usable sequence to page from (first page length: ${firstRows.length})`);
+        } else {
+            const startSeq = lastSeq - 1;
+            const rows = await BitShares.history.get_liquidity_pool_history_by_sequence(
+                POOL_ID, startSeq, null, LIMIT, LP_OP_TYPE
             );
             console.log(`Result: ${Array.isArray(rows) ? `Array[${rows.length}]` : typeof rows}`);
             if (Array.isArray(rows)) {
-                rows.slice(0, 3).forEach((r, i) => inspectRow(r, i));
+                rows.slice(0, 5).forEach((r, i) => inspectRow(r, i));
             }
-        } else {
-            console.log('get_account_history_by_operations NOT available');
         }
     } catch (err) {
         console.log(`ERROR: ${getErrorMessage(err)}`);
     }
 
-    // ── Test 5: Try get_relative_account_history ─────────────────
-    console.log(`\n\n═══ TEST 5: get_relative_account_history ═══`);
-    try {
-        if (typeof BitShares.history.get_relative_account_history === 'function') {
-            const rows = await BitShares.history.get_relative_account_history(
-                POOL_ID, 0, LIMIT, 0
-            );
-            console.log(`Result: ${Array.isArray(rows) ? `Array[${rows.length}]` : typeof rows}`);
-            if (Array.isArray(rows)) {
-                rows.slice(0, 3).forEach((r, i) => inspectRow(r, i));
-            }
-        } else {
-            console.log('get_relative_account_history NOT available');
-        }
-    } catch (err) {
-        console.log(`ERROR: ${getErrorMessage(err)}`);
-    }
-
-    // ── Test 6: Last 24h of trades — try to query recent only ─────
-    console.log(`\n\n═══ TEST 6: Last 100 results with larger limit ═══`);
+    // ── Test 5: Last 24h of trades — try to query recent only ─────
+    console.log(`\n\n═══ TEST 5: Last 100 results with larger limit ═══`);
     try {
         const rows = await BitShares.history.get_liquidity_pool_history(
             POOL_ID, null, null, 100, LP_OP_TYPE
@@ -287,8 +291,8 @@ async function main() {
         console.log(`ERROR: ${getErrorMessage(err)}`);
     }
 
-    // ── Test 7: Paged recent summary ──────────────────────────────
-    console.log(`\n\n═══ TEST 7: Paged LP history summary, last ${HOURS}h ═══`);
+    // ── Test 6: Paged recent summary ──────────────────────────────
+    console.log(`\n\n═══ TEST 6: Paged LP history summary, last ${HOURS}h ═══`);
     try {
         const sinceMs = Date.now() - (HOURS * 3600 * 1000);
         const collected = await collectRecentPoolHistory(POOL_ID, sinceMs, Math.min(101, LIMIT), MAX_PAGES);
@@ -315,6 +319,9 @@ async function main() {
     if (typeof BitShares.disconnect === 'function') {
         BitShares.disconnect();
     }
+    // Force-exit: the native transport keeps reconnect timers alive and exposes
+    // no way to disable autoreconnect, so without this the process never exits.
+    process.exit(0);
 }
 
 main().catch(err => {
