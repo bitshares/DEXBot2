@@ -198,6 +198,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         : inferBaseIntervalSeconds(candles, 3600);
 
     const timeframes: Array<{ label: string; seconds: number; calendar?: string; enabled: boolean }> = ([
+        { label: '1h', seconds: 3600 },
         { label: '4h', seconds: 14400 },
         { label: '1d', seconds: 86400 },
         { label: '1w', seconds: 604800 },

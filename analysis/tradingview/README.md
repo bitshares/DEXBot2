@@ -34,7 +34,7 @@ The sections below cover manual usage (explicit candle files, direct runner flag
 ## What It Produces
 
 - Log-scale price chart
-- Candle timeframe buttons: `1h`, `4h`, `1d`, `1w`
+- Candle timeframe buttons: `1h`, `4h`, `1d`, `1w`, `1M`
 - Pair-orientation switcher for `A/B` and `B/A`
 - SMA overlay
 - AMA preset buttons `1–4` (one-click AMA1–4, active preset highlighted); numeric inputs kept

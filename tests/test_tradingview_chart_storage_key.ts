@@ -283,6 +283,41 @@ check('slope model: the sim default is the canonical estimator, and the hook sti
         'the hook must actually change the estimator');
 });
 
+// ── Timeframe buttons ─────────────────────────────────────────────
+check('timeframes: the 1h option is present and resolves as default on an hourly base', () => {
+    const html = generateHTML({
+        candles: [
+            [1710000000000, 1, 1.1, 0.9, 1.02, 10],
+            [1710003600000, 1.02, 1.2, 0.98, 1.08, 12],
+            [1710007200000, 1.08, 1.22, 1.01, 1.15, 9],
+        ],
+        meta: { assetA: { symbol: 'A' }, assetB: { symbol: 'B' } },
+        defaultTimeframe: '1h',
+    });
+    const payload = JSON.parse(/<script id="payload"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
+    const oneHour = payload.timeframes.find((tf: { label: string; seconds: number; enabled: boolean }) => tf.label === '1h');
+    assert.ok(oneHour, 'the 1h timeframe must be embedded');
+    assert.strictEqual(oneHour.seconds, 3600);
+    assert.strictEqual(oneHour.enabled, true, '1h must be selectable on a 1h base');
+    assert.strictEqual(payload.defaultTimeframe, '1h', '1h must resolve as the default, not fall through to 4h');
+    assert.ok(html.includes('data-timeframe="1h"'), 'the 1h button must be rendered');
+});
+
+check('timeframes: 1h is disabled when the base is coarser than an hour', () => {
+    const html = generateHTML({
+        candles: [
+            [1710000000000, 1, 1.1, 0.9, 1.02, 10],
+            [1710014400000, 1.02, 1.2, 0.98, 1.08, 12],
+            [1710028800000, 1.08, 1.22, 1.01, 1.15, 9],
+        ],
+        meta: { intervalSeconds: 14400, assetA: { symbol: 'A' }, assetB: { symbol: 'B' } },
+        defaultTimeframe: '1h',
+    });
+    const payload = JSON.parse(/<script id="payload"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
+    const oneHour = payload.timeframes.find((tf: { label: string; seconds: number; enabled: boolean }) => tf.label === '1h');
+    assert.ok(oneHour && oneHour.enabled === false, '1h must not be offered below the base interval');
+});
+
 if (failed > 0) {
     console.error(`tradingview chart storage-key tests FAILED: ${failed} failed, ${passed} passed`);
     process.exit(1);
