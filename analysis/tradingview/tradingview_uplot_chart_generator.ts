@@ -2443,7 +2443,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             return { hooks: { draw: [drawSimBand, drawSimResets] } };
         }
         function buildData() {
-            const tf = timeframeMap.get(currentTimeframe) || timeframeMap.get(defaultTimeframe.label) || timeframes[0];
+            const tf = timeframeMap.get(currentTimeframe) || timeframeMap.get(payload.defaultTimeframe) || timeframes[0];
             currentSeriesState = getSeriesState(currentPairMode);
             currentSeriesCandles = currentSeriesState.candles;
             currentSeriesCloseValues = currentSeriesState.closeValues;
