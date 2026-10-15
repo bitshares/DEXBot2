@@ -98,6 +98,7 @@
     "analysis:trade-pnl": "npm run build && node dist/analysis/trade_profitability.js",
     "analysis:grid-check": "npm run build && node dist/analysis/grid_correction_check.js",
     "analysis:resolve-accounts": "npm run build && node dist/analysis/resolve_bot_accounts.js",
+    "richlist": "npm run build && node dist/scripts/rich_list.js",
     "native:release-gates": "npm run build && npm run build:tests && node dist/scripts/native_release_gates.js",
     "native:serial-snapshots": "npm run build && npm run build:tests && node dist/tests/test_native_serial_ops.js",
     "native:ecc-invariants": "npm run build && npm run build:tests && node dist/tests/test_native_ecc.js",

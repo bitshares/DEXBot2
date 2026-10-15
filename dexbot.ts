@@ -48,7 +48,7 @@ const __dirname = _esmDirname(__filename);
  * Runtime:   dexbot start [bot] | stop | reload | restart | delete | status | pm2
  * Trading:   dexbot test <bot> | drystart <bot> | reset {all|<bot>}
  * Config:    dexbot bot | key | enable {all|<bot>} | disable {all|<bot>} | default | update
- * Analysis:  dexbot order [<bot>] | export <bot> | credit [<bot>]
+ * Analysis:  dexbot order [<bot>] | export <bot> | credit [<bot>] | rich <asset...>
  *            dexbot tv <target> | dw <target> | pnl <account>
  * Files:     dexbot clear | clear-orders | clear-market-adapter | clear-all
  *
@@ -168,7 +168,7 @@ if (typeof credentialPolicy.checkPolicyFileSecurity === 'function') credentialPo
 const PROFILES_BOTS_FILE = PATHS.PROFILES.BOTS_JSON;
 const PROFILES_DIR = PATHS.PROFILES_DIR;
 
-const CLI_COMMANDS = ['start', 'test', 'reset', 'default', 'disable', 'enable', 'drystart', 'key', 'bot', 'pm2', 'update', 'export', 'order', 'credit', 'tv', 'dw', 'pnl', 'git', 'clear', 'clear-orders', 'clear-market-adapter', 'clear-all', 'status', 'unlock', 'delete', 'stop', 'restart', 'reload', 'help'];
+const CLI_COMMANDS = ['start', 'test', 'reset', 'default', 'disable', 'enable', 'drystart', 'key', 'bot', 'pm2', 'update', 'export', 'order', 'credit', 'rich', 'tv', 'dw', 'pnl', 'git', 'clear', 'clear-orders', 'clear-market-adapter', 'clear-all', 'status', 'unlock', 'delete', 'stop', 'restart', 'reload', 'help'];
 const COMMAND_ALIASES: Record<string, string> = { orders: 'order', keys: 'key', bots: 'bot', stat: 'status', stats: 'status', start: 'unlock', defaults: 'default', stp: 'stop', stopall: 'stop', restartall: 'restart', reloadall: 'reload' };
 const CLI_HELP_FLAGS = ['-h', '--help'];
 const CLI_EXAMPLES_FLAG = '--cli-examples';
@@ -183,6 +183,7 @@ const CLI_EXAMPLES = [
     { title: 'Export bot trades', command: 'dexbot export <bot>', notes: 'Write trades and settings to CSV/JSON.' },
     { title: 'Analyze order grids', command: 'dexbot order', notes: 'Spread, increment, and funds; --export for HTML.' },
     { title: 'Show live credit positions', command: 'dexbot credit', notes: 'Summed MPA + borrowed-credit positions per bot.' },
+    { title: 'Asset rich list', command: 'dexbot rich <asset> [<asset...>]', notes: 'Top holder(s) per asset from the chain asset holders API.' },
     { title: 'Chart a bot, pool, or pair', command: 'dexbot tv <bot|pool-id|AssetA/AssetB> --month 3', notes: 'OHLC chart; --feed charts MPA price-feed history.' },
     { title: 'PnL report', command: 'dexbot pnl <bot|account> --month 3 [--pair BASE/QUOTE]', notes: 'Self-contained HTML PnL report for the resolved bot or chain account.' }
 ];
@@ -245,6 +246,7 @@ function printCLIUsage() {
             ['order [<bot>]', 'Analyze persisted order grids; --export for HTML.'],
             ['export <bot>', 'Export bot trades/settings to CSV/JSON.'],
             ['credit [<bot>]', 'Show live MPA and borrowed-credit positions.'],
+            ['rich <asset...>', 'Per-asset rich list / top holder; --top N, --json.'],
             ['tv <target>', 'OHLC chart for <bot|pool-id|AssetA/AssetB>; --month N (default 3), --feed for MPA price-feed history.'],
             ['dw <target>', 'Dynamic-weight research chart; same targets and flags as tv.'],
             ['pnl <account>', 'HTML PnL report for a bot or account; --month N, optional --pair BASE/QUOTE filter.'],
@@ -293,7 +295,7 @@ if (cliArgs.some(arg => CLI_HELP_FLAGS.includes(arg))) {
     // so the script prints its usage. Only scripts with offline help handling
     // belong here — forwarding to a script without it could misinterpret the
     // flag as input (e.g. a bot-name filter triggering live work).
-    const HELP_OWNING_COMMANDS = new Set(['credit', 'tv', 'dw', 'pnl']);
+    const HELP_OWNING_COMMANDS = new Set(['credit', 'rich', 'tv', 'dw', 'pnl']);
     const requestedCommand = COMMAND_ALIASES[cliArgs[0]] ?? cliArgs[0];
     if (!HELP_OWNING_COMMANDS.has(requestedCommand)) {
         printCLIUsage();
@@ -1069,6 +1071,24 @@ async function handleCLICommands() {
             });
             if (result.error) {
                 console.error(`credit: ${result.error.message}`);
+                process.exit(1);
+            }
+            process.exit(result.status ?? 0);
+            return true;
+        }
+        case 'rich': {
+            const { spawnSync } = require('child_process') as typeof import('node:child_process');
+            const scriptArgs = buildRuntimeScriptArgs({
+                codeRoot: __dirname,
+                scriptSegments: ['scripts', 'rich_list'],
+                scriptArgs: cliArgs.slice(1),
+            });
+            const result = spawnSync(Config.EXEC_PATH, scriptArgs, {
+                cwd: PATHS.PROJECT_ROOT,
+                stdio: 'inherit',
+            });
+            if (result.error) {
+                console.error(`rich: ${result.error.message}`);
                 process.exit(1);
             }
             process.exit(result.status ?? 0);

@@ -119,6 +119,31 @@ bash scripts/reset-settings.sh
 node dist/scripts/validate_bots.js
 ```
 
+### Asset Rich List / Top Holder
+**File:** `rich_list.ts` (CLI: `dexbot rich`, npm: `npm run richlist`)
+**Purpose:** Report the top holder(s) per asset using the chain's `asset_api`
+(`get_asset_holders`). Holders come back balance-descending, so this is a live
+rich list. Nodes must expose `asset_api` to anonymous logins; the script tries
+`dex.iobanker.com` / `api.dex.trading` first and falls back through
+`DEFAULT_NODES`.
+```bash
+# Rich list for one asset (default: node holder limit, usually 100)
+dexbot rich <asset>
+
+# Top 10 for several assets
+dexbot rich <asset-a> <asset-b> <asset-c> --top 10
+
+# Machine-readable
+dexbot rich <asset-a> <asset-b> --json > rich.json
+```
+Balances reflect only liquid account balances, so they do not sum to total supply.
+`--top` is clamped to the node's reported `api_limit_get_asset_holders` (shown
+as a note when clamped). Legacy `bit*` MPA names were renamed on-chain without
+the `bit` prefix; the script retries an unresolved `bit*` name stripped and notes
+the rename. Note:
+`get_asset_holders_count` is reported by the node as `distance(range) - 1`, so
+the `holders=` figure can be off by one.
+
 ### Grid Divergence Audit
 **File:** `divergence-calc.ts`
 **Purpose:** Measure the "drift" between in-memory grid and disk state using RMS divergence metric.
@@ -374,6 +399,7 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run analysis:trade-pnl` | Trade PnL analysis from fill data |
 | `npm run analysis:grid-check` | Last-fill-guard check (`grid_correction_check.ts`) |
 | `npm run analysis:resolve-accounts` | Batch-resolve on-chain bot accounts (`resolve_bot_accounts.ts`) |
+| `npm run richlist` | Per-asset rich list / top holder (`rich_list.ts`) |
 | `npm run ama:chart:lp-local` | Generate local LP comparison chart |
 | `npm run lp:chart` | Generate uPlot LP chart |
 | `npm run test:credit-renewal` | Test credit offer renewal for a specific bot |

@@ -252,6 +252,7 @@ the canonical name is preferred in scripts and docs.
 | `dexbot order` | `orders` | Analyze persisted order grids (spread, increment, funds); `--export` for HTML |
 | `dexbot order [<bot>]` | — | Analyze only the specified bot's order grid |
 | `dexbot credit` | — | Live summed MPA + borrowed-credit positions per asset per bot (`[<bot>]`) |
+| `dexbot rich <asset...>` | — | Top holder(s) per asset via the chain asset-holders API (`--top N`, `--json`/`--csv`) |
 | `dexbot tv <target>` | — | TradingView 1h chart for `<bot|pool-id|AssetA/AssetB>` over `--month N` (default 3) |
 | `dexbot dw <target>` | — | Dynamic-weight research chart: same targets/flags as `tv` |
 | `dexbot pnl <account>` | — | HTML PnL report for a bot/account over `--month N`, optional `--pair BASE/QUOTE` filter |
