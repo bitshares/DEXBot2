@@ -621,7 +621,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
                     <div id="title">${escapeHtml(title)}</div>
                     <span id="data-age" title="Age of the newest candle, recomputed live in the browser. Fresh: under 24h, stale: 1–7 days, out of date: over a week.">—</span>
                 </div>
-                <div id="subtitle">${escapeHtml(poolLabel)} · ${escapeHtml(pairLabelNormal)} · ${escapeHtml(intervalLabel)} base · indicators from 1h · volume · uPlot</div>
+                <div id="subtitle">${escapeHtml(poolLabel)} · ${escapeHtml(pairLabelNormal)} · ${escapeHtml(intervalLabel)} base · indicators from 1h</div>
             </div>
             <div id="toolbar">
                 <div class="toolbar-row primary-toolbar-row">
@@ -1263,7 +1263,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
         function refreshSubtitle() {
             const subtitleEl = document.getElementById('subtitle');
             if (!subtitleEl) return;
-            subtitleEl.textContent = payload.poolLabel + ' · ' + getPairLabel() + ' · ' + payload.intervalLabel + ' base · indicators from 1h · volume · uPlot';
+            subtitleEl.textContent = payload.poolLabel + ' · ' + getPairLabel() + ' · ' + payload.intervalLabel + ' base · indicators from 1h';
         }
         function snapInitOffset(value) {
             const next = Math.round(Number(value) || 0);
