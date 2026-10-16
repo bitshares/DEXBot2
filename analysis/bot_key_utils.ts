@@ -391,14 +391,15 @@ function resolveAmaConfig(botKey: unknown): AmaConfig {
     }
 
     const marketProfiles = loadMarketProfiles();
-    // Pair match is case-insensitive: market_profiles.json and bots.json are
-    // hand-edited, and a case-only difference must not silently drop the
-    // profile (a strict === here made the AMA/grid config vanish).
+    // Pair match is case-insensitive AND orientation-insensitive: a profile may
+    // have been fitted from either side of the pair (the candle cache stores
+    // canonically). Matching only the bot's typed order would silently drop the
+    // profile and fall back to builtin AMA defaults.
     const selectedProfile = (marketProfiles?.profiles
         ? marketProfiles.profiles.find((entry: { assetA?: unknown; assetB?: unknown; intervalSeconds?: unknown }) =>
-            isSameAssetSymbol(entry.assetA, botMeta.assetA) &&
-            isSameAssetSymbol(entry.assetB, botMeta.assetB) &&
-            Number(entry.intervalSeconds) === 3600)
+            Number(entry.intervalSeconds) === 3600 &&
+            ((isSameAssetSymbol(entry.assetA, botMeta.assetA) && isSameAssetSymbol(entry.assetB, botMeta.assetB)) ||
+             (isSameAssetSymbol(entry.assetA, botMeta.assetB) && isSameAssetSymbol(entry.assetB, botMeta.assetA))))
         : null) as { defaultAma?: string; amas?: Record<string, { erPeriod: number; fastPeriod: number; slowPeriod: number }> } | null | undefined;
 
     if (selectedProfile?.amas) {

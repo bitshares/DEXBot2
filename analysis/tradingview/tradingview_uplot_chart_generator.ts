@@ -94,8 +94,14 @@ function findMarketProfile(profiles: unknown, meta: MarketMeta = {}): Record<str
         if (!entry || typeof entry !== 'object') return false;
         const e = entry as Record<string, unknown>;
         if (assetA && assetB) {
-            const matchesPair = (String(e.assetA) === String(assetA) || String(e.assetAId) === String(assetA))
-                && (String(e.assetB) === String(assetB) || String(e.assetBId) === String(assetB));
+            // Orientation-insensitive like the other market-profile consumers:
+            // a profile may have been fitted from either side of the pair.
+            const eA = [String(e.assetA), String(e.assetAId)];
+            const eB = [String(e.assetB), String(e.assetBId)];
+            const targetA = String(assetA);
+            const targetB = String(assetB);
+            const matchesPair = (eA.includes(targetA) && eB.includes(targetB))
+                || (eA.includes(targetB) && eB.includes(targetA));
             if (!matchesPair) return false;
         } else {
             return false;
@@ -3935,5 +3941,5 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
 </html>`;
 }
 
-export { generateHTML, normalizeCandle, loadMarketProfiles, resolveChartStorageKey, sanitizeStorageComponent, TRADINGVIEW_PREFS_KEY_PREFIX, TRADINGVIEW_SYNC_KEY }
+export { generateHTML, normalizeCandle, loadMarketProfiles, findMarketProfile, resolveChartStorageKey, sanitizeStorageComponent, TRADINGVIEW_PREFS_KEY_PREFIX, TRADINGVIEW_SYNC_KEY }
 

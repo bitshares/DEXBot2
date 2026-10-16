@@ -14,6 +14,7 @@ import { range, geometricRange, percentile } from '../math_utils.js';
 import { runModuleWorker, splitIntoShards } from '../worker_pool.js';
 import { getStorage } from '../../modules/storage/index.js';
 import { normalizeAssetSymbol } from '../../modules/utils/asset_symbols.js';
+import { canonicalPair } from '../../market_adapter/utils/pair_orientation.js';
 const { readJSON, writeJSON } = getStorage();
 
 import {
@@ -324,13 +325,25 @@ function updateAmaProfilesFile({ dataFile, meta, winners, sourceResultsFile }: {
     const assetBSymbol = normalizeSymbol(meta?.assetB?.symbol);
     const assetAId = normalizeSymbol(meta?.assetA?.id);
     const assetBId = normalizeSymbol(meta?.assetB?.id);
-    const assetA = assetASymbol || assetAId;
-    const assetB = assetBSymbol || assetBId;
+    // Canonical orientation on write, matching the candle cache: a pool fitted
+    // from either data orientation produces ONE self-consistent profile entry
+    // (`BTS|IOB.XRP|3600`, never also `IOB.XRP|BTS|3600`). The lookup-side
+    // tolerance then only has to cover pre-existing/foreign entries.
+    const hasIds = Boolean(assetAId && assetBId);
+    const order = canonicalPair(
+        { id: hasIds ? assetAId : null, symbol: assetASymbol || assetAId },
+        { id: hasIds ? assetBId : null, symbol: assetBSymbol || assetBId }
+    );
+    const assetA = normalizeSymbol(order.assetA.symbol) || normalizeSymbol(order.assetA.id);
+    const assetB = normalizeSymbol(order.assetB.symbol) || normalizeSymbol(order.assetB.id);
+    const canonAId = normalizeSymbol(order.assetA.id);
+    const canonBId = normalizeSymbol(order.assetB.id);
     if (!assetA || !assetB) return;
 
     const intervalSeconds = Number(meta?.intervalSeconds);
     const intervalLabel = inferIntervalLabel(dataFile, meta);
-    const key = `${assetA}|${assetB}|${Number.isFinite(intervalSeconds) && intervalSeconds > 0 ? intervalSeconds : intervalLabel}`;
+    const intervalKey = Number.isFinite(intervalSeconds) && intervalSeconds > 0 ? intervalSeconds : intervalLabel;
+    const key = `${assetA}|${assetB}|${intervalKey}`;
 
     const payload: {
         version: number;
@@ -356,8 +369,8 @@ function updateAmaProfilesFile({ dataFile, meta, winners, sourceResultsFile }: {
         key,
         assetA,
         assetB,
-        assetAId: assetAId || null,
-        assetBId: assetBId || null,
+        assetAId: canonAId || null,
+        assetBId: canonBId || null,
         poolId: meta?.pool || null,
         intervalSeconds: Number.isFinite(intervalSeconds) && intervalSeconds > 0 ? intervalSeconds : null,
         intervalLabel,
@@ -392,7 +405,21 @@ function updateAmaProfilesFile({ dataFile, meta, winners, sourceResultsFile }: {
         },
     };
 
-    const idx = payload.profiles.findIndex((p) => String((p as { key?: unknown } | null)?.key || '') === key);
+    // Replace on canonical key, or on the SAME pair in either orientation so a
+    // profile written before canonicalization converges to one entry instead of
+    // accumulating a duplicate.
+    const sameIntervalAs = (entry: Record<string, unknown>): boolean =>
+        (Number.isFinite(intervalSeconds) && intervalSeconds > 0 && Number(entry.intervalSeconds) === intervalSeconds)
+        || String(entry.intervalLabel || '') === intervalLabel;
+    const idx = payload.profiles.findIndex((p) => {
+        const entry = p as Record<string, unknown> | null;
+        if (!entry) return false;
+        if (String(entry.key || '') === key) return true;
+        if (!sameIntervalAs(entry)) return false;
+        const eA = String(entry.assetA || entry.assetAId || '');
+        const eB = String(entry.assetB || entry.assetBId || '');
+        return (eA === assetA && eB === assetB) || (eA === assetB && eB === assetA);
+    });
     if (idx >= 0) payload.profiles[idx] = profile;
     else payload.profiles.push(profile);
 
@@ -831,5 +858,5 @@ if (!isMainThread) {
     });
 }
 
-export { parseArgs }
+export { parseArgs, updateAmaProfilesFile }
 
