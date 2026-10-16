@@ -1193,7 +1193,7 @@ function createSubscriptionManager(chainClient: SubscriptionChainClient, overrid
                     // already armed by handleNotice cursor advances and by
                     // resubscribeEntry/resubscribeAll on disconnects. Poll does NOT arm
                     // unconditionally — that would turn every 60s tick into a 40-page
-                    // re-fetch forever (~80 pages/min for bbot9+bbot4). If a gap-recovery
+                    // re-fetch forever (~80 pages/min across several tracked accounts). If a gap-recovery
                     // fetch previously threw, _gapRecovery stays true and the next poll
                     // will run the lookback; otherwise this tick is just a plain >cursor
                     // scan with no lookback. Eager gap-recovery scheduled in handleNotice

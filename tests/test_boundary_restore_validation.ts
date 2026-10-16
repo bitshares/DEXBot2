@@ -323,7 +323,7 @@ async function testLoadGridRefusesSnapshotWithoutLadder() {
 
 // ── recovery: poisoned snapshot refused so resync rebuilds clean ────────
 // NOTE: transient stranding (placed_order_in_band) is tolerated by recovery
-// (H-BTS 2026-09-13: stale snapshot mid-evacuation must not force a resync
+// (<bot> 2026-09-13: stale snapshot mid-evacuation must not force a resync
 // that wipes the evacuation).  This test pins the still-rejected structural
 // poison shape: sell-rail ceiling overrun (N=10, g=2 -> maxAllowed 7).
 
@@ -369,7 +369,7 @@ async function testRecoveryToleratesTransientStranding() {
     // Single SPREAD-GUARD strand: honest boundary 5 with slot-6 still placed
     // (fill-driven crawl moved it into the band; GAP-EVAC pending).  Under
     // the old gate this forced rms_structural_grid_resync and wiped the
-    // in-progress evacuation (H-BTS 2026-09-13: slot-96 → slot-116 plan lost).
+    // in-progress evacuation (<bot> 2026-09-13: slot-96 → slot-116 plan lost).
     const grid = buildGrid();
     grid[6] = { ...grid[6], orderId: '1.7.999', state: ORDER_STATES.ACTIVE, size: 10 };
     const bot = {

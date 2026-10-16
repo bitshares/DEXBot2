@@ -24,7 +24,7 @@ const {
     deriveTradeFromFillBlock,
 } = require('../modules/order/export');
 
-// H-BTS market fixtures (mirrors profiles/orders/h-bts.json):
+// <bot> market fixtures (mirrors profiles/orders/<botKey>.json):
 // assetA = HONEST.MONEY (1.3.6301, precision 8), assetB = BTS (1.3.0, precision 5).
 const ASSET_CTX = {
     assetA: { id: '1.3.6301', precision: 8, symbol: 'HONEST.MONEY' },

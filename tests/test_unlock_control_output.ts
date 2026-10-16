@@ -22,7 +22,7 @@ console.log('Running unlock control output tests');
 
 const FIXTURE_BOTS = [
     { name: 'AAA-BBB', active: true },
-    { name: 'HONEST-BTS', active: true },
+    { name: '<bot>', active: true },
 ];
 
 function formatBotCount(count) {

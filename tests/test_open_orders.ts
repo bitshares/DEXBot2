@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * Test script to fetch and display open orders from the blockchain
- * for account hanzac-si, showing order ID, size, and price in a visual format.
+ * for the configured test account (BITSHARES_TEST_ACCOUNT), showing order ID, size, and price in a visual format.
  */
 
 const { BitShares } = require('../modules/bitshares_client');
 const { getErrorMessage } = require('../modules/utils/errors');
 
-const ACCOUNT_NAME = 'hanzac-si';
+const ACCOUNT_NAME = process.env.BITSHARES_TEST_ACCOUNT || '<account-name>';
 
 // Asset precision lookup (will be populated from chain)
 const assetPrecisions: any = {};

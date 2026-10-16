@@ -16,7 +16,7 @@ if (process.env.RUN_LIVE_BITSHARES_TESTS !== '1') {
 const { BitShares } = require('../modules/bitshares_client');
 const { getErrorMessage } = require('../modules/utils/errors');
 
-const ACCOUNT_NAME = 'hanzac-si';
+const ACCOUNT_NAME = process.env.BITSHARES_TEST_ACCOUNT || '<account-name>';
 
 const assetPrecisions: any = {};
 

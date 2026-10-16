@@ -1,7 +1,7 @@
 /**
  * tests/test_fill_defer_retry.ts
  *
- * Regression tests for the 2026-09-13 H-BTS incident (slot-86 /
+ * Regression tests for the 2026-09-13 <bot> incident (slot-86 /
  * 1.7.574247542): a lone fill deferred by consumeFillQueue's pre-lock gates
  * was parked with no wake-up — no region end (leaked flag), no second fill
  * (the 60s bound is edge-triggered), no maintenance tick (a non-empty queue

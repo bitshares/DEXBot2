@@ -25,7 +25,7 @@ if (invoked) {
     // explicit --html/--report untouched so their own handling wins.
     // Append (never prepend) the injected flag: the analyzer treats argv[0] as
     // the account/target positional, so a leading flag would be read as the
-    // account name (`dexbot pnl bbot9` would become `--html bbot9`).
+    // account name (`dexbot pnl <account-name>` would become `--html <account-name>`).
     const hasTarget = args.some(a => !a.startsWith('-'));
     const ownsOutput = args.includes('--html') || args.includes('--report') || args.includes('--help') || args.includes('-h');
     if (hasTarget && !ownsOutput) args.push('--html');

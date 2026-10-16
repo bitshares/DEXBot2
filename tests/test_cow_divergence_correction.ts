@@ -368,7 +368,7 @@ async function testCOWDivergenceCorrection() {
         console.log('  ✓ Surplus orders repriced in place onto hole slots\n');
     }
 
-    // Test 6: h-bts regression — a boundary shift leaves on-chain
+    // Test 6: regression — a boundary shift leaves on-chain
     // SELL orders inside the new spread gap.  The SPREAD GUARD keeps them typed
     // SELL (never SPREAD+ACTIVE), so a type-only window would pick them as
     // "closest to market" and leave the rail parked across the gap (spread

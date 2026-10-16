@@ -41,8 +41,8 @@ assert.strictEqual(
 
 assert.deepStrictEqual(selectActiveBotEntries({ bots: [] }), [], 'empty bot config should remain empty');
 assert.deepStrictEqual(
-    selectActiveBotEntries({ bots: [{ name: 'AAA-BBB', active: false }, { name: 'H-BTS', active: true }] }),
-    [{ name: 'H-BTS', active: true }],
+    selectActiveBotEntries({ bots: [{ name: 'AAA-BBB', active: false }, { name: '<bot>', active: true }] }),
+    [{ name: '<bot>', active: true }],
     'inactive bots should be filtered out'
 );
 const clawOnlyApps = buildEcosystemApps([], { includeUpdater: false });

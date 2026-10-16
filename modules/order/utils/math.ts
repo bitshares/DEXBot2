@@ -1689,7 +1689,7 @@ function validatePersistedBoundary(
  * over 2-3 cycles, so a snapshot taken mid-evacuation (or stale by one
  * crawl, as in recovery-before-CREATE) legitimately reports this.  Nuking
  * the snapshot for it discards the boundary progression, pending crawls,
- * streaks and the queued evacuation — the exact sabotage loop seen in H-BTS
+ * streaks and the queued evacuation — the exact sabotage loop seen in <bot>
  * 2026-09-13 (GAP-EVAC flags slot-96, COW plans 96→116, stale snapshot with
  * slot-94 still stranded fails validation, structural resync wipes the
  * plan).  All other reasons (ceiling/range/crossed-book/...) are structural
@@ -1748,7 +1748,7 @@ function countGapBandSpread(manager: OrderManagerLike, orders: Iterable<ManagedO
  * (grid_reconcile_internal.ts), and the COW divergence correction (system.ts).
  * Drift between those copies is what let a fund-driven boundary shift leave a
  * SPREAD GUARD-typed stray inside the gap as "closest to market" — collapsing
- * the spread (h-bts: boundary 107→110 left the sell rail parked at 111-130
+ * the spread (<bot>: boundary 107→110 left the sell rail parked at 111-130
  * with the bottom three, 111-113, inside the new spread gap; real spread 0.5%
  * vs the 2.0% target).
  *

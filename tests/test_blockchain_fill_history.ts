@@ -2,9 +2,10 @@
 /**
  * Test: Blockchain Fill History Structure Validation
  *
- * Fetches real fill history from BitShares blockchain for account "hanzac-si"
- * and validates that each history entry has a unique ID field that can be
- * used in fill deduplication.
+ * Fetches real fill history from BitShares blockchain for the account named
+ * by `BITSHARES_TEST_ACCOUNT` / `BITSHARES_TEST_ACCOUNT_ID` and validates that
+ * each history entry has a unique ID field that can be used in fill
+ * deduplication. Set both env vars to run it against your own account.
  *
  * Run: node dist/tests/test_blockchain_fill_history.js
  */
@@ -18,8 +19,8 @@ if (process.env.RUN_LIVE_BITSHARES_TESTS !== '1') {
 const { BitShares, waitForConnected } = require('../modules/bitshares_client');
 const { getErrorMessage } = require('../modules/utils/errors');
 
-const ACCOUNT_NAME = 'hanzac-si';
-const ACCOUNT_ID = '1.2.1074325';  // Known ID for hanzac-si
+const ACCOUNT_NAME = process.env.BITSHARES_TEST_ACCOUNT || '<account-name>';
+const ACCOUNT_ID = process.env.BITSHARES_TEST_ACCOUNT_ID || '<account-id>';
 
 async function testBlockchainFillHistory() {
     console.log('=== Blockchain Fill History Structure Test ===\n');

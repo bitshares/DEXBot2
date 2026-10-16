@@ -1,6 +1,6 @@
 /**
  * Tests for startup reconciliation logic
- * Validates H-BTS grid edge detection and two-phase update strategy
+ * Validates <bot> grid edge detection and two-phase update strategy
  */
 
 const assert = require('assert');

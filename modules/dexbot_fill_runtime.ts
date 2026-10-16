@@ -655,7 +655,7 @@ function scheduleFillConsumerRestart(bot: BotLike, chainOrders: ChainOrdersLike)
  * Level-triggered retry for fills parked by consumeFillQueue's pre-lock
  * gates (order-pipeline or broadcast deferral).
  *
- * Incident (2026-09-13, H-BTS slot-86): a lone fill deferred by an active
+ * Incident (2026-09-13, <bot> slot-86): a lone fill deferred by an active
  * broadcast never drained — the defer branches returned without
  * rescheduling, and none of the edge-triggered wake-ups came: the flag was
  * leaked (no region end would ever fire), no second fill arrived to trip
@@ -1040,7 +1040,7 @@ async function consumeFillQueue(bot: BotLike, chainOrders: ChainOrdersLike) {
         resetFailureWatchdogIfSet();
         // Level-triggered retry: without this, a lone fill parked here
         // waits for a region end / second fill / maintenance tick that may
-        // never come (2026-09-13 H-BTS slot-86).
+        // never come (2026-09-13 <bot> slot-86).
         scheduleDeferredFillRetry(bot, chainOrders, 'order pipeline active');
         return;
     }
@@ -1060,7 +1060,7 @@ async function consumeFillQueue(bot: BotLike, chainOrders: ChainOrdersLike) {
         resetFailureWatchdogIfSet();
         // Level-triggered retry: without this, a lone fill parked here
         // waits for a region end / second fill / maintenance tick that may
-        // never come (2026-09-13 H-BTS slot-86).
+        // never come (2026-09-13 <bot> slot-86).
         scheduleDeferredFillRetry(bot, chainOrders, 'broadcast active');
         return;
     }

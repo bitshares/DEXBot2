@@ -33,7 +33,7 @@ const supervisorControlPath = require.resolve('../modules/launcher/supervisor_co
 
 const FIXTURE_BOTS = [
     { name: 'AAA-BBB', active: true },
-    { name: 'HONEST-BTS', active: true },
+    { name: '<bot>', active: true },
 ];
 
 const UNLOCK_JS = path.resolve(__dirname, '..', 'unlock.js');

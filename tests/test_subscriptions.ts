@@ -30,7 +30,7 @@ const forceExit = setTimeout(() => {
     try {
         // subscribe twice for same account id
         // prefer account selected from profiles/bots.json (preferredAccount) for test consistency
-        let TEST_ACCOUNT = '1.2.1624309';
+        let TEST_ACCOUNT = '1.2.12345';
         try {
             const live = require('../profiles/bots.json');
             const bot = (live.bots || [])[0];

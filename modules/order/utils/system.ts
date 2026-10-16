@@ -1821,7 +1821,7 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
     // orders through the budget allocation below but never shift rails.  The
     // fund-ratio writer was removed — it moved the boundary without guaranteed
     // same-batch refills, so a guard-vetoed refill stranded empty slots past
-    // the new boundary (h-bts 91->94) with no repair path.  Remaining writers:
+    // the new boundary (<bot> 91->94) with no repair path.  Remaining writers:
     // fills (deriveTargetBoundary, same-cycle rotations) and spread promotion
     // (shifts only onto slots placed in the same atomic batch).
     let resizeCowResult: GridResizeResult | null | undefined = null;
@@ -1864,7 +1864,7 @@ export async function applyGridDivergenceCorrections(manager: OrderManagerLike, 
         // GUARD keeps gap-band strays typed BUY/SELL (never SPREAD+ACTIVE), so
         // without a geometric filter they are selected as "closest to market"
         // and left inside the gap — collapsing the spread when a fill-driven
-        // boundary shift moves into the rail (h-bts: boundary 107->110 left
+        // boundary shift moves into the rail (<bot>: boundary 107->110 left
         // the sell rail parked at 111-130 with the bottom three, 111-113,
         // inside the new spread gap; real spread 0.5% instead of the 2.0%
         // target).

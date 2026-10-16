@@ -72,7 +72,7 @@ let capturedHandler: ((params: any) => void) | null = null;
 const mockChain: any = {
     db: {
         get_full_accounts: async (_ref: any, _subscribe: boolean) => [
-            ['bbot9', { account: { id: ACCOUNT, statistics: ACCOUNT } }],
+            ['account-name', { account: { id: ACCOUNT, statistics: ACCOUNT } }],
         ],
         call: async (_method: string, _args: any) => undefined,
     },
@@ -90,7 +90,7 @@ async function main() {
     const delivered: string[] = [];
     const seen = new Set<string>();
 
-    await mgr.subscribe('bbot9', (fills: any[]) => {
+    await mgr.subscribe('account-name', (fills: any[]) => {
         for (const f of fills) {
             if (!seen.has(f.id)) {
                 seen.add(f.id);
@@ -104,7 +104,7 @@ async function main() {
 
     // Simulate a bot that had only synced up to 1.11.5000 before the crash burst.
     // (subscribe primes from chain head, so override to the stale value.)
-    const sub = mgr.getSubscriptions().get('bbot9');
+    const sub = mgr.getSubscriptions().get('account-name');
     if (!sub) throw new Error('subscription entry missing after subscribe');
     sub.lastDeliveredHistoryId = '1.11.5000';
 
@@ -128,7 +128,7 @@ async function main() {
     console.log('Delivered top fill 6002:', gotTop);
     console.log('Final cursor:', finalCursor, '(must be 1.11.6002, the newest op — not a gap entry)');
 
-    mgr.unsubscribe('bbot9');
+    mgr.unsubscribe('account-name');
 
     if (gotGap && gotTop && cursorCorrect) {
         console.log('PASS: gap recovered AND cursor advanced to newest op (no re-scan loop).');

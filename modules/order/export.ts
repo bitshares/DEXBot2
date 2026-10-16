@@ -597,8 +597,8 @@ async function exportBotTrades(botKey: string, botConfig: GridConfig, outputDir:
         try {
             const logFiles = storage.readdir(logsDir);
             const want = String(botKey).toLowerCase();
-            // Case-insensitive: log files use the display name (XRP-BTS.log)
-            // while bot keys are lowercase (xrp-bts). Prefer the exact
+            // Case-insensitive: log files use the display name (<bot>.log)
+            // while bot keys are lowercase (e.g. <botKey>). Prefer the exact
             // "<key>.log" hit, fall back to any non-error log containing the key.
             const exactLog = logFiles.find((f: string) =>
                 f.toLowerCase() === `${want}.log`

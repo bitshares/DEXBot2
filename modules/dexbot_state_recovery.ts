@@ -347,7 +347,7 @@ async function recoverFromPersistedGrid(bot: BotLike) {
         // SPREAD-GUARD mid-evacuation state (live orders crawled into the band,
         // GAP-EVAC streak already tracking it; the snapshot may also be stale
         // by one crawl).  Rejecting it here forces a structural resync that
-        // wipes the in-progress evacuation — the H-BTS 2026-09-13 sabotage
+        // wipes the in-progress evacuation — the <bot> 2026-09-13 sabotage
         // loop.  Warn + load instead; GAP-EVAC/sync sweeps own the cleanup.
         // All other reasons stay rebuild-worthy.
         let tolerateTransientStranding = false;

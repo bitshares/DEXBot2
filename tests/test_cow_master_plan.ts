@@ -914,7 +914,7 @@ async function testCOW018c_PartialPreservePathNormalizesMalformedSize() {
 /**
  * COW-019: PARTIAL surplus rotation must clamp to booked remainder (no grid gap).
  *
- * PRODUCTION INCIDENT (XRP-BTS, 2026-09-04): slot-103 filled and became a
+ * PRODUCTION INCIDENT (<bot>, 2026-09-04): slot-103 filled and became a
  * spread placeholder (hole), while distant slot-123 sat PARTIAL with 3.314
  * remaining against a 4.84 hole target. The planner emitted rotation UPDATE
  * slot-123 -> slot-103 at the full hole size, and the COW executor's

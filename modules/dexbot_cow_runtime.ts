@@ -606,7 +606,7 @@ async function deferUncertainBroadcastRead(bot: BotLike, detail: string, suffix:
     // Fix #6 (docs/ORDER_ENGINE_POST_1.0_RETROSPECTIVE.md §2): an ambiguous/truncated chain read is
     // node lag, not a missing order — the broadcast already succeeded. Previously every
     // such read requested a structural resync, piling pending broadcasts (up to 14) and
-    // forcing a resync mid-broadcast (the T-BTS 06:43Z thrash). The pending-broadcast
+    // forcing a resync mid-broadcast (the <bot> 06:43Z thrash). The pending-broadcast
     // protection already prevents double-creates on the next cycle, so we keep it and
     // only escalate to a structural resync once per cooldown window. The next clean
     // read adopts any landed orders without the churn.

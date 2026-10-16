@@ -24,8 +24,8 @@ function writeBotsFixture(tempRoot) {
     fs.writeFileSync(path.join(tempRoot, 'bots.json'), JSON.stringify({
         bots: [
             { name: 'AAA-BBB', active: true },
-            { name: 'H-BTS', active: true },
-            { name: 'T-BTS', active: true },
+            { name: '<bot-a>', active: true },
+            { name: '<bot-b>', active: true },
         ],
     }));
 }
@@ -58,11 +58,11 @@ async function runOutputStage() {
                 action: 'stop',
                 targetIncludes: 'ecosystem.config.cjs',
                 stdout: [
-                    '[PM2] Applying action stopProcessId on app [AAA-BBB, H-BTS, T-BTS, dexbot-update](ids: [ 63, 64, 65, 66 ])',
-                    '[PM2] [H-BTS](64) ✓',
+                    '[PM2] Applying action stopProcessId on app [AAA-BBB, <bot-a>, <bot-b>, dexbot-update](ids: [ 63, 64, 65, 66 ])',
+                    '[PM2] [<bot-a>](64) ✓',
                     '[PM2] [AAA-BBB](63) ✓',
                     '[PM2] [dexbot-update](66) ✓',
-                    '[PM2] [T-BTS](65) ✓',
+                    '[PM2] [<bot-b>](65) ✓',
                     '┌────┬────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐',
                     '│ id │ name           │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │',
                     '└────┴────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘',
@@ -72,11 +72,11 @@ async function runOutputStage() {
                 action: 'delete',
                 targetIncludes: 'ecosystem.config.cjs',
                 stdout: [
-                    '[PM2] Applying action deleteProcessId on app [AAA-BBB, H-BTS, T-BTS, dexbot-update](ids: [ 63, 64, 65, 66 ])',
-                    '[PM2] [H-BTS](64) ✓',
+                    '[PM2] Applying action deleteProcessId on app [AAA-BBB, <bot-a>, <bot-b>, dexbot-update](ids: [ 63, 64, 65, 66 ])',
+                    '[PM2] [<bot-a>](64) ✓',
                     '[PM2] [AAA-BBB](63) ✓',
                     '[PM2] [dexbot-update](66) ✓',
-                    '[PM2] [T-BTS](65) ✓',
+                    '[PM2] [<bot-b>](65) ✓',
                     '┌────┬────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐',
                     '│ id │ name           │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │',
                     '└────┴────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘',
@@ -108,10 +108,10 @@ async function runOutputStage() {
             [
                 'Stopping PM2 processes: all',
                 '',
-                '[PM2] [H-BTS](64) ✓',
+                '[PM2] [<bot-a>](64) ✓',
                 '[PM2] [AAA-BBB](63) ✓',
                 '[PM2] [dexbot-update](66) ✓',
-                '[PM2] [T-BTS](65) ✓',
+                '[PM2] [<bot-b>](65) ✓',
                 '',
                 'All dexbot PM2 processes stopped.',
             ],
@@ -134,10 +134,10 @@ async function runOutputStage() {
             [
                 'Deleting PM2 processes: all',
                 '',
-                '[PM2] [H-BTS](64) ✓',
+                '[PM2] [<bot-a>](64) ✓',
                 '[PM2] [AAA-BBB](63) ✓',
                 '[PM2] [dexbot-update](66) ✓',
-                '[PM2] [T-BTS](65) ✓',
+                '[PM2] [<bot-b>](65) ✓',
                 '',
                 'All dexbot PM2 processes deleted.',
             ],

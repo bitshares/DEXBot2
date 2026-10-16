@@ -7,7 +7,7 @@
 const { BitShares } = require('../modules/bitshares_client');
 const { getErrorMessage } = require('../modules/utils/errors');
 
-const ACCOUNT_NAME = 'hanzac-si';
+const ACCOUNT_NAME = process.env.BITSHARES_TEST_ACCOUNT || '<account-name>';
 const STRICT_LIVE_TEST = process.env.RUN_LIVE_BITSHARES_TESTS_STRICT === '1';
 const OVERALL_TIMEOUT_MS = Number(process.env.BITSHARES_FUNDS_TEST_TIMEOUT_MS) || 20000;
 

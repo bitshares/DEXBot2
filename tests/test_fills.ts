@@ -13,7 +13,7 @@ if (!RUN_LIVE_TEST) {
 const { listenForFills } = require('../modules/chain_orders');
 const { getErrorMessage } = require('../modules/utils/errors');
 
-let TEST_ACCOUNT = '1.2.1624309';
+let TEST_ACCOUNT = '1.2.12345';
 try {
     const live = require('../profiles/bots.json');
     // prefer a bot declared with a preferredAccount in live settings
