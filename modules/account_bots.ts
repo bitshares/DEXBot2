@@ -1749,6 +1749,9 @@ async function main() {
                         saveBotsConfig(config, filePath);
                         result.commitAdapter?.();
                         console.log(`\nAdded bot '${result.data.name}' to ${path.basename(filePath)}.`);
+                        // Return to the Actions menu instead of immediately
+                        // opening another blank New Bot editor.
+                        break;
                     } catch (err) {
                         console.log(`\n❌ Invalid input: ${getErrorMessage(err)}\n`);
                         break;
