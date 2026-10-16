@@ -38,6 +38,7 @@ import { path } from '../../modules/path_api.js';
 import { PATHS } from '../../modules/paths.js';
 import { toIntervalLabel, slugPart } from '../interval_utils.js';
 import { buildFetchWindowsFromRange, runCachedWindows } from './window_cache.js';
+import { canonicalPair, pairFolderSlug, sameAssets, swappedAssets, inverseSiblingOutPath, compareAssetIds } from '../utils/pair_orientation.js';
 import { isTransientNetworkError, sleepMs } from '../../modules/utils/errors.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -578,8 +579,20 @@ function feedCacheKey(feedCtx: FeedContext): string {
 
 function feedOutputPath(feedKey: string, intervalSeconds: number, assetA: AssetRef, assetB: AssetRef): string {
     const label = toIntervalLabel(intervalSeconds);
-    const folder = `${slugPart(assetA?.symbol)}_${slugPart(assetB?.symbol)}`;
+    // Canonical orientation: the inverse pair shares one feed cache folder.
+    const canon = canonicalPair(assetA || {}, assetB || {});
+    const folder = pairFolderSlug(canon.assetA, canon.assetB);
     return path.join(PATHS.MARKET_ADAPTER.FEED_DATA_DIR, folder, `feed_${slugPart(feedKey)}_${label}.json`);
+}
+
+/**
+ * Cross legs sorted by MPA id so the feed key is orientation-independent; a
+ * single leg is returned untouched.
+ */
+function normalizeFeedLegs(feedCtx: FeedContext): FeedContext {
+    if (feedCtx?.kind !== 'cross' || !Array.isArray(feedCtx.legs)) return feedCtx;
+    const legs = [...feedCtx.legs].sort((a, b) => compareAssetIds(a?.mpa?.id, b?.mpa?.id));
+    return { ...feedCtx, legs };
 }
 
 function isFeedChunkMatch(metaInput: unknown, requestKeyInput: unknown): boolean {
@@ -587,9 +600,16 @@ function isFeedChunkMatch(metaInput: unknown, requestKeyInput: unknown): boolean
     const requestKey = requestKeyInput as { feed: string; intervalSeconds: number; assetA: AssetRef; assetB: AssetRef };
     if (meta.feed !== requestKey.feed) return false;
     if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
-    if (meta.assetA?.id !== requestKey.assetA.id || meta.assetB?.id !== requestKey.assetB.id) return false;
-    if (meta.assetA?.precision !== requestKey.assetA.precision || meta.assetB?.precision !== requestKey.assetB.precision) return false;
-    return true;
+    return sameAssets(meta, requestKey);
+}
+
+/** Same identity, opposite orientation (legacy pre-canonicalization shard). */
+function isFeedChunkMatchInverse(metaInput: unknown, requestKeyInput: unknown): boolean {
+    const meta = metaInput as { feed?: unknown; intervalSeconds?: unknown; assetA?: AssetRef; assetB?: AssetRef };
+    const requestKey = requestKeyInput as { feed: string; intervalSeconds: number; assetA: AssetRef; assetB: AssetRef };
+    if (meta.feed !== requestKey.feed) return false;
+    if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
+    return swappedAssets(meta, requestKey);
 }
 
 async function fetchFeedCandlesSequentially(feedCtx: FeedContext, assetA: AssetRef, assetB: AssetRef, opts: { intervalSeconds?: number; chunkMonths?: number; timeRange?: { gte?: string; lte?: string }; outPath?: string } = {}): Promise<number[][]> {
@@ -599,15 +619,22 @@ async function fetchFeedCandlesSequentially(feedCtx: FeedContext, assetA: AssetR
     if (!timeRange?.gte || !timeRange?.lte) {
         throw new Error('fetchFeedCandlesSequentially requires opts.timeRange { gte, lte }');
     }
-    const feedKey = feedCacheKey(feedCtx);
-    const outPath = opts.outPath || feedOutputPath(feedKey, intervalSeconds, assetA, assetB);
+    // Canonical storage: fetch/cache the lower-id leg as A and invert the
+    // result back if the caller asked for the other side.
+    const canon = canonicalPair(assetA, assetB);
+    const storeA = canon.assetA;
+    const storeB = canon.assetB;
+    const flipped = canon.flipped;
+    const normalizedCtx = normalizeFeedLegs(feedCtx);
+    const feedKey = feedCacheKey(normalizedCtx);
+    const outPath = opts.outPath || feedOutputPath(feedKey, intervalSeconds, storeA, storeB);
     const requestKey = {
         feed: feedKey,
-        assetA: { id: assetA.id, precision: assetA.precision, symbol: assetA.symbol },
-        assetB: { id: assetB.id, precision: assetB.precision, symbol: assetB.symbol },
+        assetA: { id: storeA.id, precision: storeA.precision, symbol: storeA.symbol },
+        assetB: { id: storeB.id, precision: storeB.precision, symbol: storeB.symbol },
         intervalSeconds,
     };
-    const isCross = feedCtx?.kind === 'cross';
+    const isCross = normalizedCtx?.kind === 'cross';
 
     const plainWindows = buildFetchWindowsFromRange(timeRange, chunkMonths);
     // Windows are fetch-planning splits only; storage is fixed month shards.
@@ -619,19 +646,25 @@ async function fetchFeedCandlesSequentially(feedCtx: FeedContext, assetA: AssetR
 
     const fetchRange = isCross
         ? (gte: string, lte: string) => getFeedCandlesForMpaCross(
-            assetA, assetB, feedCtx.legs[0], feedCtx.legs[1],
+            storeA, storeB, normalizedCtx.legs[0], normalizedCtx.legs[1],
             { intervalSeconds, timeRange: { gte, lte } },
         )
         : (gte: string, lte: string) => getFeedCandlesForPair(
-            assetA, assetB, feedCtx.legs[0].mpa as AssetRef, feedCtx.legs[0].backing as AssetRef,
+            storeA, storeB, normalizedCtx.legs[0].mpa as AssetRef, normalizedCtx.legs[0].backing as AssetRef,
             { intervalSeconds, timeRange: { gte, lte } },
         );
 
-    return runCachedWindows({
+    const merged = await runCachedWindows({
         windows,
         outPath,
         requestKey,
         isMatch: isFeedChunkMatch,
+        inverse: (() => {
+            const legacy = inverseSiblingOutPath(outPath, storeA, storeB);
+            return legacy
+                ? { outPath: legacy, isMatch: isFeedChunkMatchInverse, toRequest: (c: number[][]) => invertCandles(c) }
+                : undefined;
+        })(),
         metaForWindow: (window) => ({
             source: `https://kibana.bitshares.dev (bitshares-*, op_type 19, feed ${feedKey})`,
             feed: feedKey,
@@ -647,6 +680,7 @@ async function fetchFeedCandlesSequentially(feedCtx: FeedContext, assetA: AssetR
         // would drop leading ratios, so only exact reuse applies to them.
         allowSubFetch: !isCross,
     });
+    return flipped ? (invertCandles(merged) as number[][]) : merged;
 }
 
 export {

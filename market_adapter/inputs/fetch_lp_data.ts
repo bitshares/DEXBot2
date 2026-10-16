@@ -30,7 +30,7 @@
 import { path } from '../../modules/path_api.js';
 import { getStorage } from '../../modules/storage/index.js';
 import * as kibanaSource from './kibana_source.js';
-import { toIntervalLabel, slugPart } from '../interval_utils.js';
+import { toIntervalLabel } from '../interval_utils.js';
 import { parseJsonWithComments } from '../../modules/order/utils/system.js';
 import { MARKET_ADAPTER } from '../../modules/constants.js';
 import { normalizePoolId, resolveAsset, findPoolByAssets } from '../utils/chain.js';
@@ -42,6 +42,7 @@ import {
 } from './window_cache.js';
 import { PATHS } from '../../modules/paths.js';
 import { loadLpSeriesFromBasePath } from '../utils/data_discovery.js';
+import { canonicalPair, pairFolderSlug, sameAssets, swappedAssets, inverseSiblingOutPath, invertCandleSeries } from '../utils/pair_orientation.js';
 import { shardStemFromName } from '../utils/month_shards.js';
 import * as bitsharesClient from '../../modules/bitshares_client.js';
 import { getErrorMessage, resolveSeamMs } from '../../modules/utils/errors.js';
@@ -175,14 +176,14 @@ function parseArgs() {
 
 // ─── Output path ──────────────────────────────────────────────────────────────
 
-function pairFolderName(assetA: AssetRef | null | undefined, assetB: AssetRef | null | undefined): string {
-    return `${slugPart(assetA?.symbol)}_${slugPart(assetB?.symbol)}`;
-}
-
 function outputPath(poolId: unknown, intervalSeconds: number, assetA: AssetRef, assetB: AssetRef): string {
     const label = toIntervalLabel(intervalSeconds);
     const id  = String(poolId).replace('1.19.', '');
-    const pairFolder = pairFolderName(assetA, assetB);
+    // Canonical orientation: `bts/iob.xrp` and `iob.xrp/bts` resolve to ONE
+    // folder, so the cache is shared. The fetcher stores canonically and
+    // translates back to the requested side on the way out.
+    const pair = canonicalPair(assetA, assetB);
+    const pairFolder = pairFolderSlug(pair.assetA, pair.assetB);
     return path.join(PATHS.MARKET_ADAPTER.LP_DATA_DIR, pairFolder, `lp_pool_${id}_${label}.json`);
 }
 
@@ -194,7 +195,7 @@ function applyPrecisionOverrides(assetA: AssetRef, assetB: AssetRef, precA: numb
 }
 
 function pairFolderPath(assetASymbol: string | null | undefined, assetBSymbol: string | null | undefined): string {
-    return path.join(PATHS.MARKET_ADAPTER.LP_DATA_DIR, pairFolderName(
+    return path.join(PATHS.MARKET_ADAPTER.LP_DATA_DIR, pairFolderSlug(
         { symbol: assetASymbol },
         { symbol: assetBSymbol }
     ));
@@ -238,7 +239,7 @@ function buildRequestKey(config: LpConfig, fullPoolId: string, assetA: AssetRef,
     };
 }
 
-function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir = pairFolderPath(bot.assetA, bot.assetB)): { poolId: string; assetA: AssetRef; assetB: AssetRef; source: string; path: string } | null {
+function scanCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir: string): { poolId: string; assetA: AssetRef; assetB: AssetRef; source: string; path: string } | null {
     if (!storage.exists(dir)) return null;
 
     const label = toIntervalLabel(intervalSeconds);
@@ -263,14 +264,18 @@ function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir = p
             const meta = parsed?.meta;
             if (!meta) continue;
             if (meta.intervalSeconds !== intervalSeconds) continue;
-            if (meta.assetA?.symbol !== bot.assetA) continue;
-            if (meta.assetB?.symbol !== bot.assetB) continue;
+            // Either orientation resolves the cached context; the assets are
+            // returned in the bot's own order so the rest of the CLI (and the
+            // derived export) stays in the requested orientation.
+            const direct = meta.assetA?.symbol === bot.assetA && meta.assetB?.symbol === bot.assetB;
+            const inverted = meta.assetA?.symbol === bot.assetB && meta.assetB?.symbol === bot.assetA;
+            if (!direct && !inverted) continue;
             if (!meta.pool || !meta.assetA?.id || !meta.assetB?.id) continue;
             if (!Number.isFinite(meta.assetA?.precision) || !Number.isFinite(meta.assetB?.precision)) continue;
             return {
                 poolId: meta.pool,
-                assetA: meta.assetA,
-                assetB: meta.assetB,
+                assetA: inverted ? meta.assetB : meta.assetA,
+                assetB: inverted ? meta.assetA : meta.assetB,
                 source: 'data',
                 path: path.join(dir, file),
             };
@@ -280,6 +285,22 @@ function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir = p
     return null;
 }
 
+/**
+ * Locate a cached fetch context for a bot. Standard calls omit `dir` and both
+ * orientations are probed, so a bot whose pair is the inverse of the canonical
+ * folder still skips the blockchain connect. An explicit `dir` (tests, custom
+ * layouts) is scanned alone.
+ */
+function loadCachedFetchContext(bot: BotConfig, intervalSeconds: number, dir?: string): { poolId: string; assetA: AssetRef; assetB: AssetRef; source: string; path: string } | null {
+    const candidates = dir
+        ? [dir]
+        : [pairFolderPath(bot.assetA, bot.assetB), pairFolderPath(bot.assetB, bot.assetA)];
+    for (const candidate of new Set(candidates)) {
+        const found = scanCachedFetchContext(bot, intervalSeconds, candidate);
+        if (found) return found;
+    }
+    return null;
+}
 
 // ─── Local-first incremental reuse ────────────────────────────────────────────
 // Bucket-level reuse lives in ./window_cache.js and is shared by all three
@@ -292,20 +313,34 @@ function isLpShardMatch(metaInput: unknown, requestKeyInput: unknown): boolean {
     const requestKey = requestKeyInput as { pool: string; intervalSeconds: number; assetA: AssetRef; assetB: AssetRef };
     if (meta.pool !== requestKey.pool) return false;
     if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
-    if (meta.assetA?.id !== requestKey.assetA.id || meta.assetB?.id !== requestKey.assetB.id) return false;
-    if (meta.assetA?.precision !== requestKey.assetA.precision || meta.assetB?.precision !== requestKey.assetB.precision) return false;
-    return true;
+    return sameAssets(meta, requestKey);
+}
+
+/** Same identity, opposite orientation (legacy pre-canonicalization shard). */
+function isLpShardMatchInverse(metaInput: unknown, requestKeyInput: unknown): boolean {
+    const meta = metaInput as { pool?: unknown; intervalSeconds?: unknown; assetA?: AssetRef; assetB?: AssetRef };
+    const requestKey = requestKeyInput as { pool: string; intervalSeconds: number; assetA: AssetRef; assetB: AssetRef };
+    if (meta.pool !== requestKey.pool) return false;
+    if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
+    return swappedAssets(meta, requestKey);
 }
 
 async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, assetB: AssetRef, config: LpConfig, outPath: string): Promise<number[][]> {
     // Pool, book and feed fetches share ONE cache function: runCachedWindows
     // in window_cache.js. Stable shard files are the only cache format.
+    // Storage is canonical: the fetch queries (and caches) the lower-id leg as
+    // A, and the result is inverted back if the caller asked for the other
+    // side. That makes `bts/iob.xrp` and `iob.xrp/bts` one cache family.
+    const pair = canonicalPair(assetA, assetB);
+    const storeA = pair.assetA;
+    const storeB = pair.assetB;
+    const flipped = pair.flipped;
     const chunkMonths = resolveChunkMonths(config);
     const bucketMs = Number(config.intervalSeconds) * 1000;
     const effectiveTimeRange = config.timeRange
         ? { gte: config.timeRange.gte, lte: config.timeRange.lte }
         : normalizeLookbackRange(config);
-    const requestKey = buildRequestKey(config, fullPoolId, assetA, assetB, effectiveTimeRange, outPath);
+    const requestKey = buildRequestKey(config, fullPoolId, storeA, storeB, effectiveTimeRange, outPath);
 
     const plainWindows = buildFetchWindowsFromRange(effectiveTimeRange, chunkMonths);
     // Windows are fetch-planning splits only (query batching + progress);
@@ -340,7 +375,7 @@ async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, as
             }
             try { userOnPage?.(info); } catch (_) { /* progress must never fail the fetch */ }
         };
-        const candles = await kibanaSource.getLpCandlesForPool(fullPoolId, assetA, assetB, {
+        const candles = await kibanaSource.getLpCandlesForPool(fullPoolId, storeA, storeB, {
             ...config,
             // Per-request timeout is the single network timer here: the old
             // second same-value window timeout was redundant with it (the
@@ -359,6 +394,12 @@ async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, as
         outPath,
         requestKey,
         isMatch: isLpShardMatch,
+        inverse: (() => {
+            const legacy = inverseSiblingOutPath(outPath, storeA, storeB);
+            return legacy
+                ? { outPath: legacy, isMatch: isLpShardMatchInverse, toRequest: (c: number[][]) => invertCandleSeries(c, { volume: 'scale' }) }
+                : undefined;
+        })(),
         metaForWindow: (window) => ({
             source: `https://kibana.bitshares.dev (bitshares-*, op_type 63, pool ${requestKey.pool})`,
             pool: requestKey.pool,
@@ -380,7 +421,7 @@ async function fetchCandlesSequentially(fullPoolId: string, assetA: AssetRef, as
         },
     });
     console.log(`  Merged ${merged.length} candles across ${windows.length} window(s) (month-shard cache)`);
-    return merged;
+    return flipped ? (invertCandleSeries(merged, { volume: 'scale' }) as number[][]) : merged;
 }
 
 // ─── bots.json helper ─────────────────────────────────────────────────────────
@@ -634,7 +675,12 @@ async function run() {
     // a full-history file with a subset. Falls back to the fetched candles when
     // the shards were withheld (e.g. a partial fetch).
     const assembled = loadLpSeriesFromBasePath(outPath);
-    const exportCandles = assembled && assembled.candles.length > 0 ? assembled.candles : candles;
+    // Shards are stored in the canonical orientation; the export (and its meta)
+    // is the requested one, so translate when the caller asked for the inverse.
+    const assembledCandles = assembled && assembled.candles.length > 0
+        ? (canonicalPair(assetA, assetB).flipped ? invertCandleSeries(assembled.candles, { volume: 'scale' }) : assembled.candles)
+        : null;
+    const exportCandles = assembledCandles ?? candles;
 
     const output = {
         meta: {

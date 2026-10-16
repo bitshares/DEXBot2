@@ -76,7 +76,12 @@ interface BucketCache {
     byTs: Map<number, Candle>;
     files: number;
     fileCover: FileCover[];
-    shards: Array<{ file: string; shardKey: string; candles: Candle[]; queried: QueriedRange[] }>;
+    // `foreign` marks buckets read from the opposite-orientation shard family
+    // (legacy `iob_xrp_bts` for a canonical `bts_iob_xrp` run). They are
+    // reusable — and get migrated into the canonical shards on flush — but
+    // must not count as the canonical shard's own prior content, or the flush
+    // would see `before === after` and skip the migration write.
+    shards: Array<{ file: string; shardKey: string; candles: Candle[]; queried: QueriedRange[]; foreign?: boolean }>;
 }
 
 interface ShardMeta {
@@ -100,11 +105,24 @@ interface FetchRangeResult {
     complete?: boolean;
 }
 
+/**
+ * Opposite-orientation shard family, read as a migration source. When a month's
+ * canonical shard is absent but this family has one, its candles are
+ * transformed into the canonical orientation and reused; the flush then writes
+ * them into the canonical shard (one-way migration, no re-fetch).
+ */
+interface InverseCacheSource {
+    outPath: string;
+    isMatch: (meta: unknown, requestKey: unknown) => boolean;
+    toRequest: (candles: Candle[]) => Candle[];
+}
+
 interface RunCachedWindowsOptions {
     windows: Array<{ index: number; gte: string; lte: string }>;
     outPath: string;
     requestKey: unknown;
     isMatch: (meta: unknown, requestKey: unknown) => boolean;
+    inverse?: InverseCacheSource;
     metaForWindow: (window: { index: number; gte: string; lte: string }) => Record<string, unknown>;
     fetchRange: (gteIso: string, lteIso: string, window: unknown, signal?: AbortSignal) => Promise<Candle[] | FetchRangeResult>;
     bucketMs: number;
@@ -231,24 +249,54 @@ function readCacheChunk(chunkFile: string, requestKey: unknown, isMatch: (meta: 
     }
 }
 
-function loadBucketCache(outPath: string, requestKey: unknown, isMatch: (meta: unknown, requestKey: unknown) => boolean, range?: { gte: number; lte: number } | null): BucketCache {
+/**
+ * Shard files to open for a run, canonical first. A month whose canonical
+ * shard is absent falls back to the inverse family (flagged `foreign`) so a
+ * pre-canonicalization cache is reused instead of re-fetched.
+ */
+function cacheEntriesFor(outPath: string, inverse: InverseCacheSource | undefined, range?: { gte: number; lte: number } | null): Array<{ file: string; shardKey: string; foreign: boolean }> {
+    const out: Array<{ file: string; shardKey: string; foreign: boolean }> = [];
+    const scoped = range && Number.isFinite(range.gte) && Number.isFinite(range.lte);
+    if (scoped) {
+        for (const shardKey of shardKeysForRange((range as { gte: number }).gte, (range as { lte: number }).lte)) {
+            const primary = shardPathFor(outPath, shardKey);
+            if (storage.exists(primary)) {
+                out.push({ file: primary, shardKey, foreign: false });
+                continue;
+            }
+            if (!inverse) continue;
+            const alt = shardPathFor(inverse.outPath, shardKey);
+            if (storage.exists(alt)) out.push({ file: alt, shardKey, foreign: true });
+        }
+        return out;
+    }
+    const seen = new Set<string>();
+    for (const entry of siblingCacheFiles(outPath)) {
+        out.push({ ...entry, foreign: false });
+        seen.add(entry.shardKey);
+    }
+    if (inverse) {
+        for (const entry of siblingCacheFiles(inverse.outPath)) {
+            if (seen.has(entry.shardKey)) continue;
+            out.push({ ...entry, foreign: true });
+        }
+    }
+    out.sort((a, b) => (a.file < b.file ? -1 : 1));
+    return out;
+}
+
+function loadBucketCache(outPath: string, requestKey: unknown, isMatch: (meta: unknown, requestKey: unknown) => boolean, range?: { gte: number; lte: number } | null, inverse?: InverseCacheSource): BucketCache {
     const byTs = new Map<number, Candle>();
     const fileCover: FileCover[] = [];
-    const shards: Array<{ file: string; shardKey: string; candles: Candle[]; queried: QueriedRange[] }> = [];
+    const shards: Array<{ file: string; shardKey: string; candles: Candle[]; queried: QueriedRange[]; foreign?: boolean }> = [];
     let files = 0;
-    const scoped = range && Number.isFinite(range.gte) && Number.isFinite(range.lte);
-    // Scoped load: enumerate only the calendar-month shards that overlap the
-    // run and open exactly those — no directory listing, and out-of-range
-    // months are never even stat'd. Unscoped callers (no finite range) fall
-    // back to the full listing.
-    const entries: Array<{ file: string; shardKey: string }> = scoped
-        ? shardKeysForRange((range as { gte: number }).gte, (range as { lte: number }).lte)
-            .map((shardKey) => ({ file: shardPathFor(outPath, shardKey), shardKey }))
-            .filter((entry) => storage.exists(entry.file))
-        : siblingCacheFiles(outPath);
-    for (const entry of entries) {
-        const chunk = readCacheChunk(entry.file, requestKey, isMatch);
-        if (!chunk) continue;
+    for (const entry of cacheEntriesFor(outPath, inverse, range)) {
+        const matcher = entry.foreign && inverse ? inverse.isMatch : isMatch;
+        const raw = readCacheChunk(entry.file, requestKey, matcher);
+        if (!raw) continue;
+        const chunk = entry.foreign && inverse
+            ? { ...raw, candles: inverse.toRequest(raw.candles) }
+            : raw;
         files += 1;
         fileCover.push({ gte: chunk.rangeGte, lte: chunk.rangeLte, count: chunk.candles.length, queried: chunk.queried });
         for (const c of chunk.candles) {
@@ -258,7 +306,7 @@ function loadBucketCache(outPath: string, requestKey: unknown, isMatch: (meta: u
             const prev = byTs.get(ts);
             if (!prev || Number(c[5] || 0) > Number(prev[5] || 0)) byTs.set(ts, c);
         }
-        shards.push({ file: entry.file, shardKey: entry.shardKey, candles: chunk.candles.filter((c): c is Candle => Array.isArray(c)), queried: chunk.queried });
+        shards.push({ file: entry.file, shardKey: entry.shardKey, candles: chunk.candles.filter((c): c is Candle => Array.isArray(c)), queried: chunk.queried, foreign: entry.foreign });
     }
     return { byTs, files, fileCover, shards };
 }
@@ -687,7 +735,7 @@ async function runCachedWindows(opts: RunCachedWindowsOptions): Promise<Candle[]
         : null;
 
     // Scoped load: only shards overlapping the run are opened.
-    const localCache = loadBucketCache(outPath, requestKey, isMatch, overall);
+    const localCache = loadBucketCache(outPath, requestKey, isMatch, overall, opts.inverse);
     if (localCache.files > 0) {
         console.log(`  Local cache: ${localCache.files} file(s), ${localCache.byTs.size} buckets — fetching only what is missing`);
     }
@@ -849,7 +897,11 @@ async function runCachedWindows(opts: RunCachedWindowsOptions): Promise<Candle[]
         const fetchedAt = new Date().toISOString();
         // O(1) lookup of each shard's loaded candles for the write-on-change
         // comparison below (instead of a linear scan per shard state).
-        const loadedShardCandles = new Map(localCache.shards.map((s) => [s.shardKey, s.candles]));
+        // Foreign (inverse-orientation) shards deliberately excluded: their
+        // buckets are folded into the canonical state below, and counting them
+        // as the canonical shard's prior content would suppress the write that
+        // performs the migration.
+        const loadedShardCandles = new Map(localCache.shards.filter((s) => !s.foreign).map((s) => [s.shardKey, s.candles]));
         for (const state of shardStates.values()) {
             const { start, end } = shardBoundsForKey(state.key);
             // Fold every loaded bucket into its home shard. Presence on disk

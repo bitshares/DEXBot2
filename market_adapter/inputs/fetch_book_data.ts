@@ -24,8 +24,9 @@
 import { getMarketCandles } from '../core/kibana_market_candles.js';
 import { path } from '../../modules/path_api.js';
 import { PATHS } from '../../modules/paths.js';
-import { toIntervalLabel, slugPart } from '../interval_utils.js';
+import { toIntervalLabel } from '../interval_utils.js';
 import { buildFetchWindowsFromRange, runCachedWindows } from './window_cache.js';
+import { canonicalPair, pairFolderSlug, sameAssets, swappedAssets, inverseSiblingOutPath, invertCandleSeries } from '../utils/pair_orientation.js';
 
 interface AssetRef {
     id?: string | null;
@@ -60,8 +61,11 @@ interface BookFetchOpts {
 }
 
 function bookCacheKey(assetA: AssetRef | null | undefined, assetB: AssetRef | null | undefined): string {
-    // Orientation matters: candles are B-per-A, so A/B and B/A are different series.
-    return `${slugPart(assetA?.symbol || assetA?.id)}_${slugPart(assetB?.symbol || assetB?.id)}`;
+    // Canonical orientation: A/B and B/A share one cache family. Candles are
+    // B-per-A, so the stored series is always the canonical one and the
+    // fetcher inverts it back for an inverse request.
+    const pair = canonicalPair(assetA || {}, assetB || {});
+    return pairFolderSlug(pair.assetA, pair.assetB);
 }
 
 function bookOutputPath(assetA: AssetRef | null | undefined, assetB: AssetRef | null | undefined, intervalSeconds: number): string {
@@ -76,9 +80,16 @@ function isBookChunkMatch(metaInput: unknown, requestKeyInput: unknown): boolean
     if (meta.source !== 'book' || requestKey.source !== 'book') return false;
     if (meta.pair !== requestKey.pair) return false;
     if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
-    if (meta.assetA?.id !== requestKey.assetA.id || meta.assetB?.id !== requestKey.assetB.id) return false;
-    if (meta.assetA?.precision !== requestKey.assetA.precision || meta.assetB?.precision !== requestKey.assetB.precision) return false;
-    return true;
+    return sameAssets(meta, requestKey);
+}
+
+/** Same identity, opposite orientation (legacy pre-canonicalization shard). */
+function isBookChunkMatchInverse(metaInput: unknown, requestKeyInput: unknown): boolean {
+    const meta = metaInput as BookMeta;
+    const requestKey = requestKeyInput as BookRequestKey;
+    if (meta.source !== 'book' || requestKey.source !== 'book') return false;
+    if (meta.intervalSeconds !== requestKey.intervalSeconds) return false;
+    return swappedAssets(meta, requestKey);
 }
 
 /**
@@ -96,13 +107,19 @@ async function fetchMarketCandlesSequentially(assetA: AssetRef, assetB: AssetRef
     if (!timeRange?.gte || !timeRange?.lte) {
         throw new Error('fetchMarketCandlesSequentially requires opts.timeRange { gte, lte }');
     }
-    const pair = bookCacheKey(assetA, assetB);
-    const outPath = opts.outPath || bookOutputPath(assetA, assetB, intervalSeconds);
+    // Canonical storage: fetch/query the lower-id leg as A, invert the result
+    // back if the caller asked for the other side. One cache family per pair.
+    const canon = canonicalPair(assetA, assetB);
+    const storeA = canon.assetA;
+    const storeB = canon.assetB;
+    const flipped = canon.flipped;
+    const pair = bookCacheKey(storeA, storeB);
+    const outPath = opts.outPath || bookOutputPath(storeA, storeB, intervalSeconds);
     const requestKey = {
         source: 'book',
         pair,
-        assetA: { id: assetA.id, precision: assetA.precision, symbol: assetA.symbol },
-        assetB: { id: assetB.id, precision: assetB.precision, symbol: assetB.symbol },
+        assetA: { id: storeA.id, precision: storeA.precision, symbol: storeA.symbol },
+        assetB: { id: storeB.id, precision: storeB.precision, symbol: storeB.symbol },
         intervalSeconds,
     };
 
@@ -136,7 +153,7 @@ async function fetchMarketCandlesSequentially(assetA: AssetRef, assetB: AssetRef
             if (info?.event === 'partial') sawPartial = true;
             try { userOnPage?.(info); } catch (_) { /* progress must never fail the fetch */ }
         };
-        const candles = await getMarketCandles(assetA, assetB, {
+        const candles = await getMarketCandles(storeA, storeB, {
             ...passthrough,
             ...(signal ? { signal } : {}),
             onPage,
@@ -146,11 +163,18 @@ async function fetchMarketCandlesSequentially(assetA: AssetRef, assetB: AssetRef
         return sawPartial ? { candles, complete: false as const } : candles;
     };
 
-    return runCachedWindows({
+    const merged = await runCachedWindows({
         windows,
         outPath,
         requestKey,
         isMatch: isBookChunkMatch,
+        inverse: (() => {
+            const invFolder = pairFolderSlug(storeB, storeA);
+            const legacy = inverseSiblingOutPath(outPath, storeA, storeB, `book_${invFolder}_${toIntervalLabel(intervalSeconds)}.json`);
+            return legacy
+                ? { outPath: legacy, isMatch: isBookChunkMatchInverse, toRequest: (c: number[][]) => invertCandleSeries(c, { volume: 'scale' }) }
+                : undefined;
+        })(),
         metaForWindow: (window: { index: number; gte: string; lte: string }) => ({
             source: 'book',
             esSource: 'https://kibana.bitshares.dev (bitshares-*, op_type 4, fill_order)',
@@ -165,6 +189,7 @@ async function fetchMarketCandlesSequentially(assetA: AssetRef, assetB: AssetRef
         bucketMs: intervalSeconds * 1000,
         allowSubFetch: true,
     });
+    return flipped ? (invertCandleSeries(merged, { volume: 'scale' }) as number[][]) : merged;
 }
 
 export {

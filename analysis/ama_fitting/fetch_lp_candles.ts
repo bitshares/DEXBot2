@@ -26,6 +26,7 @@ import { MARKET_ADAPTER } from '../../modules/constants.js';
 import { getErrorMessage } from '../../modules/utils/errors.js';
 import { writeJsonAtomic } from '../../market_adapter/utils/atomic_write.js';
 import { loadLpSeriesFromBasePath } from '../../market_adapter/utils/data_discovery.js';
+import { canonicalPair, invertCandleSeries } from '../../market_adapter/utils/pair_orientation.js';
 import { normalizePoolId } from '../../market_adapter/utils/chain.js';
 import {
     fetchCandlesSequentially,
@@ -162,7 +163,13 @@ async function main() {
     // snapshot (same meta shape as fetch_lp_data's export). Deriving it from
     // the assembled shards means a narrow re-run can never shrink the file.
     const assembled = loadLpSeriesFromBasePath(outPath);
-    const exportCandles = (assembled && assembled.candles.length > 0 ? assembled.candles : candles) as number[][];
+    // Shards are canonical; the export is the requested orientation.
+    const assembledCandles = assembled && assembled.candles.length > 0
+        ? (canonicalPair(assetA, assetB).flipped
+            ? invertCandleSeries(assembled.candles, { volume: 'scale' })
+            : assembled.candles)
+        : null;
+    const exportCandles = (assembledCandles ?? candles) as number[][];
     const firstTs = new Date(exportCandles[0][0]).toISOString();
     const lastTs  = new Date(exportCandles[exportCandles.length - 1][0]).toISOString();
     console.log(`  Received: ${exportCandles.length} candles  (${firstTs} → ${lastTs})`);

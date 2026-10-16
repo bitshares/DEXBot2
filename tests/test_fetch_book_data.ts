@@ -48,12 +48,12 @@ function soldAssetFromQuery(query) {
         ?.term?.[FILL_FIELD_MAP.soldAssetField];
 }
 
-function testBookCacheKeyIsOrientationSensitive() {
+function testBookCacheKeyIsCanonical() {
     assert.strictEqual(bookCacheKey(ASSET_A, ASSET_B), 'bts_test_usd');
-    assert.notStrictEqual(
+    assert.strictEqual(
         bookCacheKey(ASSET_A, ASSET_B),
         bookCacheKey(ASSET_B, ASSET_A),
-        'B-per-A candles differ by orientation, so the cache key must too'
+        'both orientations must resolve to one canonical cache family'
     );
 }
 
@@ -223,7 +223,7 @@ async function testPartialWindowIsNotCached() {
 }
 
 async function run() {
-    testBookCacheKeyIsOrientationSensitive();
+    testBookCacheKeyIsCanonical();
     testBookOutputPathShape();
     testIsBookChunkMatch();
     await testDiscoveryAcceptsExplicitTimeRange();
