@@ -10,7 +10,7 @@ import {
 } from './grid_reconcile_internal.js';
 import { ORDER_TYPES, ORDER_STATES, TIMING } from '../constants.js';
 import { readOpenOrdersGuarded } from '../chain_orders.js';
-import { getAssetFeesSafe, priceSlotEqual } from './utils/math.js';
+import { getAssetFeesSafe, pricesOnSameLevel } from './utils/math.js';
 import {
     isOrderPlaced, parseChainOrder, isOrderOnChain, findLiveOrderOwnerByChainId,
     chainOrderMatchesSlotWithTolerance,
@@ -335,8 +335,9 @@ export async function reconcileGridOrders({
             let nearest: { gridOrder: ManagedOrder; priceDiff: number; isEqual: boolean } | null = null;
             for (const gridOrder of activeGridOrders) {
                 if (gridOrder.type !== p.type) continue;
-                const precision = p.type === ORDER_TYPES.SELL ? manager.assets.assetA.precision : manager.assets.assetB.precision;
-                const isEqual = priceSlotEqual(p.price, gridOrder.price, precision);
+                // Tolerance-based level check, NOT priceSlotEqual at the asset
+                // precision (a low-precision asset collapses adjacent levels).
+                const isEqual = pricesOnSameLevel(p.price, p.size ?? 0, p.type, gridOrder.price, gridOrder.size, gridOrder.type, manager.assets, manager.config?.incrementPercent);
                 const priceDiff = Math.abs(p.price - gridOrder.price);
                 const candidate = { gridOrder, priceDiff, isEqual };
                 if (!nearest || priceDiff < nearest.priceDiff) nearest = candidate;

@@ -1,8 +1,9 @@
 const assert = require('assert');
-const { ORDER_TYPES, ORDER_STATES } = require('../modules/constants');
+const { ORDER_TYPES, ORDER_STATES, COW_ACTIONS } = require('../modules/constants');
 
-const { findPriceCollision } = require('../modules/order/utils/math');
+const { pricesOnSameLevel, sameGridPrice, sameGridLevel, buildGenesisFromPriceLevels } = require('../modules/order/utils/math');
 const { isOrderPlaced } = require('../modules/order/utils/order');
+const { validateCreateTargetSlots } = require('../modules/order/utils/validate');
 
 const {
     _createOrderFromGrid,
@@ -41,12 +42,12 @@ function makeVirtualOrder(id, price, size, type = ORDER_TYPES.BUY) {
     };
 }
 
-function makeManager(orders = []) {
+function makeManager(orders = [], assets = makeAssets()) {
     const logs: any[] = [];
     const orderMap = new Map(orders.map(o => [o.id, o]));
     return {
         orders: orderMap,
-        assets: makeAssets(),
+        assets,
         logger: {
             log: (msg, level) => { logs.push({ msg, level }); },
         },
@@ -77,59 +78,64 @@ function makeChainOrders(createFn = async () => []) {
 }
 
 // ============================================================
-// TESTS: findPriceCollision (shared utility)
+// TESTS: pricesOnSameLevel (tolerance-based level identity)
 // ============================================================
 
-async function testFindPriceCollisionDetectsMatch() {
-    const assets = makeAssets();
-    const existing = makePlacedOrder('slot1', 100, 50, ORDER_TYPES.BUY);
-    const orders = [existing];
+// low-precision-quote-style: assetA precision 8, assetB (quote) precision 4.
+const LOW_PRECISION_ASSETS = {
+    assetA: { id: '1.3.1', precision: 8, symbol: 'BASE' },
+    assetB: { id: '1.3.2', precision: 4, symbol: 'QUOTE' },
+};
 
-    const result = findPriceCollision(
-        orders, 'slot2', 100, 50, ORDER_TYPES.BUY, assets, isOrderPlaced
+async function testPricesOnSameLevelKeepsAdjacentLevelsDistinct() {
+    // The central regression: 0.000318 and 0.000319 both round to 3 at the
+    // asset precision, but they are DIFFERENT grid levels.
+    assert.strictEqual(
+        pricesOnSameLevel(0.000318, 1.6706, ORDER_TYPES.BUY, 0.000319, 1.6774, ORDER_TYPES.BUY, LOW_PRECISION_ASSETS),
+        false,
+        'adjacent buy levels must not be equal with a precision-4 quote asset'
     );
-
-    assert.strictEqual(result, existing, 'Should detect collision at same price');
-    console.log('✅ findPriceCollision detects same-price match');
+    assert.strictEqual(
+        pricesOnSameLevel(0.000318, 1.6706, ORDER_TYPES.BUY, 0.000343, 1.6774, ORDER_TYPES.BUY, LOW_PRECISION_ASSETS),
+        false,
+        'distant buy levels must not be equal with a precision-4 quote asset'
+    );
+    assert.strictEqual(
+        pricesOnSameLevel(0.000318, 1.6706, ORDER_TYPES.BUY, 0.000318, 1.6774, ORDER_TYPES.BUY, LOW_PRECISION_ASSETS),
+        true,
+        'identical price must be equal'
+    );
+    // sameGridPrice is the grid-vs-grid identity: exact ladder level.
+    assert.strictEqual(sameGridPrice(0.000318, 0.000319), false, 'adjacent grid levels are distinct');
+    assert.strictEqual(sameGridPrice(0.000318, 0.000318), true, 'same grid level is equal');
+    console.log('✅ pricesOnSameLevel keeps low-precision adjacent levels distinct');
 }
 
-async function testFindPriceCollisionNoMatch() {
-    const assets = makeAssets();
-    const existing = makePlacedOrder('slot1', 200, 50, ORDER_TYPES.BUY);
-    const orders = [existing];
+async function testValidateCreateSlotsNoFalseSameBatchDuplicate() {
+    const mk = (id, price) => ({
+        type: COW_ACTIONS.CREATE,
+        id,
+        order: { id, price, type: ORDER_TYPES.BUY, size: 1.67 },
+    });
 
-    const result = findPriceCollision(
-        orders, 'slot2', 100, 50, ORDER_TYPES.BUY, assets, isOrderPlaced
+    const distinct = validateCreateTargetSlots(
+        [mk('slot-77', 0.000318), mk('slot-78', 0.000319)],
+        new Map(), LOW_PRECISION_ASSETS, []
+    );
+    assert.ok(
+        !distinct.violations.some(v => v.reason === 'same_batch_price_duplicate'),
+        'adjacent low-precision CREATE prices must not be a same-batch duplicate'
     );
 
-    assert.strictEqual(result, null, 'Should return null for non-overlapping prices');
-    console.log('✅ findPriceCollision returns null for distant prices');
-}
-
-async function testFindPriceCollisionExcludeSelf() {
-    const assets = makeAssets();
-    const order = makePlacedOrder('slot1', 100, 50, ORDER_TYPES.BUY);
-    const orders = [order];
-
-    const result = findPriceCollision(
-        orders, 'slot1', 100, 50, ORDER_TYPES.BUY, assets, isOrderPlaced
+    const identical = validateCreateTargetSlots(
+        [mk('slot-77', 0.000318), mk('slot-78', 0.000318)],
+        new Map(), LOW_PRECISION_ASSETS, []
     );
-
-    assert.strictEqual(result, null, 'Should skip excludeId');
-    console.log('✅ findPriceCollision excludes own slot');
-}
-
-async function testFindPriceCollisionNullPrice() {
-    const assets = makeAssets();
-    const existing = { id: 'slot1', price: null, size: 50, type: ORDER_TYPES.BUY, orderId: '1.7.1' };
-    const orders = [existing];
-
-    const result = findPriceCollision(
-        orders, 'slot2', 100, 50, ORDER_TYPES.BUY, assets, isOrderPlaced
+    assert.ok(
+        identical.violations.some(v => v.reason === 'same_batch_price_duplicate'),
+        'two CREATEs at the exact same price must still be flagged'
     );
-
-    assert.strictEqual(result, null, 'Should skip items with null price');
-    console.log('✅ findPriceCollision handles null candidate price');
+    console.log('✅ validateCreateTargetSlots keeps adjacent low-precision prices distinct');
 }
 
 // ============================================================
@@ -356,6 +362,103 @@ async function testStartupBatchFiltersOnlyCollidingItems() {
     console.log('✅ _executeStartupCreateGroupBatch filters only colliding items in multi-order batch');
 }
 
+async function testStartupBatchNoFalseCollisionWithLowPrecisionQuote() {
+    // Regression: low-precision-quote-style pair. assetB (quote) precision 4 makes an entire
+    // adjacent grid band round to the same integer if a price is compared at the
+    // ASSET precision (0.000318 and 0.000319 both -> 3). The tolerance-based
+    // checker must keep them distinct so the whole buy ladder is placed.
+    let batchCalled = false;
+    const chainOrders = makeChainOrders();
+    chainOrders.executeBatch = async () => { batchCalled = true; return { success: true, operation_results: [] }; };
+
+    const assets = {
+        assetA: { id: '1.3.1', precision: 8, symbol: 'BASE' },
+        assetB: { id: '1.3.2', precision: 4, symbol: 'QUOTE' },
+    };
+
+    const existing = makePlacedOrder('slot-77', 0.000318, 1.6706, ORDER_TYPES.BUY);
+    const target = makeVirtualOrder('slot-78', 0.000319, 1.6774, ORDER_TYPES.BUY);
+
+    const manager = makeManager([existing, target], assets);
+
+    await _executeStartupCreateGroupBatch({
+        group: [{ gridOrder: target, orderLabel: 'BUY:slot-78' }],
+        chainOrders,
+        account: 'test-account',
+        privateKey: 'test-key',
+        manager,
+        dryRun: false,
+        groupIndex: 0,
+        totalGroups: 1,
+    });
+
+    assert.strictEqual(batchCalled, true,
+        'Adjacent buy at 0.000319 must NOT collide with a placed buy at 0.000318 (precision-4 quote)');
+    console.log('✅ Startup batch places adjacent buy with low-precision quote asset');
+}
+
+async function testStartupBatchStillCollidesAtSamePriceLowPrecision() {
+    // The genuine same-price collision must still be detected with a
+    // low-precision quote asset (the fix must not disable the guard).
+    let batchCalled = false;
+    const chainOrders = makeChainOrders();
+    chainOrders.executeBatch = async () => { batchCalled = true; return { success: true, operation_results: [] }; };
+
+    const assets = {
+        assetA: { id: '1.3.1', precision: 8, symbol: 'BASE' },
+        assetB: { id: '1.3.2', precision: 4, symbol: 'QUOTE' },
+    };
+
+    const existing = makePlacedOrder('slot-77', 0.000318, 1.6706, ORDER_TYPES.BUY);
+    const target = makeVirtualOrder('slot-78', 0.000318, 1.6774, ORDER_TYPES.BUY);
+
+    const manager = makeManager([existing, target], assets);
+
+    await _executeStartupCreateGroupBatch({
+        group: [{ gridOrder: target, orderLabel: 'BUY:slot-78' }],
+        chainOrders,
+        account: 'test-account',
+        privateKey: 'test-key',
+        manager,
+        dryRun: false,
+        groupIndex: 0,
+        totalGroups: 1,
+    });
+
+    assert.strictEqual(batchCalled, false,
+        'Same-price buy must still collide with a placed buy (precision-4 quote)');
+    console.log('✅ Startup batch still detects genuine same-price collision at low precision');
+}
+
+async function testCreateOrderFromGridNoFalseCollisionLowPrecision() {
+    // Same regression through the single-order create path.
+    let createCalled = false;
+    const chainOrders = makeChainOrders(async () => { createCalled = true; return []; });
+
+    const assets = {
+        assetA: { id: '1.3.1', precision: 8, symbol: 'BASE' },
+        assetB: { id: '1.3.2', precision: 4, symbol: 'QUOTE' },
+    };
+
+    const existing = makePlacedOrder('slot-77', 0.000318, 1.6706, ORDER_TYPES.BUY);
+    const target = makeVirtualOrder('slot-78', 0.000319, 1.6774, ORDER_TYPES.BUY);
+
+    const manager = makeManager([existing, target], assets);
+
+    await _createOrderFromGrid({
+        chainOrders,
+        account: 'test-account',
+        privateKey: 'test-key',
+        manager,
+        gridOrder: target,
+        dryRun: false,
+    });
+
+    assert.strictEqual(createCalled, true,
+        'Adjacent buy must not be skipped as a collision (precision-4 quote)');
+    console.log('✅ _createOrderFromGrid places adjacent buy with low-precision quote asset');
+}
+
 async function testStartupBatchOrderIdCheckFiresBeforePriceCheck() {
     let batchCalled = false;
     const chainOrders = makeChainOrders();
@@ -387,6 +490,38 @@ async function testStartupBatchOrderIdCheckFiresBeforePriceCheck() {
     console.log('✅ _executeStartupCreateGroupBatch orderId check fires before price collision check');
 }
 
+async function testGridPriceIdentityPrimitives() {
+    // Float noise within the relative epsilon matches; genuinely distinct
+    // ladder levels (3e-3 apart) never do.
+    assert.strictEqual(sameGridPrice(100.000000001, 100.000000004), true, 'float noise matches');
+    assert.strictEqual(sameGridPrice(0.000318, 0.000319), false, 'distinct levels stay distinct');
+
+    // Tolerance cap: a dust-sized order inflates calculatePriceTolerance above
+    // the grid increment; the increment cap must still keep adjacent levels
+    // apart.
+    assert.strictEqual(
+        pricesOnSameLevel(0.000318, 1e-6, ORDER_TYPES.BUY, 0.000319, 1e-6, ORDER_TYPES.BUY, LOW_PRECISION_ASSETS, 0.4),
+        false,
+        'increment-capped tolerance must not merge adjacent levels'
+    );
+
+    // Genesis-aware grid level identity maps a price rounded a quantum off its
+    // level back to that level, while a genuinely different level resolves
+    // differently.
+    const levels = [0.0002333, 0.00023423, 0.00023517];
+    const genesis = buildGenesisFromPriceLevels(levels[0], 0.4, 4, levels);
+    assert.strictEqual(sameGridLevel(levels[0], levels[0] * (1 - 1e-6), genesis), true,
+        'price rounded just off its level resolves back to it');
+    assert.strictEqual(sameGridLevel(levels[0], levels[1], genesis), false,
+        'adjacent levels resolve differently');
+    // Out-of-rail clamping guard: two distinct below-rail prices must NOT
+    // resolve "equal" via the edge clamp; float dust at the edge still matches.
+    assert.strictEqual(sameGridLevel(levels[0], levels[0] * 0.8, genesis), false,
+        'distinct out-of-rail prices do not match');
+    assert.strictEqual(sameGridLevel(levels[0], levels[0] * (1 - 1e-12), genesis), true,
+        'float dust at the edge still matches');
+}
+
 // ============================================================
 // RUN ALL TESTS
 // ============================================================
@@ -394,11 +529,10 @@ async function testStartupBatchOrderIdCheckFiresBeforePriceCheck() {
 (async () => {
     console.log('\n========== PRICE COLLISION GUARD TESTS ==========\n');
 
-    // findPriceCollision utility
-    await testFindPriceCollisionDetectsMatch();
-    await testFindPriceCollisionNoMatch();
-    await testFindPriceCollisionExcludeSelf();
-    await testFindPriceCollisionNullPrice();
+    // pricesOnSameLevel + validateCreateTargetSlots low-precision regression
+    await testPricesOnSameLevelKeepsAdjacentLevelsDistinct();
+    await testValidateCreateSlotsNoFalseSameBatchDuplicate();
+    await testGridPriceIdentityPrimitives();
 
     // _createOrderFromGrid
     await testCreateOrderFromGridSkipsOnCollision();
@@ -412,6 +546,11 @@ async function testStartupBatchOrderIdCheckFiresBeforePriceCheck() {
     await testStartupBatchSkipsOnOwnOrderId();
     await testStartupBatchFiltersOnlyCollidingItems();
     await testStartupBatchOrderIdCheckFiresBeforePriceCheck();
+
+    // Low-precision quote asset regression (precision-4 quote asset)
+    await testStartupBatchNoFalseCollisionWithLowPrecisionQuote();
+    await testStartupBatchStillCollidesAtSamePriceLowPrecision();
+    await testCreateOrderFromGridNoFalseCollisionLowPrecision();
 
     console.log('\n✅ All price collision guard tests passed!\n');
 })().catch((err) => {

@@ -31,7 +31,7 @@ const {
 import * as validate from './order/utils/validate.js';
 const { validateCreateTargetSlots, evaluateCommit, hasExecutableActions, stampGapEvacuationRotation } = validate;
 import * as math from './order/utils/math.js';
-const { validateOrderSize, findCrossedOrder, priceSlotEqual, isEvacuationRotationAllowed, isEvacuationSizeStillValid, getSellStartIdx, getPrecisionByOrderType, isSlotIndexInGapBand, getAssetFeesSafe, blockchainToFloat, floatToBlockchainInt, quantizeFloat } = math;
+const { validateOrderSize, findCrossedOrder, sameGridLevel, isEvacuationRotationAllowed, isEvacuationSizeStillValid, getSellStartIdx, getPrecisionByOrderType, isSlotIndexInGapBand, getAssetFeesSafe, blockchainToFloat, floatToBlockchainInt, quantizeFloat } = math;
 import { parseSlotIndex } from './order/utils/slot.js';
 
 /**
@@ -66,13 +66,16 @@ export function isEvacuationStampStillValid(liveBoundary: unknown, liveGapSlots:
     const dstInRail = orderType === ORDER_TYPES.SELL ? Number(dstIdx) >= sellStartIdx : Number(dstIdx) <= b;
     return dstInRail;
 }
-function hasSlotPriceCollision(items: SlotLike[], targetPrice: number, precision: number, excludeId: string | null, predicate?: (it: SlotLike) => boolean) {
+function hasSlotPriceCollision(items: SlotLike[], targetPrice: number, genesis: unknown, excludeId: string | null, predicate?: (it: SlotLike) => boolean) {
     for (const it of items) {
         if (predicate && !predicate(it)) continue;
         if (excludeId && (it.id === excludeId || it.orderId === excludeId)) continue;
         const p = it.order ? it.order.price : it.price;
         if (p == null) continue;
-        try { if (priceSlotEqual(Number(p), targetPrice, precision)) return it; } catch { if (p === targetPrice) return it; }
+        // Grid-vs-grid: resolve both prices to their frozen ladder level (a
+        // low-precision asset must not collapse adjacent levels, and a price
+        // rounded a quantum off its level still resolves back).
+        if (sameGridLevel(Number(p), targetPrice, genesis)) return it;
     }
     return null;
 }
@@ -3230,7 +3233,7 @@ async function runPreBroadcastGuards(bot: BotLike, cowResult: CowResult): Promis
     const chainOrderCandidates = Array.isArray(bot.manager?._lastUnmatchedChainOrders)
         ? bot.manager._lastUnmatchedChainOrders
         : [];
-    const createSlotValidation = validateCreateTargetSlots(actions, bot.manager?.orders, bot.manager?.assets, chainOrderCandidates);
+    const createSlotValidation = validateCreateTargetSlots(actions, bot.manager?.orders, bot.manager?.assets, chainOrderCandidates, bot.manager?.config?.incrementPercent ?? null);
     if (!createSlotValidation.isValid) {
         for (const violation of createSlotValidation.violations) {
             let reason: string;
@@ -3942,9 +3945,7 @@ async function updateOrdersOnChainBatchCOWBody(
                     }
 
                     const createPrice = effectiveOrder.price;
-
-                    const precision = order.type === ORDER_TYPES.SELL ? bot.manager.assets.assetA.precision : bot.manager.assets.assetB.precision;
-                    const batchCollision = hasSlotPriceCollision(opContexts as unknown as SlotLike[], createPrice, precision, order.id, (ctx: SlotLike)=> ctx.kind==='create' && (ctx.order as JsonObj | undefined)?.price != null);
+                    const batchCollision = hasSlotPriceCollision(opContexts as unknown as SlotLike[], createPrice, bot.manager._genesis, order.id, (ctx: SlotLike)=> ctx.kind==='create' && (ctx.order as JsonObj | undefined)?.price != null);
                     if (batchCollision) {
                         bot.manager.logger.log(
                             `[COW] Skipping CREATE for ${order.id} at ${Format.formatPrice6(createPrice)}: ` +
@@ -4443,8 +4444,7 @@ async function updateOrdersOnChainBatchCOWBody(
                                     'warn'
                                 );
                             } else if (fbType && fbSize > 0 && fbPrice > 0) {
-                                const fbPrecision = fbType === ORDER_TYPES.SELL ? bot.manager.assets.assetA.precision : bot.manager.assets.assetB.precision;
-                                const fbCollision = hasSlotPriceCollision([...bot.manager.orders.values()], fbPrice, fbPrecision, targetSlotId, isOrderPlaced as (it: SlotLike) => boolean);
+                                const fbCollision = hasSlotPriceCollision([...bot.manager.orders.values()], fbPrice, bot.manager._genesis, targetSlotId, isOrderPlaced as (it: SlotLike) => boolean);
                                 if (fbCollision) {
                                     bot.manager.logger.log(
                                         `[COW] Skipping CREATE fallback for ${targetSlotId} at ${Format.formatPrice6(fbPrice)}: ` +
@@ -4454,7 +4454,7 @@ async function updateOrdersOnChainBatchCOWBody(
                                     );
                                     continue;
                                 }
-                                const fbBatchCollision = hasSlotPriceCollision(opContexts as unknown as SlotLike[], fbPrice, fbPrecision, targetSlotId, (ctx: SlotLike)=> ctx.kind==='create');
+                                const fbBatchCollision = hasSlotPriceCollision(opContexts as unknown as SlotLike[], fbPrice, bot.manager._genesis, targetSlotId, (ctx: SlotLike)=> ctx.kind==='create');
                                 if (fbBatchCollision) {
                                     bot.manager.logger.log(
                                         `[COW] Skipping CREATE fallback for ${targetSlotId} at ${Format.formatPrice6(fbPrice)}: ` +

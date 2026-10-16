@@ -215,10 +215,46 @@ async function testInRailOrphanStillAdopts() {
 async function testHelperClassifiesEdges() {
     console.log(' - isChainPriceOutOfGrid classifies rail vs outside...');
     const g = GENESIS();
-    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0], g, 5), false, 'Edge price is in-grid');
-    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[10], g, 5), false, 'Mid-rail price is in-grid');
-    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0] * 0.8, g, 5), true, 'Below-grid price is out');
-    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[N_LEVELS - 1] * 1.2, g, 8), true, 'Above-grid price is out');
+    const assetsBuy = {
+        assetA: { id: '1.3.0', precision: 8, symbol: 'BTS' },
+        assetB: { id: '1.3.121', precision: 5, symbol: 'USD' },
+    };
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0], g, 5, ORDER_TYPES.BUY, assetsBuy), false, 'Edge price is in-grid');
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[10], g, 5, ORDER_TYPES.BUY, assetsBuy), false, 'Mid-rail price is in-grid');
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0] * 0.8, g, 5, ORDER_TYPES.BUY, assetsBuy), true, 'Below-grid price is out');
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[N_LEVELS - 1] * 1.2, g, 5, ORDER_TYPES.SELL, assetsBuy), true, 'Above-grid price is out');
+    // Fail-closed with no asset context: an unjudgeable outside price is out.
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0] * 0.8, g), true, 'No asset context: outside price still deferred');
+    assert.strictEqual(isChainPriceOutOfGrid(LEVELS[0] * (1 - 1e-12), g), false, 'No asset context: float dust at the edge still excused');
+
+    // Low-precision rail (low-precision shape): assetB precision 4, edge ~2.3e-4.
+    // The asset-precision integer of a below-edge price collapses onto the
+    // edge's integer across a ~1e-4 band (dozens of 0.4% levels), which
+    // previously excused a whole dip-protection band as in-grid. With the
+    // chain tolerance, only true float dust is excused.
+    const N_LOW = 60;
+    const LOW_LEVELS = Array.from({ length: N_LOW }, (_, i) => 0.0002333 * Math.pow(1.004, i));
+    const gLow = buildGenesisFromPriceLevels(LOW_LEVELS[0], 0.4, 4, LOW_LEVELS);
+    const assetsLowBuy = {
+        assetA: { id: '1.3.1', precision: 8, symbol: 'BASE' },
+        assetB: { id: '1.3.2', precision: 4, symbol: 'QUOTE' },
+    };
+    assert.strictEqual(
+        isChainPriceOutOfGrid(LOW_LEVELS[0], gLow, 1.5, ORDER_TYPES.BUY, assetsLowBuy),
+        false, 'Low-precision edge price is in-grid'
+    );
+    assert.strictEqual(
+        isChainPriceOutOfGrid(LOW_LEVELS[0] * 0.9, gLow, 1.5, ORDER_TYPES.BUY, assetsLowBuy),
+        true, 'Below-edge level that rounds to the edge integer must be out-of-grid'
+    );
+    assert.strictEqual(
+        isChainPriceOutOfGrid(LOW_LEVELS[N_LOW - 1] * 1.1, gLow, 1.5, ORDER_TYPES.SELL, assetsLowBuy),
+        true, 'Above-edge level that rounds to the edge integer must be out-of-grid'
+    );
+    assert.strictEqual(
+        isChainPriceOutOfGrid(LOW_LEVELS[0] * (1 - 1e-12), gLow, 1.5, ORDER_TYPES.BUY, assetsLowBuy),
+        false, 'Sub-satoshi float dust at the edge is still excused'
+    );
     console.log('✓ OUT-OF-GRID-005 passed');
 }
 

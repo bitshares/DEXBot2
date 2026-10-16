@@ -409,7 +409,8 @@ import {
     calculateSpreadFromOrders,
     allocateFundsByWeights,
     calculateGapSlots as _mathGapSlots,
-    priceSlotEqual,
+    pricesOnSameLevel,
+    sameGridLevel,
     getBtsSide,
     getSellStartIdx,
     resolveGapBand,
@@ -458,7 +459,7 @@ import {
 } from './genesis_policy.js';
 
 import { WorkingGrid } from './working_grid.js';
-import type { OrderManagerLike, ChainFundsSnapshot, ManagedOrder, GridConfig, OrderType, OrderState, AccountTotals, CowAction, AssetPair, SpreadCorrectionStall } from '../types.js';
+import type { OrderManagerLike, ChainFundsSnapshot, ManagedOrder, GridConfig, OrderType, OrderState, AccountTotals, CowAction, SpreadCorrectionStall } from '../types.js';
 import type { GridGenesis } from './utils/math.js';
 import { getErrorMessage } from '../utils/errors.js';
 
@@ -1026,7 +1027,7 @@ export async function loadGrid(manager: OrderManagerLike, grid: ManagedOrder[], 
                     // band, GAP-EVAC already tracking it): keep the boundary so
                     // the heal path (rotation/teeth/sweeps) can run.  Nuking it
                     // here would discard the evacuation state for exactly the
-                    // condition evacuation exists to fix (H-BTS 2026-09-13).
+                    // condition evacuation exists to fix (<bot> 2026-09-13).
                     manager.logger?.log?.(
                         `[GRID-LOAD] Persisted snapshot has transient in-band placement (${check.reason}): ${check.detail}. ` +
                         `Keeping boundary ${restoredBoundary}; GAP-EVAC/sync sweeps own cleanup.`,
@@ -3203,18 +3204,22 @@ export async function checkWindowDust(manager: OrderManagerLike): Promise<{ buyD
             .filter((o) => o.type === ORDER_TYPES.SELL && isLiveOrder(o))
             .sort((a, b) => a.price - b.price)[0];
 
-        // Check if an order has a duplicate slot — an active sibling with same price via integer round-trip.
-        const hasDuplicatePriceLevel = (order: ManagedOrder, assets: AssetPair): boolean => {
-            const precision = order.type === ORDER_TYPES.SELL ? assets.assetA.precision : assets.assetB.precision;
+        // Check if an order has a duplicate price level — an active sibling at
+        // the same ladder level. If so, cancelling won't create a grid gap.
+        // Only checks ACTIVE siblings. If two PARTIALs share a price with no active
+        // sibling, neither qualifies and the gap is left to the rebalancer.
+        // Grid-vs-grid: resolve both prices to their frozen ladder level
+        // (genesis-aware), NOT priceSlotEqual at the asset precision (collapses
+        // adjacent levels for a low-precision asset).
+        const hasDuplicatePriceLevel = (order: ManagedOrder): boolean => {
             for (const o of allOrders) {
                 if (o.id === order.id) continue;
                 if (o.type !== order.type || o.state !== ORDER_STATES.ACTIVE || !o.orderId || o.price == null) continue;
-                try { if (priceSlotEqual(o.price, order.price, precision)) return true; } catch { if (o.price === order.price) return true; }
+                if (sameGridLevel(o.price, order.price, manager._genesis)) return true;
             }
             return false;
         };
 
-        const assets = manager.assets;
         const allPartials = allOrders.filter((o) => isLiveOrder(o) && o.state === ORDER_STATES.PARTIAL);
 
         const isTopBuy = (o: ManagedOrder) => !!(topBuyOrder && o.id === topBuyOrder.id);
@@ -3250,10 +3255,10 @@ export async function checkWindowDust(manager: OrderManagerLike): Promise<{ buyD
         // duplicate price level. Cancelling it frees the slot for rotation to
         // re-derive, so the tiny gap is closed by normal grid rebalancing.
         const eligibleBuyPartials = allPartials.filter((o) =>
-            o.type === ORDER_TYPES.BUY && (isTopBuy(o) || hasDuplicatePriceLevel(o, assets) || isDustSized(o, buyThresholds))
+            o.type === ORDER_TYPES.BUY && (isTopBuy(o) || hasDuplicatePriceLevel(o) || isDustSized(o, buyThresholds))
         );
         const eligibleSellPartials = allPartials.filter((o) =>
-            o.type === ORDER_TYPES.SELL && (isTopSell(o) || hasDuplicatePriceLevel(o, assets) || isDustSized(o, sellThresholds))
+            o.type === ORDER_TYPES.SELL && (isTopSell(o) || hasDuplicatePriceLevel(o) || isDustSized(o, sellThresholds))
         );
 
         const buyDustOrders = await _getDustOrders(manager, eligibleBuyPartials, ORDER_TYPES.BUY, buyThresholds);
@@ -3736,10 +3741,12 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             : [];
         const doesNotCollideUnmatched = (c: ManagedOrder): boolean => {
             if (unmatchedPrices.length === 0 || c?.price == null || !Number.isFinite(c.price)) return true;
-            const precision = railType === ORDER_TYPES.SELL ? manager.assets.assetA.precision : manager.assets.assetB.precision;
-            return !unmatchedPrices.some((p) => {
-                try { return priceSlotEqual(p, c.price, precision); } catch { return Math.abs(p - c.price) / c.price <= ((manager.config.incrementPercent ?? 0) / 100); }
-            });
+            // The unmatched row carries only a price; use the candidate's own
+            // side/size for the tolerance. Tolerance-based, NOT priceSlotEqual at
+            // the asset precision (low-precision assets collapse adjacent levels).
+            return !unmatchedPrices.some((p) => pricesOnSameLevel(
+                p, c.size, railType, c.price, c.size, railType, manager.assets, manager.config?.incrementPercent
+            ));
         };
         if (unmatchedPrices.length > 0) {
             manager.logger?.log?.(
@@ -3943,11 +3950,14 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             const preFilter = spreadCandidates.length;
             spreadCandidates = spreadCandidates.filter((c) => {
                 if (c.price == null) return false;
-                const precision = railType === ORDER_TYPES.SELL ? manager.assets.assetA.precision : manager.assets.assetB.precision;
+                // Grid-vs-grid: resolve both prices to their frozen ladder
+                // level (genesis-aware), NOT priceSlotEqual at the asset
+                // precision and NOT the chain tolerance (both can
+                // collapse/merge adjacent grid levels).
                 for (const o of allOrders) {
                     if (!isOrderPlaced(o) || o.price == null) continue;
                     if (o.id === c.id) continue;
-                    try { if (priceSlotEqual(o.price, c.price, precision)) return false; } catch { if (o.price === c.price) return false; }
+                    if (sameGridLevel(o.price, c.price, manager._genesis)) return false;
                 }
                 return true;
             });

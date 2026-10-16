@@ -132,7 +132,8 @@ import {
     isChainPriceOutOfGrid,
     isSlotInRail,
     priceForSlot,
-    priceSlotEqual
+    priceSlotEqual,
+    pricesOnSameLevel
 } from './utils/math.js';
 import {
     parseChainOrder,
@@ -154,7 +155,7 @@ import {
 } from './processed_fill_store.js';
 import { hasGenesisLadder } from './genesis_policy.js';
 import { getErrorMessage } from '../utils/errors.js';
-import type { OrderManagerLike, SyncResult, ManagedOrder, UnmatchedChainOrder, ParsedChainOrder, PendingPriceCorrection, ChainOrder, OrderType, AssetInfo } from '../types.js';
+import type { OrderManagerLike, SyncResult, ManagedOrder, UnmatchedChainOrder, ParsedChainOrder, PendingPriceCorrection, ChainOrder, OrderType, AssetInfo, AssetPair } from '../types.js';
 
 interface SyncFillEvent {
     op?: [unknown, FillOpInput?];
@@ -333,7 +334,7 @@ function describeNearestAdoptionCandidates(mgr: OrderManagerLike, chainOrder: Ch
         const price = toFiniteNumber(slot.price);
         const priceDiff = Math.abs(price - chainPrice);
         let priceEqual = false;
-        try { priceEqual = chainPriceOnSameLevel(chainPrice, price, mgr?._genesis, precision); } catch { priceEqual = chainPrice === price; }
+        try { priceEqual = chainPriceOnSameLevel(chainPrice, price, mgr?._genesis, precision, mgr?.assets, chainSize, toFiniteNumber(slot.size), chainOrder.type, mgr?.config?.incrementPercent); } catch { priceEqual = chainPrice === price; }
         const gridInt = floatToBlockchainInt(toFiniteNumber(slot.size), precision);
         const sizeDiffInt = chainInt - gridInt;
         const hasOrderId = Boolean(slot.orderId);
@@ -390,12 +391,29 @@ function describeNearestAdoptionCandidates(mgr: OrderManagerLike, chainOrder: Ch
  * correction / duplicate / re-slot warranted. Unjudgeable inputs (no ladder,
  * non-finite price) fall back to integer equality at the asset precision.
  */
-function chainPriceOnSameLevel(chainPrice: number, slotPrice: number, genesis: unknown, precision: number): boolean {
+function chainPriceOnSameLevel(
+    chainPrice: number,
+    slotPrice: number,
+    genesis: unknown,
+    precision: number,
+    assets: AssetPair | null = null,
+    chainSize: number = 0,
+    slotSize: number = 0,
+    type: string | null = null,
+    incrementPercent: number | null = null
+): boolean {
     if (hasGenesisLadder(genesis)) {
         try {
             const g = genesis as Parameters<typeof slotIndexForPrice>[1];
             return slotIndexForPrice(chainPrice, g) === slotIndexForPrice(slotPrice, g);
-        } catch { /* unjudgeable — fall through to integer equality */ }
+        } catch { /* unjudgeable — fall through to price-level comparison */ }
+    }
+    // No ladder (legacy/migration window): compare the chain price to the slot
+    // price with the chain-representable tolerance, capped to half a grid step.
+    // NOT priceSlotEqual at the asset amount precision, which collapses
+    // adjacent levels for a low-precision asset.
+    if (assets != null) {
+        return pricesOnSameLevel(chainPrice, chainSize, type, slotPrice, slotSize, type, assets, incrementPercent);
     }
     try { return priceSlotEqual(chainPrice, slotPrice, precision); } catch { return chainPrice === slotPrice; }
 }
@@ -1122,7 +1140,7 @@ class SyncEngine {
                     // drift of a few quanta inside one level is normal and must
                     // not queue a price correction.
                     const precision = gridOrder.type === ORDER_TYPES.SELL ? assetAPrecision : assetBPrecision;
-                    const isPriceEqual = chainPriceOnSameLevel(chainOrder.price, gridOrder.price, mgr._genesis, precision);
+                    const isPriceEqual = chainPriceOnSameLevel(chainOrder.price, gridOrder.price, mgr._genesis, precision, mgr.assets, toFiniteNumber(chainOrder.size), gridOrder.size, gridOrder.type, mgr.config?.incrementPercent);
                     if (!isPriceEqual) {
                         queueCorrection({
                             gridOrder: { ...gridOrder },
@@ -1163,7 +1181,7 @@ class SyncEngine {
                             // ladder level as the slot (the swap tiebreak's whole
                             // premise — a duplicate at this level).
                             const precision = gridOrder.type === ORDER_TYPES.SELL ? assetAPrecision : assetBPrecision;
-                            if (!chainPriceOnSameLevel(candidateOrder.price, gridOrder.price, mgr._genesis, precision)) continue;
+                            if (!chainPriceOnSameLevel(candidateOrder.price, gridOrder.price, mgr._genesis, precision, mgr.assets, toFiniteNumber(candidateOrder.size), gridOrder.size, gridOrder.type, mgr.config?.incrementPercent)) continue;
                             if (floatToBlockchainInt(candidateOrder.size, precision) !== currentSizeInt) continue;
                             swapMatch = { id: candidateId, order: candidateOrder };
                             break;
@@ -1390,8 +1408,7 @@ class SyncEngine {
             // (no adopt, no cancelOnly), e.g. dip-protection levels
             // sitting below a fresh grid after a reset.
             {
-                const precision = (chainOrder.type === ORDER_TYPES.SELL) ? assetAPrecision : assetBPrecision;
-                if (isChainPriceOutOfGrid(chainOrder.price, genesisLadder, precision)) {
+                if (isChainPriceOutOfGrid(chainOrder.price, genesisLadder, toFiniteNumber(chainOrder.size), chainOrder.type, mgr.assets)) {
                     unmatchedChainOrders.push({ chainOrderId, type: chainOrder.type, price: chainOrder.price, size: chainOrder.size, raw: rawChainOrders.get(chainOrderId), reason: 'out-of-grid-deferred', candidateSlotId: slotId });
                     mgr.logger?.log?.(`[SYNC] Orphaned chain order ${chainOrderId} (${chainOrder.type}, price=${chainOrder.price}, size=${chainOrder.size}) — NOT adopted: price outside grid range, deferred (nearest slot ${slotId})`, 'warn');
                     continue;

@@ -9,8 +9,8 @@
  * broadcast chunks. The chain has no self-trade prevention, so the
  * re-priced buy matched our own sells during the chunked broadcast
  * window, producing multiple self-fills and a subsequent chain-side fund
- * assertion. findPriceCollision (same-price only) could not catch this;
- * findCrossedOrder catches crossings at ANY price overlap.
+ * assertion. A same-price check could not catch this; findCrossedOrder
+ * catches crossings at ANY price overlap.
  *
  * These tests pin the crossing semantics the COW runtime depends on:
  * - BUY candidate crosses opposite-side orders priced at or below it.
@@ -20,7 +20,7 @@
  *   already cancelled earlier in the same plan are excluded).
  */
 const assert = require('assert');
-const { findCrossedOrder, findPriceCollision } = require('../modules/order/utils/math');
+const { findCrossedOrder, pricesOnSameLevel } = require('../modules/order/utils/math');
 const { ORDER_TYPES } = require('../modules/constants');
 
 const ASSETS = {
@@ -153,21 +153,21 @@ function run() {
         findCrossedOrder([{ id: 'x', orderId: '1.7.9', price: 860.0, type: ORDER_TYPES.SELL, size: 0 }],
             862.81, ORDER_TYPES.BUY, ASSETS),
         null,
-        'size-0 placeholder must be skipped (matches findPriceCollision null-tolerance convention)'
+        'size-0 placeholder must be skipped (matches the size-0 null-tolerance convention)'
     );
     console.log('  - invalid/placeholder inputs handled defensively');
 
-    // ---- 10. Complementarity with findPriceCollision: every same-price
-    // collision between opposite sides is also a crossing detection
+    // ---- 10. Complementarity: every same-price collision between opposite
+    // sides is also a crossing detection
     const items = [
         { id: 's1', orderId: '1.7.3', price: 865.3848, type: ORDER_TYPES.SELL, size: 0.06 },
         { id: 's2', orderId: '1.7.4', price: 869.44, type: ORDER_TYPES.SELL, size: 0.06 }
     ];
-    const byCollision = findPriceCollision(items, null, 865.3848, 0.06, ORDER_TYPES.BUY, ASSETS);
+    const samePrice = pricesOnSameLevel(865.3848, 0.06, ORDER_TYPES.SELL, 865.3848, 0.06, ORDER_TYPES.BUY, ASSETS);
     const byCrossing = findCrossedOrder(items, 865.3848, ORDER_TYPES.BUY, ASSETS);
-    assert(byCollision, 'same-price collision detected by findPriceCollision');
+    assert(samePrice, 'same-price collision detected by pricesOnSameLevel');
     assert(byCrossing, 'same-price overlap also detected by findCrossedOrder');
-    console.log('  - findCrossedOrder supersedes findPriceCollision for opposite-side overlap');
+    console.log('  - findCrossedOrder supersedes the same-price check for opposite-side overlap');
 
     console.log('PASS test_cow_crossing_guard');
 }

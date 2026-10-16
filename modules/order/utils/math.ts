@@ -883,65 +883,145 @@ function calculatePriceTolerance(gridPrice: unknown, orderSize: unknown, orderTy
 }
 
 /**
- * Scan an iterable of candidate items for a price collision with the target order.
- * Each candidate must have `id` and a price accessible via `item.price ?? item.order?.price`.
+ * Whether two prices denote the same order-book price LEVEL, using the
+ * chain-representable price tolerance derived from both assets' precisions and
+ * the order size(s).
  *
- * @param {Iterable} items - Candidates to scan (manager.orders values or opContexts)
- * @param {string} excludeId - Slot id to skip (the item being created)
- * @param {number} targetPrice
- * @param {number} targetSize
- * @param {string} targetType - ORDER_TYPES.BUY or SELL
- * @param {object} assets - Manager assets (assetA/assetB with precision)
- * @param {Function} [isValid] - Optional predicate; candidate must return true to be considered
- * @returns {object|null} The colliding item, or null
+ * WHY NOT priceSlotEqual(priceA, priceB, assetPrecision): a price is not an
+ * asset AMOUNT. Rounding it through one asset's precision
+ * (floatToBlockchainInt) collapses an entire adjacent grid band whenever the
+ * OTHER asset has low precision -- e.g. with a precision-4 quote asset both
+ * 0.000318 and 0.000319 round to 3, so every BUY after the first looked like a
+ * duplicate. The real on-chain price resolution is roughly
+ * 10^-precision / orderSize, which is exactly what calculatePriceTolerance
+ * derives. Use this for every production "same price level" check.
+ *
+ * Both types are evaluated and the tighter tolerance is kept (most
+ * conservative): a buy-vs-sell comparison where either side uses a
+ * precision-0 asset can otherwise produce a tolerance wider than the grid
+ * increment and falsely collide adjacent levels.
+ *
+ * @param {number} priceA - First price
+ * @param {number} sizeA - First order size (same side as typeA)
+ * @param {string|null|undefined} typeA - First order type (ORDER_TYPES)
+ * @param {number} priceB - Second price
+ * @param {number} sizeB - Second order size (same side as typeB)
+ * @param {string|null|undefined} typeB - Second order type (ORDER_TYPES)
+ * @param {object|null} assets - Manager assets (assetA/assetB with precision)
+ * @param {number|null} [incrementPercent] - Grid increment; when supplied the
+ *   tolerance is clamped to half a grid step so a dust-inflated
+ *   (MIN_ORDER_SIZE_FACTOR floor) tolerance cannot merge adjacent levels.
+ * @returns {boolean} True when the two prices sit on the same level
  */
-function findPriceCollision(
-    items: Iterable<CollisionItem>,
-    excludeId: string,
-    targetPrice: number,
-    targetSize: number,
-    targetType: string,
-    assets: AssetPair | null,
-    isValid?: ((item: CollisionItem) => boolean) | null
-): CollisionItem | null {
-    for (const item of items) {
-        if (item.id === excludeId) continue;
-        if (isValid && !isValid(item)) continue;
-        const price = item.price ?? item.order?.price;
-        const size = item.size ?? item.order?.size ?? 0;
-        if (price == null || targetPrice == null) continue;
+function pricesOnSameLevel(
+    priceA: number,
+    sizeA: number,
+    typeA: string | null | undefined,
+    priceB: number,
+    sizeB: number,
+    typeB: string | null | undefined,
+    assets: AssetPair | null = null,
+    incrementPercent: number | null | undefined = null
+): boolean {
+    const pa = Number(priceA);
+    const pb = Number(priceB);
+    if (!Number.isFinite(pa) || !Number.isFinite(pb)) return pa === pb;
 
-        // Compute tolerance for both the target order's type and the
-        // candidate item's type, then take the minimum (most conservative).
-        // Without this, a buy-vs-sell comparison where one side uses a
-        // precision-0 asset can produce tolerance > grid increment from
-        // the MIN_ORDER_SIZE_FACTOR=50 floor alone, causing adjacent grid
-        // levels to falsely collide (see validateCreateTargetSlots layer 2
-        // comment for the full analysis).
-        const toleranceTarget = calculatePriceTolerance(
-            Math.min(price, targetPrice),
-            Math.max(size, targetSize),
-            targetType,
-            assets
-        );
-        let tolerance = toleranceTarget;
-        const itemType = item.type ?? item.order?.type;
-        if (toleranceTarget != null && itemType != null) {
-            const toleranceItem = calculatePriceTolerance(
-                Math.min(price, targetPrice),
-                Math.max(size, targetSize),
-                itemType,
-                assets
-            );
-            if (toleranceItem != null) {
-                tolerance = Math.min(toleranceTarget, toleranceItem);
-            }
+    const size = Math.max(Number(sizeA) || 0, Number(sizeB) || 0);
+    const gridPrice = Math.min(pa, pb);
+    let tolerance: number | null = null;
+    for (const type of [typeA, typeB]) {
+        if (type == null) continue;
+        let t: number | null = null;
+        try {
+            t = calculatePriceTolerance(gridPrice, size, type, assets);
+        } catch {
+            t = null;
         }
-        if (tolerance != null && Math.abs(price - targetPrice) <= tolerance) {
-            return item;
+        if (t != null && Number.isFinite(t)) {
+            tolerance = tolerance == null ? t : Math.min(tolerance, t);
         }
     }
-    return null;
+    if (tolerance == null) return pa === pb;
+    // Hard cap: never let the tolerance span more than half a grid step. The
+    // precision/floor maths above can otherwise exceed the increment for
+    // dust-sized or low-precision orders, merging two legitimately adjacent
+    // levels (the caller passes the increment when it has one).
+    const inc = Number(incrementPercent);
+    if (Number.isFinite(inc) && inc > 0) {
+        tolerance = Math.min(tolerance, Math.abs(gridPrice) * (inc / 100) * 0.5);
+    }
+    return Math.abs(pa - pb) <= tolerance;
+}
+
+/**
+ * Relative slack for grid price identity. Large enough to absorb float noise
+ * (re-serialization, a stored value recomputed through a different but
+ * algebraically equivalent path) yet far below any real grid increment, so it
+ * cannot merge two genuinely distinct ladder levels.
+ */
+const GRID_PRICE_REL_EPSILON = 1e-9;
+
+/**
+ * Whether two GENESIS-derived grid prices denote the same ladder level by
+ * EXACT identity (with float-noise slack).
+ *
+ * Grid slot prices are frozen ladder values (bit-identical per level), so
+ * exact equality is the correct identity for a grid-vs-grid comparison.
+ * Deliberately NOT priceSlotEqual at the asset precision (collapses an
+ * adjacent band for a low-precision asset) and NOT the chain tolerance (which
+ * can exceed the grid increment and merge two legitimately adjacent levels).
+ * Prefer sameGridLevel(genesis) where a ladder is available: it maps a drifted
+ * price back to its nearest ladder level. Use pricesOnSameLevel instead when
+ * one side is a chain-derived price that may sit a few chain quanta off its
+ * level.
+ *
+ * @param {number} priceA - First grid price
+ * @param {number} priceB - Second grid price
+ * @returns {boolean} True when both are the same ladder level
+ */
+function sameGridPrice(priceA: number, priceB: number): boolean {
+    const a = Number(priceA);
+    const b = Number(priceB);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return a === b;
+    if (a === b) return true;
+    return Math.abs(a - b) <= GRID_PRICE_REL_EPSILON * Math.max(1, Math.abs(a), Math.abs(b));
+}
+
+/**
+ * Whether two grid prices denote the same ladder level, resolving each price
+ * to its nearest level through the frozen genesis ladder when one is supplied.
+ * This is robust to a price that was chain-corrected / rounded a quantum off
+ * its level: slotIndexForPrice maps it back to the level it came from, while a
+ * price that genuinely moved to another level resolves to a different index.
+ *
+ * PRECONDITION / HARDENING: slotIndexForPrice CLAMPS an out-of-rail price onto
+ * the edge levels, so two distinct out-of-rail prices would otherwise resolve
+ * "equal". This helper therefore only uses slot identity when BOTH prices sit
+ * inside [levels[0], levels[N-1]]; otherwise it falls back to exact-level
+ * identity (sameGridPrice, with float-noise slack). Callers pass in-rail grid
+ * prices today, but the guard makes out-of-rail misuse safe.
+ *
+ * @param {number} priceA - First grid price
+ * @param {number} priceB - Second grid price
+ * @param {unknown} genesis - Frozen genesis ladder (`manager._genesis`)
+ * @returns {boolean} True when both prices resolve to the same ladder level
+ */
+function sameGridLevel(priceA: number, priceB: number, genesis: unknown): boolean {
+    const a = Number(priceA);
+    const b = Number(priceB);
+    const levels = (genesis as GridGenesis | null | undefined)?.priceLevels;
+    if (Array.isArray(levels) && levels.length > 0) {
+        const lo = Number(levels[0]);
+        const hi = Number(levels[levels.length - 1]);
+        const inRail = (p: number): boolean => Number.isFinite(p) && p >= lo && p <= hi;
+        if (!inRail(a) || !inRail(b)) return sameGridPrice(a, b);
+        try {
+            const g = genesis as Parameters<typeof slotIndexForPrice>[1];
+            return slotIndexForPrice(a, g) === slotIndexForPrice(b, g);
+        } catch { /* unjudgeable ladder — fall through to exact-level identity */ }
+    }
+    return sameGridPrice(a, b);
 }
 
 /**
@@ -957,10 +1037,9 @@ function findPriceCollision(
  * sell ladder was re-priced into marketable buys, triggering a fatal
  * fund assertion).
  *
- * Unlike findPriceCollision (same-price check), this catches crossings at
- * ANY price overlap and is intended for the re-pricing UPDATE / CREATE
- * paths. The caller decides the exemption policy (e.g. crossed orders
- * cancelled earlier in the same plan).
+ * Unlike a same-price check, this catches crossings at ANY price overlap and
+ * is intended for the re-pricing UPDATE / CREATE paths. The caller decides the
+ * exemption policy (e.g. crossed orders cancelled earlier in the same plan).
  *
  * @param {Iterable<any>} items - Candidate orders (e.g. manager.orders.values())
  * @param {number} price - Candidate placement price
@@ -1970,18 +2049,38 @@ function slotIdForPrice(price: number, genesis: GridGenesis): string {
  * slotIndexForPrice clamps out-of-range prices onto the edge slots (0/N-1),
  * so callers MUST check this before adopting or duplicate-matching: a
  * below-grid buy is not slot-0 and an above-grid sell is not slot-(N-1).
- * Integer equality (priceSlotEqual) excuses sub-satoshi float dust at the
- * edge; anything further out is out-of-grid → hold/defer, never adopt or
- * cancel as a duplicate.
+ * Only genuine float dust at the edge is excused; anything further out is
+ * out-of-grid -> hold/defer, never adopt or cancel as a duplicate.
+ *
+ * The edge excuse is the chain-representable tolerance (pricesOnSameLevel),
+ * clamped to half a ladder step. Deliberately NOT priceSlotEqual at the asset
+ * precision: a price is not an amount, so a precision-4 asset rounds a whole
+ * adjacent band below the rail onto the edge and wrongly classifies a
+ * dip-protection level as in-grid (fail-open). When assets/type are missing,
+ * only float noise at the edge is excused (exact-level identity), so an
+ * unjudgeable outside price stays out-of-grid (fail-closed).
  */
-function isChainPriceOutOfGrid(price: number, genesis: GridGenesis, precision: number): boolean {
+function isChainPriceOutOfGrid(
+    price: number,
+    genesis: GridGenesis,
+    size: number = 0,
+    type: string | null = null,
+    assets: AssetPair | null = null
+): boolean {
     const levels = genesis?.priceLevels;
     if (!Array.isArray(levels) || levels.length === 0) return false;
     if (!Number.isFinite(price)) return false;
     const min = levels[0];
     const max = levels[levels.length - 1];
-    if (price < min && !priceSlotEqual(price, min, precision)) return true;
-    if (price > max && !priceSlotEqual(price, max, precision)) return true;
+    const incrementPercent = levels.length > 1 && Number(levels[0]) > 0
+        ? ((Number(levels[1]) - Number(levels[0])) / Number(levels[0])) * 100
+        : null;
+    const onEdge = (edge: number): boolean =>
+        (assets != null && type != null)
+            ? pricesOnSameLevel(price, size, type, edge, size, type, assets, incrementPercent)
+            : sameGridPrice(price, edge);
+    if (price < min && !onEdge(min)) return true;
+    if (price > max && !onEdge(max)) return true;
     return false;
 }
 
@@ -2100,7 +2199,7 @@ function buildGenesisFromPriceLevels(startPrice: number, incrementPercent: numbe
 
 export type { FeeCacheEntry };
 
-export { getBtsSide, getSellStartIdx, resolveGapBand, countGapBandSpread, calculateGapSlots, isSlotInRail, isSlotIndexInGapBand, isEvacuationRotationAllowed, isEvacuationSizeStillValid, validateBoundaryCommit, validatePersistedBoundary, isTransientInBandRejection, BOUNDARY_REJECT_PLACED_IN_BAND, resolveGapSlots, isPercentageString, isPositiveNumber, isPositiveNumberOrPercent, isPositiveInt, parsePercentageString, toDecimal, resolveRelativePrice, parseRelativeMultiplier, validateGridPriceBounds, isExplicitZeroAllocation, getPrecision, computeChainFundTotals, calculateAvailableFundsValue, adjustBudgetForBtsFees, getGridBestPrices, calculateSpreadFromOrders, resolveConfigValue, resolveConfigValueWithRegistry, hasValidAccountTotals, blockchainToFloat, floatToBlockchainInt, floorToBlockchainInt, quantizeFloat, normalizeInt, getPrecisionByOrderType, getPrecisionsForManager, getPrecisionSlack, quantumForPrecision, calculatePriceTolerance, findPriceCollision, findCrossedOrder, validateOrderAmountsWithinLimits, getMinOrderSize, getDustThresholdFactor, getSingleDustThreshold, getDoubleDustThreshold, validateOrderSize, getAssetFees, getAssetFeesSafe, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, calculateOrderCreationFees, calculateSwapInAmount, _setFeeCache, cloneWeightDistribution, clamp, roundTo, fixedTo, roundToDecimals, priceLevelsForGenesis, priceForSlot, slotIndexForPrice, slotIdForPrice, assertSlotPriceInvariant, priceSlotEqual, derivePriceLevels, buildGenesisFromPriceLevels, hashPriceLevels, isChainPriceOutOfGrid }
+export { getBtsSide, getSellStartIdx, resolveGapBand, countGapBandSpread, calculateGapSlots, isSlotInRail, isSlotIndexInGapBand, isEvacuationRotationAllowed, isEvacuationSizeStillValid, validateBoundaryCommit, validatePersistedBoundary, isTransientInBandRejection, BOUNDARY_REJECT_PLACED_IN_BAND, resolveGapSlots, isPercentageString, isPositiveNumber, isPositiveNumberOrPercent, isPositiveInt, parsePercentageString, toDecimal, resolveRelativePrice, parseRelativeMultiplier, validateGridPriceBounds, isExplicitZeroAllocation, getPrecision, computeChainFundTotals, calculateAvailableFundsValue, adjustBudgetForBtsFees, getGridBestPrices, calculateSpreadFromOrders, resolveConfigValue, resolveConfigValueWithRegistry, hasValidAccountTotals, blockchainToFloat, floatToBlockchainInt, floorToBlockchainInt, quantizeFloat, normalizeInt, getPrecisionByOrderType, getPrecisionsForManager, getPrecisionSlack, quantumForPrecision, calculatePriceTolerance, findCrossedOrder, pricesOnSameLevel, sameGridPrice, validateOrderAmountsWithinLimits, getMinOrderSize, getDustThresholdFactor, getSingleDustThreshold, getDoubleDustThreshold, validateOrderSize, getAssetFees, getAssetFeesSafe, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, calculateOrderCreationFees, calculateSwapInAmount, _setFeeCache, cloneWeightDistribution, clamp, roundTo, fixedTo, roundToDecimals, priceLevelsForGenesis, priceForSlot, slotIndexForPrice, slotIdForPrice, assertSlotPriceInvariant, priceSlotEqual, derivePriceLevels, sameGridLevel, buildGenesisFromPriceLevels, hashPriceLevels, isChainPriceOutOfGrid }
 
 /**
  * Round a value to a given factor.

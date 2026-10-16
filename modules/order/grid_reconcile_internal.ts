@@ -9,7 +9,7 @@
 
 import { ORDER_TYPES, ORDER_STATES, TIMING, BTS_PRECISION } from '../constants.js';
 import { readOpenOrdersGuarded } from '../chain_orders.js';
-import { getMinOrderSize, getAssetFees, getAssetFeesSafe, blockchainToFloat, findCrossedOrder, resolveGapBand, isSlotInRail, priceSlotEqual } from './utils/math.js';
+import { getMinOrderSize, getAssetFees, getAssetFeesSafe, blockchainToFloat, findCrossedOrder, resolveGapBand, isSlotInRail, pricesOnSameLevel, sameGridLevel } from './utils/math.js';
 import { isOrderPlaced, parseChainOrder, buildCreateOrderArgs, buildOutsideInPairGroups, extractBatchOperationResults, chainOrderMatchesSlotWithTolerance, buildCrossingCheckCandidates, isCrossingCheckCandidate, getSideBudget, calculateBudgetedSizes, getCoreOrdersTotal, convertToSpreadPlaceholder, isOrderGoneErrorMessage, clearDuplicateOrphanDetection, resolveEdgeCount, resolveLiveEdgeAnchorPrice, edgeOrderIdSet, compareEdge, parseSlotIndex, reportGridPriceInvariant, liveWindowIdSet } from './utils/order.js';
 import { resolveAccountRef } from './utils/system.js';
 import * as Format from './format.js';
@@ -42,10 +42,15 @@ interface StartupSideComparators {
 }
 
 function computePlacementPriceCollision(manager: OrderManagerLike, gridOrder: ManagedOrder): ManagedOrder | null {
-    const precision = gridOrder.type === ORDER_TYPES.SELL ? manager.assets.assetA.precision : manager.assets.assetB.precision;
+    // Grid-vs-grid: resolve each price to its frozen ladder level. NOT
+    // priceSlotEqual at the asset precision, which rounds a price through an
+    // asset AMOUNT precision and collapses an adjacent band for a
+    // low-precision asset (0.000318 and 0.000319 both -> 3 at precision 4,
+    // silently dropping every buy after the first). NOT the chain tolerance
+    // either: it can exceed the grid increment and merge adjacent levels.
     for (const o of manager.orders.values()) {
         if (!isOrderPlaced(o) || o.id === gridOrder.id) continue;
-        if (priceSlotEqual(o.price, gridOrder.price, precision)) return o;
+        if (sameGridLevel(o.price, gridOrder.price, manager._genesis)) return o;
     }
     return null;
 }
@@ -1845,7 +1850,6 @@ async function _reconcileStartupSide({
         const chainPrice = parsedChain?.price;
         if (!Number.isFinite(Number(chainPrice))) return;
         const chainPriceNum = Number(chainPrice);
-        const sidePrecision = orderType === ORDER_TYPES.SELL ? manager.assets?.assetA?.precision : manager.assets?.assetB?.precision;
         for (const slotOrder of manager.orders.values()) {
             if (!slotOrder || !slotOrder.id) continue;
             // Refill only TRUE holes: VIRTUAL without orderId. A VIRTUAL
@@ -1861,7 +1865,7 @@ async function _reconcileStartupSide({
             if (isOrderPlaced(slotOrder)) continue;
             if (!isSlotInRail(boundary, gapSlots, orderType, slotOrder)) continue;
             if (Number(slotOrder.size) <= 0) continue;
-            if (!priceSlotEqual(slotOrder.price, chainPriceNum, sidePrecision)) continue;
+            if (!pricesOnSameLevel(slotOrder.price, slotOrder.size, orderType, chainPriceNum, slotOrder.size, orderType, manager.assets, manager.config?.incrementPercent)) continue;
             vacatedRefillPlanned.add(slotOrder.id);
             refillCandidates.push(slotOrder);
             logger?.log?.(
@@ -2043,26 +2047,20 @@ async function _reconcileStartupSide({
         // Edge ladder: edge-priced orphans cancel last (they are adoption
         // candidates at edge prices, not first-to-cut).
         if (edgeOrderIds && edgeOrderIds.size > 0) {
-            const sidePrecision = orderType === ORDER_TYPES.SELL
-                ? manager.assets?.assetA?.precision
-                : manager.assets?.assetB?.precision;
             const edgePrices: number[] = [];
             for (const eid of edgeOrderIds) {
                 const slot = manager.orders.get(eid);
                 if (slot && Number.isFinite(Number(slot.price))) edgePrices.push(Number(slot.price));
             }
-            const isEdgePriced = (price: number | string | undefined): boolean => {
+            const isEdgePriced = (price: number | string | undefined, size: number | string | undefined): boolean => {
                 const p = Number(price);
+                const s = Number(size) || 0;
                 if (!Number.isFinite(p)) return false;
-                return edgePrices.some((ep: number) => {
-                    try {
-                        return priceSlotEqual(ep, p, sidePrecision);
-                    } catch {
-                        return ep === p;
-                    }
-                });
+                return edgePrices.some((ep: number) =>
+                    pricesOnSameLevel(ep, s, orderType, p, s, orderType, manager.assets, manager.config?.incrementPercent)
+                );
             };
-            const parked = parsedUnmatched.filter((x) => isEdgePriced(x.parsed?.price));
+            const parked = parsedUnmatched.filter((x) => isEdgePriced(x.parsed?.price, x.parsed?.size));
             if (parked.length > 0 && parked.length < parsedUnmatched.length) {
                 const parkedIds = new Set(parked.map((x) => x.chain?.id));
                 parsedUnmatched.sort((a, b) => {

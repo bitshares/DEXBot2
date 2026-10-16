@@ -82,10 +82,7 @@ async function isUnknownFillOrderAdoptable(bot: BotLike, fillOp: FillOpLike): Pr
                 // through to the credit path instead of deferring credit
                 // to an adoption sync that must not adopt it.
                 {
-                    const precision = parsed.type === ORDER_TYPES.SELL
-                        ? bot.manager?.assets?.assetA?.precision
-                        : bot.manager?.assets?.assetB?.precision;
-                    if (isChainPriceOutOfGrid(price, genesis as unknown as Parameters<typeof isChainPriceOutOfGrid>[1], precision)) return false;
+                    if (isChainPriceOutOfGrid(price, genesis as unknown as Parameters<typeof isChainPriceOutOfGrid>[1], Number(parsed?.size) || 0, parsed?.type ?? null, bot.manager?.assets ?? null)) return false;
                 }
                 const slotId = `slot-${idx}`;
                 const slot = bot.manager.orders.get(slotId);

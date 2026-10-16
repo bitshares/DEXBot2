@@ -54,7 +54,8 @@ import {
     isSlotIndexInGapBand,
     isEvacuationRotationAllowed,
     clamp,
-    priceSlotEqual
+    pricesOnSameLevel,
+    sameGridPrice
 } from './math.js';
 import { parseSlotIndex } from './slot.js';
 import {
@@ -871,7 +872,7 @@ function hasExecutableActions(rebalanceResult: unknown) {
  *   with {chainOrderId, price, size, type} to check beyond the grid
  * @returns {{isValid: boolean, violations: Array<Object>, violatingTargetIds: Set<string>}} Validation result
  */
-function validateCreateTargetSlots(actions: CowAction[], orders: Map<string, ManagedOrder>, _assets: AssetPair | null = null, chainOrderCandidates: UnmatchedChainOrder[] = []) {
+function validateCreateTargetSlots(actions: CowAction[], orders: Map<string, ManagedOrder>, _assets: AssetPair | null = null, chainOrderCandidates: UnmatchedChainOrder[] = [], incrementPercent: number | null = null) {
     const safeActions = Array.isArray(actions) ? actions : [];
     const orderMap: Map<string, ManagedOrder> = orders instanceof Map ? orders : new Map();
     const releasedSlotIds = new Set<string>();
@@ -953,17 +954,23 @@ function validateCreateTargetSlots(actions: CowAction[], orders: Map<string, Man
             // set entirely, letting a CREATE collide with a slot-unknown
             // chain order sitting at the same price level (duplicate order).
             if (_assets) {
-                // priceSlotEqual is a top-level import (the old inline
-                // require('./math.js') threw under ESM and the catch-all
-                // below silently disabled the whole fallback).
+                // Tolerance-based level check (pricesOnSameLevel); NOT
+                // priceSlotEqual at the asset precision, which collapses
+                // adjacent grid levels for a low-precision asset.
                 const slotlessCandidates = validChainCandidates.filter((u) => !(u.chainSlotId || u.candidateSlotId));
                 for (const entry of createEntries) {
                     if (violations.some(v => v.targetId === entry.targetId)) continue;
                     for (const u of slotlessCandidates) {
                         if (u.price == null || entry.price == null) continue;
                         if (u.type && entry.type && u.type !== entry.type) continue;
-                        const precision = entry.type === 'sell' ? _assets.assetA?.precision : _assets.assetB?.precision;
-                        try { if (priceSlotEqual(u.price, entry.price, precision)) { violations.push({ targetId: entry.targetId, currentOrderId: u.chainOrderId, currentType: entry.type, currentState: 'CHAIN_ORPHAN', reason: 'chain_orphan_collision' }); break; } } catch {}
+                        if (pricesOnSameLevel(
+                            Number(u.price), Number(u.size) || 0, u.type as string | undefined,
+                            Number(entry.price), Number(entry.size) || 0, entry.type as string | undefined,
+                            _assets, incrementPercent
+                        )) {
+                            violations.push({ targetId: entry.targetId, currentOrderId: u.chainOrderId, currentType: entry.type, currentState: 'CHAIN_ORPHAN', reason: 'chain_orphan_collision' });
+                            break;
+                        }
                     }
                 }
             }
@@ -975,21 +982,24 @@ function validateCreateTargetSlots(actions: CowAction[], orders: Map<string, Man
                 violations.push({ targetId: entry.targetId, currentOrderId: null, currentType: entry.type, currentState: 'CREATE', reason: 'same_batch_price_collision' });
             } else seen.add(entry.targetId);
         }
-        // Same-batch bit-identical duplicate price across DIFFERENT target slots.
+        // Same-batch duplicate price across DIFFERENT target slots.
         // The genesis-frozen slot mapping gives every slot a distinct price
-        // level, so two CREATEs at the exact same price on different slots
-        // indicate a degenerate plan (production incident 2026-08-29: several
-        // slots planned at one price; every batch was filtered down to a
-        // single op and the grid rebuild crawled at one placement per cycle).
-        // The tolerance-based price-collision check that caught this class was
-        // removed with the slot-based rewrite; this exact-equality check
-        // restores the protection without tolerance false-positives. First
-        // target per (type, price) wins; later duplicates are skipped by the
-        // caller via violatingTargetIds.
-        const priceOwner = new Map<string, string>();
+        // level, so two CREATEs at the same price on different slots indicate a
+        // degenerate plan (production incident 2026-08-29: several slots
+        // planned at one price; every batch was filtered down to a single op
+        // and the grid rebuild crawled at one placement per cycle).
+        //
+        // Identity is the ladder level, NOT the on-chain integer at the asset
+        // precision: a price is not an amount, so a low-precision asset
+        // (e.g. precision 4) collapses an entire adjacent band (0.000318 and
+        // 0.000343 both -> 3) and would flag every CREATE but the first as a
+        // duplicate. sameGridPrice carries 1e-9 relative slack so float noise
+        // in a repeated level still matches without merging distinct levels.
+        // First target per (type, level) wins; later duplicates are skipped by
+        // the caller via violatingTargetIds.
+        const invalidPriceTargets = new Set<string>();
         for (const entry of createEntries) {
-            const priceNum = Number(entry.price);
-            if (!Number.isFinite(priceNum)) {
+            if (!Number.isFinite(Number(entry.price))) {
                 // Fail closed: an unpriceable CREATE cannot be proven
                 // collision-free, so it is rejected, not skipped.
                 violations.push({
@@ -999,29 +1009,21 @@ function validateCreateTargetSlots(actions: CowAction[], orders: Map<string, Man
                     currentState: 'CREATE',
                     reason: 'create_price_invalid',
                 });
-                continue;
+                invalidPriceTargets.add(entry.targetId);
             }
-            // Key on the on-chain integer repr when the side precision is
-            // known (bit-exact: prices that quantize to the same chain int
-            // ARE the same price on the DEX); float fallback preserves the
-            // old behavior for callers without assets context.
-            let key: string;
-            let sidePrecision: number | null = null;
-            try { sidePrecision = _assets ? getPrecisionByOrderType(_assets, entry.type) : null; } catch { sidePrecision = null; }
-            if (Number.isFinite(Number(sidePrecision)) && Number(sidePrecision) > 0) {
-                try {
-                    key = `${String(entry.type)}:i${floatToBlockchainInt(priceNum, Number(sidePrecision))}`;
-                } catch {
-                    key = `${String(entry.type)}:${priceNum}`;
-                }
-            } else {
-                key = `${String(entry.type)}:${priceNum}`;
-            }
-            const owner = priceOwner.get(key);
-            if (owner === undefined) {
-                priceOwner.set(key, entry.targetId);
-            } else if (owner !== entry.targetId) {
-                violations.push({ targetId: entry.targetId, currentOrderId: null, currentType: entry.type, currentState: 'CREATE', reason: 'same_batch_price_duplicate', duplicateOf: owner });
+        }
+        const duplicateTargets = new Set<string>();
+        for (let i = 0; i < createEntries.length; i++) {
+            const a = createEntries[i];
+            if (invalidPriceTargets.has(a.targetId)) continue;
+            for (let j = i + 1; j < createEntries.length; j++) {
+                const b = createEntries[j];
+                if (invalidPriceTargets.has(b.targetId)) continue;
+                if (a.targetId === b.targetId || a.type !== b.type) continue;
+                if (!sameGridPrice(a.price, b.price)) continue;
+                if (duplicateTargets.has(b.targetId)) continue;
+                duplicateTargets.add(b.targetId);
+                violations.push({ targetId: b.targetId, currentOrderId: null, currentType: b.type, currentState: 'CREATE', reason: 'same_batch_price_duplicate', duplicateOf: a.targetId });
             }
         }
     }

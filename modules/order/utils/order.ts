@@ -83,7 +83,7 @@ import { parseSlotIndex as parseSlotIndexShared } from './slot.js';
 import type { OrderManagerLike, PendingPriceCorrection, ChainOrder, ParsedChainOrder, AssetPair, AssetInfo, OrderType, ManagedOrder, UnmatchedChainOrder, CowAction, ProjectedFunds } from '../../types.js';
 import type { GridGenesis } from './math.js';
 const { isValidNumber, toFiniteNumber } = Format;
-const { blockchainToFloat, floatToBlockchainInt, quantizeFloat, priceSlotEqual } = MathUtils;
+const { blockchainToFloat, floatToBlockchainInt, quantizeFloat, slotIndexForPrice, priceSlotEqual } = MathUtils;
 const orderLogger = new Logger('Order');
 
 interface CorrectionAccountOrdersLike {
@@ -404,7 +404,17 @@ function _validatePriceCorrectionEntry(manager: OrderManagerLike, entry: Pending
     if (!hasGenesisLadder(manager?._genesis)) {
         return { valid: false, reason: `no price ladder (INV-GRID-004) — slot ${slotId} has no authoritative price` };
     }
-    if (!priceSlotEqual(slot.price, Number(entry.expectedPrice), Number(precision))) {
+    // Genesis is guaranteed here (guarded above), so compare ladder LEVELS --
+    // not priceSlotEqual at the asset amount precision, which collapses
+    // adjacent levels for a low-precision asset and would accept a stale entry.
+    let sameLevel: boolean;
+    try {
+        const genesis = manager._genesis as GridGenesis;
+        sameLevel = slotIndexForPrice(slot.price, genesis) === slotIndexForPrice(Number(entry.expectedPrice), genesis);
+    } catch {
+        sameLevel = priceSlotEqual(slot.price, Number(entry.expectedPrice), Number(precision));
+    }
+    if (!sameLevel) {
         return { valid: false, reason: `slot ${slotId} now targets ${slot.price} (entry queued ${entry.expectedPrice})` };
     }
     // Size check: the broadcast sends amountToSell from the QUEUED snapshot.

@@ -193,47 +193,51 @@ async function runTests() {
         assert.strictEqual(result.isValid, true, 'rotation releases source slot for create');
     }
 
-    // ── 11. Bit-exact same-batch price duplicate (on-chain int key) ────
-    console.log(' - 10. Layer-5 bit-exact price duplicate keying...');
+    // ── 11. Exact-level same-batch price duplicate (ladder-level key) ────
+    console.log(' - 10. Layer-5 exact-level price duplicate keying...');
     {
-        // SELL side precision = assetA (8) — the repo-wide side-precision
-        // convention. Distinct floats that quantize to the SAME on-chain int
-        // (100.000000001 and 100.000000004 both -> 10000000000 at prec 8)
-        // must collide — they are one price on the DEX.
-        const colliding = [
-            makeCreateAction('slot-a', 100.000000001, ORDER_TYPES.SELL),
-            makeCreateAction('slot-b', 100.000000004, ORDER_TYPES.SELL)
-        ];
-        const resColliding = validateCreateTargetSlots(colliding, new Map(), dummyAssets);
-        assert.strictEqual(resColliding.isValid, false, 'same on-chain int = same price = duplicate');
-        const dup = resColliding.violations.find(v => v.reason === 'same_batch_price_duplicate');
-        assert.ok(dup, 'violation reason is same_batch_price_duplicate');
-        assert.strictEqual(dup.targetId, 'slot-b', 'first target wins, later duplicate flagged');
-
-        // Distinct on-chain ints (100.0000001 -> 100000001 vs
-        // 100.0000002 -> 100000002) must NOT false-positive, even though
-        // they are adjacent floats.
-        const distinct = [
-            makeCreateAction('slot-a', 100.0000001, ORDER_TYPES.SELL),
-            makeCreateAction('slot-b', 100.0000002, ORDER_TYPES.SELL)
-        ];
-        const resDistinct = validateCreateTargetSlots(distinct, new Map(), dummyAssets);
-        const dupDistinct = resDistinct.violations.find(v => v.reason === 'same_batch_price_duplicate');
-        assert.ok(!dupDistinct, 'distinct on-chain ints are distinct prices, no false positive');
-
-        // Without assets context the float fallback applies: the colliding
-        // pair above has distinct floats and passes (documented fallback).
-        const resFallback = validateCreateTargetSlots(colliding, new Map(), null);
-        const dupFallback = resFallback.violations.find(v => v.reason === 'same_batch_price_duplicate');
-        assert.ok(!dupFallback, 'float fallback for asset-less callers (old behavior)');
-
-        // Identical prices still collide under the int key (regression).
+        // Two CREATEs at the SAME price on different slots are a degenerate
+        // plan and must collide so only the first survives.
         const identical = [
             makeCreateAction('slot-a', 100, ORDER_TYPES.SELL),
             makeCreateAction('slot-b', 100, ORDER_TYPES.SELL)
         ];
         const resIdentical = validateCreateTargetSlots(identical, new Map(), dummyAssets);
-        assert.ok(resIdentical.violations.some(v => v.reason === 'same_batch_price_duplicate'), 'exact duplicates still flagged with assets');
+        assert.strictEqual(resIdentical.isValid, false, 'one-price plan is a duplicate');
+        const dup = resIdentical.violations.find(v => v.reason === 'same_batch_price_duplicate');
+        assert.ok(dup, 'violation reason is same_batch_price_duplicate');
+        assert.strictEqual(dup.targetId, 'slot-b', 'first target wins, later duplicate flagged');
+
+        // Distinct ladder levels must NOT false-positive, even when they
+        // quantize to the same ASSET-precision integer. A price is not an
+        // amount: rounding it through one asset's precision collapses an
+        // adjacent band for a low-precision asset (precision-4 quote).
+        const adjacent = [
+            makeCreateAction('slot-a', 100.0000001, ORDER_TYPES.SELL),
+            makeCreateAction('slot-b', 100.0000002, ORDER_TYPES.SELL)
+        ];
+        const resAdjacent = validateCreateTargetSlots(adjacent, new Map(), dummyAssets);
+        const dupAdjacent = resAdjacent.violations.find(v => v.reason === 'same_batch_price_duplicate');
+        assert.ok(!dupAdjacent, 'distinct levels are distinct prices, no false positive');
+
+        // The reported production shape: precision-4 quote asset, adjacent
+        // BUY ladder levels 0.000318 / 0.000319 (both -> 3 at precision 4).
+        const lowPrecisionAssets = {
+            assetA: { id: '1.3.1', symbol: 'BASE', precision: 8 },
+            assetB: { id: '1.3.2', symbol: 'QUOTE', precision: 4 }
+        };
+        const lowPrecisionBuys = [
+            { type: COW_ACTIONS.CREATE, id: 'slot-77', order: { id: 'slot-77', price: 0.000318, type: ORDER_TYPES.BUY, size: 1.67 } },
+            { type: COW_ACTIONS.CREATE, id: 'slot-78', order: { id: 'slot-78', price: 0.000319, type: ORDER_TYPES.BUY, size: 1.68 } }
+        ];
+        const resLowPrecision = validateCreateTargetSlots(lowPrecisionBuys, new Map(), lowPrecisionAssets);
+        const dupLowPrecision = resLowPrecision.violations.find(v => v.reason === 'same_batch_price_duplicate');
+        assert.ok(!dupLowPrecision, 'adjacent low-precision BUY levels must not collapse into a duplicate');
+
+        // Asset-less callers behave the same (exact float key).
+        const resFallback = validateCreateTargetSlots(adjacent, new Map(), null);
+        const dupFallback = resFallback.violations.find(v => v.reason === 'same_batch_price_duplicate');
+        assert.ok(!dupFallback, 'asset-less callers use the exact float key');
     }
 
     // ── 12. Broadcast-price keying (layer-5 guards the batch) ────
@@ -274,6 +278,38 @@ async function runTests() {
         const bad = result.violations.find(v => v.reason === 'create_price_invalid');
         assert.ok(bad, 'violation reason is create_price_invalid');
         assert.strictEqual(bad.targetId, 'slot-n', 'violation targets the unpriceable CREATE slot');
+    }
+
+    // ── 14. Chain-orphan price fallback honors the increment cap ────
+    console.log(' - 13. Chain-orphan fallback caps tolerance to the grid increment...');
+    {
+        // A dust-sized order inflates calculatePriceTolerance above the grid
+        // step, so without the cap the adjacent level 0.000319 collides with
+        // the CREATE at 0.000318 through the slotless chain-orphan fallback.
+        const lowPrecisionAssets = {
+            assetA: { id: '1.3.1', symbol: 'BASE', precision: 8 },
+            assetB: { id: '1.3.2', symbol: 'QUOTE', precision: 4 }
+        };
+        const actions = [{
+            type: COW_ACTIONS.CREATE, id: 'slot-77',
+            order: { id: 'slot-77', price: 0.000318, type: ORDER_TYPES.BUY, size: 1e-6 }
+        }];
+        // Slotless orphan (no chainSlotId/candidateSlotId) → price fallback.
+        const slotlessOrphan = [
+            { chainOrderId: '1.7.500', price: 0.000319, size: 1e-6, type: ORDER_TYPES.BUY }
+        ];
+
+        const uncapped = validateCreateTargetSlots(actions, new Map(), lowPrecisionAssets, slotlessOrphan);
+        assert.ok(
+            uncapped.violations.some(v => v.reason === 'chain_orphan_collision'),
+            'without an increment, the dust-inflated tolerance collides adjacent levels'
+        );
+
+        const capped = validateCreateTargetSlots(actions, new Map(), lowPrecisionAssets, slotlessOrphan, 0.4);
+        assert.ok(
+            !capped.violations.some(v => v.reason === 'chain_orphan_collision'),
+            'increment cap keeps adjacent chain-orphan levels distinct'
+        );
     }
 
     console.log('\n✓ validateCreateTargetSlots tests PASSED!');
