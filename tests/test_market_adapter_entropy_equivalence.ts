@@ -276,7 +276,7 @@ function testRegimeCacheMatchesColdRunOnAnExtendedSeries() {
     // cached analysis, and the cache is deterministic, so a stride still
     // catches a resume/prefix regression (and always checks the final length).
     const lengths: number[] = [];
-    for (let length = 700; length < prices.length; length += 5) lengths.push(length);
+    for (let length = 700; length < prices.length; length += 20) lengths.push(length);
     lengths.push(prices.length);
     for (const length of lengths) {
         const window = prices.slice(0, length);
@@ -320,7 +320,11 @@ function testRegimeCacheMatchesColdRunOnASlidingWindow() {
     ];
     for (const { label, opts: variant } of variants) {
         _resetRegimeCache();
-        for (let end = 1200; end < 1260; end += 3) {
+        // Sample the slide at a coarse stride: each end runs a full cold + cached
+        // analysis, and the cached result is deterministic, so a handful of
+        // offsets across the range still catches a resume/prefix regression
+        // (the alignment rules themselves are pinned by testResumeAlignmentRules).
+        for (let end = 1200; end < 1260; end += 12) {
             const window = prices.slice(Math.max(0, end - CAP + 1), end + 1);
             const warm = computeRegimeMultiplier(window, { regimeSensitivity: 1, cacheKey: `unit:slide:${label}`, ...variant });
             const cold = computeRegimeMultiplier(window, { regimeSensitivity: 1, ...variant });

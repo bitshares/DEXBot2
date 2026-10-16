@@ -100,12 +100,28 @@ const TEST_TIMEOUT_MS = Number(process.env.DEXBOT_TEST_TIMEOUT_MS || 240000);
 // when the hooks are not yet active. The runner can install those hooks up
 // front, letting the test run in the process it was already spawned into and
 // skipping one full node startup + module-graph load per file. Stage-based
-// tests are excluded: their stages need per-stage worker isolation and the
-// preload would defeat it.
+// tests with multiple stages are excluded: their stages need per-stage worker
+// isolation and the preload would defeat it. Single-stage runEsmMockStages()
+// files are eligible, though: with the hooks already active the helper's
+// in-process branch runs its one stage directly instead of spawning a worker.
 const ESM_HOOKS_FILE = path.join(process.cwd(), 'dist', 'tests', 'helpers', 'esm_mock_hooks.mjs');
 const ESM_ENV_ACTIVE = 'DEXBOT_ESM_MOCKS_ACTIVE';
 const ESM_ENV_MANIFEST = 'DEXBOT_ESM_MOCK_MANIFEST';
 const esmPreloadCache = new Map<string, boolean>();
+
+// Matches runEsmMockStages(['only-stage'], ...) — a single string literal in the
+// stage array. Multi-stage calls (comma-separated literals,
+// Object.keys(STAGES), a stage-list variable, or runEsmMockStagesGrouped/Shared)
+// do not match, so only unambiguously single-stage files opt in.
+const SINGLE_STAGE_CALL_RE = /runEsmMockStages\(\s*\[\s*(['"])[^'"]+\1\s*\]\s*,/g;
+const STAGE_CALL_RE = /runEsmMockStages\(/g;
+
+function isSingleStageTest(src: string): boolean {
+    if (!src.includes('runEsmMockStages(')) return false;
+    const calls = src.match(STAGE_CALL_RE) || [];
+    const single = src.match(SINGLE_STAGE_CALL_RE) || [];
+    return calls.length > 0 && single.length === calls.length;
+}
 
 function needsEsmPreload(testFile: string): boolean {
     const cached = esmPreloadCache.get(testFile);
@@ -113,7 +129,8 @@ function needsEsmPreload(testFile: string): boolean {
     let needed = false;
     try {
         const src = readFileSync(testFile, 'utf8');
-        needed = src.includes('esmMockEntry(') && !src.includes('runEsmMockStages');
+        needed = (src.includes('esmMockEntry(') && !src.includes('runEsmMockStages'))
+            || isSingleStageTest(src);
     } catch { needed = false; }
     esmPreloadCache.set(testFile, needed);
     return needed;

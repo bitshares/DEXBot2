@@ -440,7 +440,10 @@ function testTrackerMatchesBatchAcrossPrefixes() {
     // invalidates only its own pairs.
     const erPeriod = 10;
     const lb = 9;
-    const series = seededSeries(200);
+    // Prefix parity is O(n^2) Huber fits (the batch recomputes the whole prefix
+    // each bar), so keep the sweep long enough to cross the warmup and the NaN
+    // hole at 137 without paying for 200 prefixes.
+    const series = seededSeries(160);
     series[137] = NaN;
 
     for (const pct of [0, 10, 25]) {
@@ -466,7 +469,7 @@ function testRollingWindowWeightsMatchFullPrefix() {
     // the rolling-window result must be identical to the full-prefix result.
     const erPeriod = 10;
     const lb = 9;
-    const series = seededSeries(200);
+    const series = seededSeries(160);
     const windowBars = Math.ceil(erPeriod) + lb + 1;
     const opts = {
         erPeriod,

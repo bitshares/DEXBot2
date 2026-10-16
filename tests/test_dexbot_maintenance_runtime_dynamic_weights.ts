@@ -5,9 +5,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 // Compiled ESM namespaces are frozen and cannot be swapped via require.cache;
-// every scenario runs in its own hooked child process (runEsmMockStages) and
-// registers its own loader-hook module mocks via defineEsmMockAbs().
-const { runEsmMockStages, defineEsmMockAbs } = require('./helpers/esm_mocks');
+// scenarios whose mocks conflict run in their own hooked child process and
+// register their own loader-hook module mocks via defineEsmMockAbs().
+// Scenarios that share an identical mock set and hold no cross-stage state are
+// grouped into one worker by runEsmMockStagesGrouped so each group pays worker
+// startup + module-graph evaluation once instead of once per scenario.
+const { runEsmMockStagesGrouped, defineEsmMockAbs } = require('./helpers/esm_mocks');
 
 console.log('Running dexbot maintenance runtime dynamic weight tests');
 
@@ -955,7 +958,35 @@ const STAGES = {
     dexbot_class_perform_grid_resync_forwards_options: testDexbotClassPerformGridResyncForwardsOptions,
 };
 
-runEsmMockStages(Object.keys(STAGES), async (stage) => {
+// Stages are grouped into units by mock compatibility. A unit runs every stage
+// it lists sequentially in one worker, so they must share an identical mock set
+// and the module under test must hold no cross-stage state:
+//   - both whitelist-refresh scenarios install installCoreResyncMocks({live});
+//   - the metadata scenarios install no mocks and only touch per-bot files;
+//   - the five manual/market-adapter trigger scenarios all install
+//     installTriggerResetMocks().
+// The refresh stale/base-mismatch scenarios vary the mock's snapshotMode, and
+// the volatility/RMS/spread scenarios install closures that differ per stage,
+// so each of those stays its own unit.
+const STAGE_UNITS = [
+    'resync_applies_volatility_weights',
+    ['refresh_applies_live_weights', 'refresh_reloads_whitelist_flags'],
+    'refresh_stale_fallback',
+    'refresh_rejects_stale_base_weights',
+    ['metadata_records_actual_reset', 'metadata_rejects_invalid_snapshot'],
+    [
+        'manual_trigger_reset_refreshes_center_price',
+        'manual_trigger_reset_keeps_offset_when_current',
+        'market_adapter_trigger_reset_refreshes_center',
+        'market_adapter_bootstrap_trigger_reset',
+        'market_adapter_slope_trigger_reset',
+    ],
+    'rms_divergence_runs_full_grid_resync',
+    'spread_check_runs_without_divergence',
+    'dexbot_class_perform_grid_resync_forwards_options',
+];
+
+runEsmMockStagesGrouped(STAGE_UNITS, async (stage) => {
     await STAGES[stage]();
     console.log(`  ✓ ${stage}`);
 });

@@ -113,13 +113,15 @@ function computeHuberWindowSlopePct(amaValues: unknown[] | null | undefined, ind
 
     // Local linear fit needs the full window at both ends; reject non-positive
     // values anywhere in the window (Number(null) is 0) before fitting.
-    const y: number[] = [];
-    for (let k = index - bars; k <= index; k++) {
-        const v = Number(amaValues[k]);
+    // The window is exactly [index - bars, index], so n is known up front and
+    // y can be pre-sized (no per-bar push growth).
+    const n = bars + 1;
+    const y: number[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+        const v = Number(amaValues[index - bars + i]);
         if (!Number.isFinite(v) || v <= 0) return null;
-        y.push(Math.log(v));
+        y[i] = Math.log(v);
     }
-    const n = y.length;
     // Fill any missing field from the canonical constant. Production never passes
     // `hub` (the default is the constant), so this only guards a partial override
     // from silently skipping the IRLS loop or injecting NaN weights.
@@ -148,18 +150,29 @@ function computeHuberWindowSlopePct(amaValues: unknown[] | null | undefined, ind
         return { a, b };
     };
 
-    let fit = wls(new Array(n).fill(1)); // OLS initialisation
+    // Scratch buffers are reused across the IRLS passes instead of allocating a
+    // fresh resid/abs/w triple (plus the sort copy) every iteration. This is the
+    // per-bar hot path of the dynamic-weight series, so the allocations dominate
+    // the fit arithmetic at the 16-bar window. The loops keep the original
+    // operation order so the returned slope is bit-for-bit unchanged.
+    const ones = new Array(n).fill(1);
+    const resid = new Array(n);
+    const abs = new Array(n);
+    const w = new Array(n);
+
+    let fit = wls(ones); // OLS initialisation
     for (let iter = 0; iter < hubIterations; iter++) {
-        const resid = y.map((v, i) => v - (fit.a + fit.b * (i - xMean)));
-        const abs = resid.map(Math.abs).sort((p, q) => p - q);
-        const mid = abs.length >> 1;
-        const mad = abs.length % 2 === 1 ? abs[mid] : (abs[mid - 1] + abs[mid]) / 2;
+        for (let i = 0; i < n; i++) resid[i] = y[i] - (fit.a + fit.b * (i - xMean));
+        for (let i = 0; i < n; i++) abs[i] = Math.abs(resid[i]);
+        abs.sort((p, q) => p - q);
+        const mid = n >> 1;
+        const mad = n % 2 === 1 ? abs[mid] : (abs[mid - 1] + abs[mid]) / 2;
         // Floor the robust scale. On piecewise-perfect data (a pure ramp, a
         // constant series) the MAD can collapse to ~0, which makes the Huber
         // weights degenerate and the weighted fit unstable; the floor is far
         // below any real per-bar signal (the reset gate is ~7e-5 here).
         const s = Math.max(1.4826 * mad, hubScaleFloor);
-        const w = resid.map((r) => Math.min(1, (hubC * s) / Math.max(Math.abs(r), 1e-12)));
+        for (let i = 0; i < n; i++) w[i] = Math.min(1, (hubC * s) / Math.max(Math.abs(resid[i]), 1e-12));
         const next = wls(w);
         const moved = Math.abs(next.b - fit.b);
         fit = next;
