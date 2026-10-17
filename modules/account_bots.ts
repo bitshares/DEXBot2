@@ -1275,11 +1275,13 @@ async function ensureBotAccountId(data: Record<string, unknown>, timeoutMs = 150
  *   fallback entries).
  * @param {number} [baseIndex=index] - Position the base entry currently
  *   occupies (differs from `index` for copies, whose source sits elsewhere).
- * @returns {Promise<{ data: any, commitAdapter: (() => void)|null }|null>}
+ * @returns {Promise<{ data: any, commitAdapter: (() => 'saved'|'unchanged'|'failed')|null }|null>}
  *   The edited draft plus a commit hook for staged `6) Adapter` flags — the
  *   caller MUST run `commitAdapter()` only after its bots.json save succeeded
  *   (so a failed save never leaves the whitelist out of sync), or null when
- *   cancelled.
+ *   cancelled. The hook reports whether the whitelist write actually happened
+ *   ('saved'), was unnecessary ('unchanged'), or failed ('failed', already
+ *   printed as a warning) so the caller can fold it into one status line.
  */
 async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseIndex = index) {
     const data = normalizeBotDraft(base);
@@ -1292,6 +1294,9 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     const baseEntry = base && typeof base === 'object' && Object.keys(base).length > 0 ? base : null;
     const baseBotKey = baseEntry ? String(normalizeBotEntry(baseEntry as BotEntry, baseIndex).botKey || '') : '';
     const isNewBot = !baseEntry;
+    // Copy is the only caller that points at a source entry elsewhere while
+    // inserting a new one; modify keeps the same slot (baseIndex === index).
+    const isCopy = baseIndex !== index;
     let adapterStaged: { ama: boolean; dynamicWeight: boolean; asymmetricBounds: boolean } | null = null;
     const isAmaGridPriceDraft = () => /^ama(?:[1-4])?$/.test(String(data.gridPrice ?? '').trim().toLowerCase());
     // Staged menu-6 edits win. Otherwise an existing bot uses its stored entry;
@@ -1523,26 +1528,31 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     // default (record if present, else AMA-on) must be persisted so the market
     // adapter sees the same value the editor displayed. An unchanged save still
     // writes nothing.
-    const commitAdapter: (() => void) | null = (stagedFlags || isNewBot) ? () => {
+    const commitAdapter: (() => 'saved'|'unchanged'|'failed') | null = (stagedFlags || isNewBot || isCopy) ? () => {
         const newKey = String(normalizeBotEntry(data, index).botKey || '');
-        const needRename = !!(baseBotKey && newKey && baseBotKey !== newKey);
+        // Copy keeps the source bot and its whitelist entry and writes the
+        // source's flags under newKey; only a genuine rename (modify) moves the
+        // entry. Without this, copying a bot would strip the source's flags.
+        const needRename = !isCopy && !!(baseBotKey && newKey && baseBotKey !== newKey);
         const desired = stagedFlags || adapterFlags();
-        const current = getWhitelistFlags(baseBotKey || newKey);
+        // A copy writes a fresh entry under newKey, so compare against newKey;
+        // otherwise compare against the source, whose entry is being renamed.
+        const current = getWhitelistFlags(isCopy ? newKey : (baseBotKey || newKey));
         const unchanged = desired.ama === current.ama
             && desired.dynamicWeight === current.dynamicWeight
             && desired.asymmetricBounds === current.asymmetricBounds;
         if (needRename && !renameWhitelistEntry(baseBotKey, newKey)) {
             console.log(`${COLORS.yellow}Adapter flags not saved — see the warning above.${COLORS.reset}`);
-            return;
+            return 'failed';
         }
         // Unchanged flags need no write — a successful rename above already
         // migrated the entry under the new key.
-        if (unchanged) return;
+        if (unchanged) return 'unchanged';
         if (!setWhitelistFlags(newKey, desired)) {
             console.log(`${COLORS.yellow}Warning: adapter flags not saved — could not write ${whitelistFile()}.${COLORS.reset}`);
-        } else {
-            console.log(`${COLORS.green}Adapter flags saved for '${newKey}'. Price/Weight are picked up on the adapter's next cycle; Range scaling applies after 'dexbot reset ${data.name}'.${COLORS.reset}`);
+            return 'failed';
         }
+        return 'saved';
     } : null;
 
     // Return the final data structure, preserving ALL fields from the normalized
@@ -1747,8 +1757,11 @@ async function main() {
                         if (!result) break;
                         config.bots.push(result.data);
                         saveBotsConfig(config, filePath);
-                        result.commitAdapter?.();
-                        console.log(`\nAdded bot '${result.data.name}' to ${path.basename(filePath)}.`);
+                        const adapterStatus = result.commitAdapter?.();
+                        const adapterNote = adapterStatus === 'saved'
+                            ? ` Adapter flags saved: Price/Weight apply on the adapter's next cycle; Range scaling after 'dexbot reset ${result.data.name}'.`
+                            : '';
+                        console.log(`\n${COLORS.green}Added bot '${result.data.name}' to ${path.basename(filePath)}.${adapterNote}${COLORS.reset}`);
                         // Return to the Actions menu instead of immediately
                         // opening another blank New Bot editor.
                         break;
@@ -1768,9 +1781,9 @@ async function main() {
                         if (result) {
                             config.bots[idx] = result.data;
                             saveBotsConfig(config, filePath);
-                            result.commitAdapter?.();
+                            const adapterStatus = result.commitAdapter?.();
                             const entry = result.data;
-                            console.log(`saved settings '${entry.name}' in ${path.basename(filePath)}.\n`);
+                            console.log(`saved settings '${entry.name}' in ${path.basename(filePath)}.${adapterStatus === 'saved' ? ' Adapter flags saved.' : ''}\n`);
                             console.log(`Live pickup (~1min, no reload needed): ${(BOT_LIVE_CONFIG_KEYS as readonly string[]).join(' / ')}.`);
                             console.log(`Grid geometry needs 'dexbot reset ${entry.name}' (or 'dexbot reload' for everything at once); market/account changes need 'dexbot reload'.\n`);
                         }
@@ -1815,8 +1828,11 @@ async function main() {
                         if (result) {
                             config.bots.splice(idx + 1, 0, result.data);
                             saveBotsConfig(config, filePath);
-                            result.commitAdapter?.();
-                            console.log(`Copied bot '${result.data.name}' into ${path.basename(filePath)}.\n`);
+                            const adapterStatus = result.commitAdapter?.();
+                            const adapterNote = adapterStatus === 'saved'
+                                ? ` Adapter flags saved: Price/Weight apply on the adapter's next cycle; Range scaling after 'dexbot reset ${result.data.name}'.`
+                                : '';
+                            console.log(`${COLORS.green}Copied bot '${result.data.name}' into ${path.basename(filePath)}.${adapterNote}${COLORS.reset}\n`);
                         }
                     } catch (err) {
                         console.log(`\n❌ Invalid input: ${getErrorMessage(err)}\n`);
