@@ -74,7 +74,8 @@ export function sleepMs(ms: number): Promise<void> {
  * queries) must throw immediately — retrying those only burns time.
  *
  * Single home for the predicate previously triplicated across
- * kibana_client.ts / kibana_candles.ts / kibana_feed_source.ts.
+ * market_adapter/core/kibana_client.ts / market_adapter/core/kibana_candles.ts
+ * / market_adapter/inputs/kibana_feed_source.ts.
  */
 export function isTransientNetworkError(err: unknown): boolean {
   const msg = String(getErrorMessage(err) || '');

@@ -44,11 +44,6 @@
  *     blockchainToFloat that returns NaN instead of throwing; kept local so
  *     the offline exporter avoids pulling in utils/math's dependency tree)
  *   - buildOrientationHypothesis(...) - Trade fields for one pays-asset orientation
- *   - deriveTradeFromFillBlock(block, assetContext) - Derive a trade from a
- *     parsed FILL DETECTED block (side from pays-asset orientation, price from
- *     human-scaled amounts). Bare pre-#22 blocks without asset IDs are
- *     disambiguated via log-distance to the grid median price.
- *     Returns: FillEntry or null (with reason logged by caller)
  *   - resolveExportAssetContext(botKey, botConfig) - Resolve offline asset metadata
  *     Reads profiles/orders/<botKey>.json for assetA/assetB ids+precisions and
  *     grid price stats. No chain access (export stays offline/browser-safe).

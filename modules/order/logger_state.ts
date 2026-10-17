@@ -18,7 +18,7 @@
  * - Maintain audit trail for debugging
  *
  * ===============================================================================
- * TABLE OF CONTENTS - LoggerState Class (2 methods)
+ * TABLE OF CONTENTS - LoggerState Class (3 methods)
  * ===============================================================================
  *
  * INITIALIZATION (1 method)

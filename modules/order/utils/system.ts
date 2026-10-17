@@ -4,44 +4,74 @@
  * Price derivation, persistence, grid correction, and UI/interactive utilities.
  *
  * ===============================================================================
- * TABLE OF CONTENTS (21 exported functions)
+ * TABLE OF CONTENTS (43 exported functions + 11 structural view types)
  * ===============================================================================
  *
- * SECTION 1: PRICE DERIVATION (10 functions)
+ * SECTION 1: PRICE DERIVATION (9 functions + 1 internal)
  *   - lookupAsset(BitShares, symbol) - Lookup asset metadata from blockchain
+ *   - resolveAssetByRef(BitShares, ref) - Resolve a full asset object from id/symbol
  *   - deriveMarketPrice(BitShares, symA, symB) - Derive price from order book
  *   - derivePoolPrice(BitShares, symA, symB) - Derive price from liquidity pool
+ *   - setDerivePriceTestHook(hook) - Test-only seam for derivePrice
  *   - derivePrice(BitShares, symA, symB, mode) - Derive price with fallback chain
  *   - derivePriceViaBridges(BitShares, symA, symB, bridges, mode) - Multi-hop price via bridge assets
  *   - derivePriceWithBridges(BitShares, symA, symB, bridges, mode) - Direct price, else bridge hops
- *   - resolveLiquidityPoolByShareAsset(BitShares, shareAsset) - Resolve LP by share asset
  *   - deriveLiquidityPoolTokenValue(BitShares, symA, symB) - Derive LP token value
- *   - loadAmaCenterPrice(manager) - Load AMA center price
- *   - loadAmaCenterSnapshot(manager) - Load AMA center snapshot
+ *   - resolveLiquidityPoolByShareAsset(BitShares, shareAsset) - Resolve LP by share asset (internal)
  *
- * SECTION 2: FEE MANAGEMENT (1 function)
+ * SECTION 2: AMA CENTER SNAPSHOT (2 functions)
+ *   - loadAmaCenterSnapshot(manager) - Load the full dynamic-grid snapshot
+ *   - loadAmaCenterPrice(manager) - Load the AMA center price
+ *
+ * SECTION 3: FEE MANAGEMENT (1 function)
  *   - initializeFeeCache(botsConfig, BitShares) - Initialize fee cache from blockchain
  *
- * SECTION 3: GRID STATE MANAGEMENT (3 functions)
+ * SECTION 4: GRID STATE MANAGEMENT (5 functions)
  *   - persistGridSnapshot(manager, accountOrders) - Persist grid to storage
+ *   - restoreGapEvacStreaks(manager) - Restore persisted gap-evacuation streaks
  *   - retryPersistenceIfNeeded(manager) - Retry persistence if previous failed
  *   - applyGridDivergenceCorrections(manager, ...) - Apply grid divergence corrections
+ *   - applyPersistedPendingCrawls(...) - Apply persisted-but-uncommitted fill crawls
  *
- * SECTION 4: UI & INTERACTIVE UTILITIES (7 functions)
+ * SECTION 5: SPREAD-CORRECTION READINESS (7 functions)
+ *   - resolveSpreadFreshnessMs(manager) - The single freshness window for spread trust
+ *   - resolveSpreadCrossingFloor(manager) - Crossing floor spread correction must not trade through
+ *   - refreshLiveMarketPrice(manager) - Refresh the cached live market price
+ *   - maybeRefreshLiveMarketPrice(manager) - Refresh if stale, paced to one attempt per window
+ *   - evaluateSpreadCorrectionReadiness(manager) - Evaluate whether spread correction may act
+ *   - resolveSpreadMarketReference(manager) - Resolve the last real FILL price
+ *   - resolveLastFillGuardReference(manager) - Resolve the reference the LAST-FILL-GUARD judges
+ *
+ * SECTION 6: LAST-FILL / MARKET-FILL PERSISTENCE (6 functions)
+ *   - restoreLastMarketFill(manager) - Restore the persisted last-market-fill reference
+ *   - normalizeLastFillPivot(row) - Normalize a persisted LAST-FILL-GUARD pivot row
+ *   - normalizeLastMarketFill(row) - Normalize a persisted last-market-fill row
+ *   - setLastFillPivot(manager, ...) - Write the LAST-FILL-GUARD pivot scalar family
+ *   - resetLastFillPivot(manager) - Clear the pivot to cold state
+ *   - restoreLastFillPivot(manager) - Restore the persisted pivot into the manager
+ *
+ * SECTION 7: UI & INTERACTIVE UTILITIES (6 functions)
  *   - ensureProfilesDirectory(profilesDir) - Ensure profiles directory exists
  *   - sleep(ms) - Pause execution for specified duration
  *   - readInput(prompt, options) - Read user input from stdin
  *   - readPassword(prompt) - Read password with masked echo
  *   - withRetry(fn, options) - Execute async function with exponential backoff
- *   - withTimeout(promise, timeoutMs, options) - defined in ./timeout
  *   - withBlockchainRetry(fn, label, options) - Blockchain op with timeout + retry + node failover
+ *   (withTimeout lives in ./timeout)
  *
- * SECTION 6: GENERAL UTILITIES (5 functions)
+ * SECTION 8: GENERAL UTILITIES (7 functions)
  *   - resolveAccountRef(manager, account) - Resolve best account reference
  *   - deepFreeze(obj) - Recursively freeze object for immutability
  *   - cloneMap(map) - Create shallow clone of Map
  *   - ensureDir(dirPath) - Ensure directory exists, creating recursively
+ *   - nowIso() - Current time as an ISO string
+ *   - fireStructuralResync(manager, ...) - Fire-and-forget structural grid resync
  *   - parseJsonWithComments(raw) - Parse JSON with comment stripping
+ *
+ * STRUCTURAL VIEW TYPES:
+ *   AssetMeta, PoolReserve, PoolEntry, BitSharesClient, AmaCenterSnapshot,
+ *   FeeCacheEntryData, SpreadCorrectionRefusalReason, SpreadCorrectionReadiness,
+ *   UnmatchedChainOrderLike, GridResizeResult, CowResult
  *
  * ===============================================================================
  */

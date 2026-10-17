@@ -15,7 +15,7 @@
  * Time/Performance (ms, %):     1-2 decimals - readable metrics
  *
  * ===============================================================================
- * TABLE OF CONTENTS (15 exported functions)
+ * TABLE OF CONTENTS (17 exported functions)
  * ===============================================================================
  *
  * SECTION 1: ASSET FORMATTING (4 functions)
@@ -38,11 +38,13 @@
  * SECTION 4: RATIO/METRIC FORMATTING (1 function)
  *   12. formatMetric2(value) - Format to 2 decimals (timing, performance)
  *
- * SECTION 5: HELPER UTILITIES (4 functions)
+ * SECTION 5: HELPER UTILITIES (5 functions)
  *   13. isValidNumber(value) - Check if value is defined and finite
  *   14. toFiniteNumber(value, defaultValue) - Convert to finite number with fallback
- *   15. positiveOrNull(value) - Convert to a strictly-positive number, else null
- *   16. safeFormat(value, decimals, fallback) - Safely format with fallback
+ *   15. toKnownNumber(value, absentValue) - Convert to finite number, treating an
+ *       explicitly absent value (null/undefined/empty) as the absent sentinel
+ *   16. positiveOrNull(value) - Convert to a strictly-positive number, else null
+ *   17. safeFormat(value, decimals, fallback) - Safely format with fallback
  *
  * ===============================================================================
  */

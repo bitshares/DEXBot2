@@ -12,7 +12,7 @@
  * - Detects and flags out-of-spread conditions
  *
  * ===============================================================================
- * TABLE OF CONTENTS - Grid Functions (23 exported functions)
+ * TABLE OF CONTENTS - Grid Functions (34 exports)
  * ===============================================================================
  *
  * CONFIGURATION & CALCULATION (2 functions)
@@ -37,36 +37,49 @@
  * GRID STATE CHECKING (2 functions)
  *   8. checkAndUpdateGridIfNeeded(manager) - Complete fund trigger: available-
  *       funds ratio + over-allocation + on-chain committed-drift legs
- *   8b. checkCommittedSizeDrift(manager) - Async committed-drift-only accessor
+ *   9. checkCommittedSizeDrift(manager) - Async committed-drift-only accessor
  *       (the drift core is folded into checkAndUpdateGridIfNeeded)
  *
  * BLOCKCHAIN SYNCHRONIZATION (2 functions - async)
- *   9. _recalculateGridOrderSizesFromBlockchain(manager, orderType, options) - Recalculate sizes from blockchain
- *   10. updateGridFromBlockchainSnapshot(manager, orderType, fromBlockchainTimer, overrideBoundaryIdx) - Update grid from blockchain
+ *  10. _recalculateGridOrderSizesFromBlockchain(manager, orderType, options) - Recalculate sizes from blockchain
+ *  11. updateGridFromBlockchainSnapshot(manager, orderType, fromBlockchainTimer, overrideBoundaryIdx) - Update grid from blockchain
  *
  * GRID COMPARISON (2 functions - async)
- *   11. compareGrids(calculatedGrid, persistedGrid, manager) - Compare two grids
+ *  12. compareGrids(calculatedGrid, persistedGrid, manager) - Compare two grids
  *       Validates grid structure and reports divergence metrics
- *   12. monitorDivergence(manager, calculatedGrid, persistedGrid) - Unified divergence check
+ *  13. monitorDivergence(manager, calculatedGrid, persistedGrid) - Unified divergence check
  *       Runs ratio-based + RMS-based checks and returns combined result
  *
  * SPREAD MANAGEMENT (2 functions)
- *   13. calculateCurrentSpread(manager) - Calculate current bid-ask spread
- *   14. checkSpreadCondition(manager, BitShares, updateOrdersOnChainBatch) - Check and flag spread condition
+ *  14. calculateCurrentSpread(manager) - Calculate current bid-ask spread
+ *  15. checkSpreadCondition(manager, BitShares, updateOrdersOnChainBatch) - Check and flag spread condition
  *
  * GRID HEALTH MONITORING (4 functions)
- *   15. checkGridHealth(manager, updateOrdersOnChainBatch) - Monitor grid health
- *   16. checkWindowDust(manager) - Dust check scoped to the active buy/sell window
- *   17. hasAnyDust(manager, partials, side) - Check for dust orders
- *   18. getDustOrders(manager, partials, side) - Get dust order IDs
+ *  16. checkGridHealth(manager, updateOrdersOnChainBatch) - Monitor grid health
+ *  17. checkWindowDust(manager) - Dust check scoped to the active buy/sell window
+ *  18. hasAnyDust(manager, partials, side) - Check for dust orders
+ *  19. getDustOrders(manager, partials, side) - Get dust order IDs
  *
  * SIDE SELECTION (1 function)
- *   19. determineOrderSideByFunds(manager, currentMarketPrice) - Determine priority side
+ *  20. determineOrderSideByFunds(manager, currentMarketPrice) - Determine priority side
+ *
+ * SPREAD CORRECTION PLANNING (11 exports)
+ *  21. SPREAD_CORRECTION_REFUSAL - Refusal-cause vocabulary constant
+ *  22. SpreadCorrectionRefusalCause - Refusal-cause union type
+ *  23. isTransientSpreadRefusal(cause) - Whether a refusal cause is retryable
+ *  24. classifySpreadRefusalCause(...) - Classify why a correction batch did not land
+ *  25. recordSpreadCorrectionRefusal(...) - Record a refusal on the manager
+ *  26. recordSpreadCorrectionRetry(...) - Count a bounded re-plan retry
+ *  27. getOccupiedCorrectionSlots(...) - Planned CREATE destinations already occupied
+ *  28. replanSpreadCorrectionFromFreshMaster(...) - Re-plan from the current master
+ *  29. OccupiedCorrectionResolution - Outcome of plan-time collision resolution
+ *  30. resolveOccupiedCorrection(...) - Resolve a correction whose destination was taken
+ *  31. prepareSpreadCorrectionOrders(...) - Prepare orders to correct a wide spread
  *
  * BLOAT STATUS (3 functions)
- *   20. isGridBloated(manager, orders) - Check whether the grid is bloated
- *   21. isGridBloatGraceActive(manager) - Check the bloat grace state
- *   22. clearGridBloatFlag(manager) - Clear the bloat state
+ *  32. isGridBloated(manager, orders) - Check whether the grid is bloated
+ *  33. isGridBloatGraceActive(manager) - Check the bloat grace state
+ *  34. clearGridBloatFlag(manager) - Clear the bloat state
  *
  * ===============================================================================
  *
@@ -2754,8 +2767,6 @@ export function calculateCurrentSpread(manager: OrderManagerLike): number {
      * - Lock released: Blockchain submission (async, potentially slow)
      * - RACE CONDITION WINDOW: Between lock release and blockchain submission
      * - MITIGATION: Pre-flight fund verification before submission; comprehensive error handling
-     *
-     * See RACE_CONDITION_ANALYSIS.md for detailed vulnerability documentation.
      *
      * @param {import('./types').OrderManager} manager - Manager instance
      * @param {Object} BitShares - BitShares API client

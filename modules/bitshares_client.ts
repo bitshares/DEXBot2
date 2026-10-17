@@ -10,7 +10,7 @@
  * - Subscription and event handling
  *
  * ===============================================================================
- * EXPORTS (16 items)
+ * EXPORTS (17 items)
  * ===============================================================================
  *
  * 1. BitShares - Shared BitShares class for database operations
@@ -23,15 +23,17 @@
  * 5. disconnectClient() - Disconnect the client
  * 6. reconnectForCycle() - Reconnect for maintenance cycle
  * 7. setSuppressConnectionLog(bool) - Suppress/restore connection log output
- * 8. getNodeManager() - Get the NodeManager instance
- * 9. getNodeStats() - Get node health statistics
- * 10. getNodeSummary() - Get node summary
- * 11. getConnectionError() - Get last connection error
- * 12. onReconnect(callback) - Register reconnect callback
- * 13. onReconnect(callback) - Register reconnect callback
- * 14. withTimeout(promise, timeoutMs, options) - Wrap promise with timeout (re-exported from order/utils/timeout.js)
- * 15. _assessFailover() - Internal failover assessment
- * 16. _internal - @internal Internal state (connected flag) — test-only, do not rely on in production
+ * 8. isSuppressConnectionLog() - Whether connection log output is currently suppressed
+ * 9. shouldCountNodeStrike(source) - Whether a transport-reported node failure
+ *    should count as a persistent strike against the node
+ * 10. getNodeManager() - Get the NodeManager instance
+ * 11. getNodeStats() - Get node health statistics
+ * 12. getNodeSummary() - Get node summary
+ * 13. getConnectionError() - Get last connection error
+ * 14. onReconnect(callback) - Register reconnect callback
+ * 15. withTimeout(promise, timeoutMs, options) - Wrap promise with timeout (re-exported from order/utils/timeout.js)
+ * 16. _assessFailover() - Internal failover assessment
+ * 17. _internal - @internal Internal state (connected flag) — test-only, do not rely on in production
  * ===============================================================================
  */
 

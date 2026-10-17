@@ -17,7 +17,7 @@
  * converted to blockchain integers internally using asset precision.
  *
  * ===============================================================================
- * EXPORTS (24 functions + 1 constant + 1 error class)
+ * EXPORTS (25 functions + 1 error class)
  * ===============================================================================
  *
  * ACCOUNT MANAGEMENT (4 functions - async)
@@ -74,8 +74,12 @@
  *       Returns 'history' (use fill event data) or 'open' (fetch open orders)
  *   24. broadcastTxWithClassification(tx, accountName, operations) - Broadcast with outcome classification
  *
+ * BROADCAST FAILURE DETECTION (1 function)
+ *   25. findOverReducingUpdateOpError(result, operations) - Detect limit_order_update
+ *       ops whose negative delta would over-reduce the order
+ *
  * ERROR HANDLING:
- *   25. BroadcastUncertainError - Error class for uncertain broadcast results
+ *   26. BroadcastUncertainError - Error class for uncertain broadcast results
  *
  * ===============================================================================
  *

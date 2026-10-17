@@ -21,7 +21,7 @@
  *   });
  *
  * ===============================================================================
- * TABLE OF CONTENTS - AsyncLock Class (6 methods)
+ * TABLE OF CONTENTS - AsyncLock Class (8 methods)
  * ===============================================================================
  *
  * INITIALIZATION (1 method)
@@ -37,9 +37,15 @@
  *      Marks as locked, executes callback, handles errors, unlocks, processes next
  *      Recursive: processes next item after each callback completes
  *
- * STATUS QUERIES (2 methods)
+ * STATUS QUERIES (4 methods)
  *   4. isLocked() - Check if lock is currently acquired
- *   5. getQueueLength() - Get number of operations waiting for lock
+ *   5. heldForMs() - Milliseconds the lock has been held (0 when free)
+ *   6. isReentrant() - Whether the current async context already holds the lock
+ *   7. getQueueLength() - Get number of operations waiting for lock
+ *
+ * LOCK RELEASE (1 method)
+ *   8. forceRelease() - Force-release the lock, rejecting every queued waiter
+ *      (used by shutdown/cleanup paths; returns whether it was held)
  *
  * ===============================================================================
  *

@@ -22,7 +22,7 @@
  * All newly written private keys use the v2 vault format.
  *
  * ===============================================================================
- * EXPORTS (24 functions + 1 error class)
+ * EXPORTS (25 functions + 1 error class)
  * ===============================================================================
  *
  * AUTHENTICATION (3 functions)
@@ -66,6 +66,10 @@
  *  22. waitForDaemon(maxWaitMs, options) - Wait for daemon to become ready (async)
  *  23. probeAccountInDaemon(accountName, timeout, options) - Probe daemon for account (async)
  *  24. pingDaemon(accountName, timeout, options) - Lightweight daemon health check (async)
+ *
+ * ONBOARDING (1 function)
+ *  25. resolveOnboardingUrl(accountData) - Pick the onboarding doc link to show
+ *      (copy shipped with this install, else the published URL)
  *
  * ERROR HANDLING (1 error class)
  *  - MasterPasswordError - Thrown when authentication fails

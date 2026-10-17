@@ -45,7 +45,9 @@
  * ===============================================================================
  *
  * HELPER FUNCTIONS (module-level):
- *   - normalizeBotEntry() - Normalize bot configuration object
+ *   - shouldCoalesceBacklogReplay(config, managerConfig) - Decide whether a
+ *     startup backlog should be drained as one coalesced batch
+ *   (bot-entry normalization lives in bot_settings.ts: normalizeBotEntry)
  *
  * ===============================================================================
  *

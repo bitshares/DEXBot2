@@ -33,7 +33,7 @@
  * 1. manager.ts - OrderManager class (order lifecycle, fund tracking)
  * 2. grid.ts - Grid class (grid creation, synchronization, health)
  * 3. utils/math.ts, utils/order.ts, utils/system.ts - Helper functions by concern
- * 4. format.ts - Numeric formatting (18 functions for consistent display)
+ * 4. format.ts - Numeric formatting (17 functions for consistent display)
  * 5. accounting.ts - Accountant class (fund calculations and reconciliation)
  * 6. logger.ts - Logger class (structured, color-coded output)
  * 7. async_lock.ts - AsyncLock class (race condition prevention)

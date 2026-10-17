@@ -6,7 +6,7 @@
  * Exports a single Accountant class that manages all fund accounting operations.
  *
  * ===============================================================================
- * TABLE OF CONTENTS - Accountant Class (17 methods)
+ * TABLE OF CONTENTS - Accountant Class (26 methods)
  * ===============================================================================
  *
  * CORE INITIALIZATION & RECALCULATION (2 methods)
@@ -42,6 +42,20 @@
  *
  * RECOVERY & VALIDATION (1 method)
  *   17. resetRecoveryState() - Reset recovery backoff and state
+ *
+ * INTERNAL FEE / BALANCE HELPERS (9 methods - internal)
+ *   18. _logThrottled(key, message, level, intervalMs) - Throttled logging helper
+ *   19. _applyBalanceAdjustments(list) - Apply a list of balance adjustments
+ *   20. _getBtsOrderType() - Resolve which side pays BTS fees
+ *   21. _normalizeBtsFeeState(order) - Normalize an order's deferred-BTS-fee state
+ *   22. _calculateUpdateDeferredCharge(oldDeferredFee, feeSchedule) - Deferred charge on update
+ *   23. _resolveBtsFeeLifecycle(oldOrder, newOrder, context, explicitFee) - Resolve the
+ *       BTS fee lifecycle for an order transition
+ *   24. _buildBtsDeferredRefundAdjustment(orderId, isMaker) - Build the deferred refund
+ *       adjustment for a fill
+ *   25. _recalibrateTrackedFundsFromChain(mgr, openOrders) - Recalibrate tracked funds
+ *       from a fresh chain snapshot
+ *   26. _tryTrustChainFreeHeal(mgr, driftValidation) - Attempt a trust-chain-free heal
  *
  * ===============================================================================
  * FUND STRUCTURE (managed by Accountant)

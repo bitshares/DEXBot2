@@ -4,56 +4,93 @@
  * Pure numeric calculations, blockchain conversions, fee math, and fund allocation.
  *
  * ===============================================================================
- * TABLE OF CONTENTS (44 exported functions)
+ * TABLE OF CONTENTS (78 exports)
  * ===============================================================================
  *
- * SECTION 1: PARSING & VALIDATION (6 functions)
+ * SECTION 1: GENESIS LADDER & RAIL GEOMETRY (28 items)
+ *   - GridGenesis - Genesis ladder type: start price, increment, gap slots,
+ *     price levels and their hash
+ *   - priceLevelsForGenesis(genesis) - Extract the frozen price ladder from a genesis
+ *   - buildGenesisFromPriceLevels(levels, config) - Build a genesis from precomputed levels
+ *   - derivePriceLevels(startPrice, increment, minPrice, maxPrice) - Derive the
+ *     geometric price ladder (the "rail") from a live config
+ *   - hashPriceLevels(levels) - Deterministic hash of a price ladder
+ *   - priceForSlot(idx, genesis) - Authoritative price for a slot index
+ *   - slotIndexForPrice(price, genesis) - Resolve a price to its slot index
+ *   - slotIdForPrice(price, genesis) - Resolve a price to its "slot-N" id
+ *   - assertSlotPriceInvariant(...) - Reject a slot whose price disagrees with its index
+ *   - priceSlotEqual(...) - Compare slot/price pairs under the genesis invariant
+ *   - sameGridLevel(a, b) - Same ladder level, resolving each price against its genesis
+ *   - sameGridPrice(a, b) - Same genesis-derived ladder level by precision
+ *   - pricesOnSameLevel(a, b, ...) - Same order-book price LEVEL under precision
+ *   - isChainPriceOutOfGrid(price, genesis, ...) - Whether a chain price is off the rail
+ *   - getBtsSide(assets) - Which side of the pair holds BTS
+ *   - getSellStartIdx(boundaryIdx, gapSlots) - Sell start index from boundary + gap
+ *   - calculateGapSlots(incrementPercent, targetSpreadPercent) - Gap-slot count
+ *   - resolveGapSlots(manager) - Configured gap-slot count for a manager
+ *   - resolveGapBand(manager) - Gap-band geometry { start, end, gapSlots }
+ *   - countGapBandSpread(manager) - Count SPREAD slots strictly inside the gap band
+ *   - isSlotInRail(...) - Geometric rail-membership test for a slot
+ *   - isSlotIndexInGapBand(idx, ...) - Whether a slot index sits inside the gap band
+ *   - isEvacuationRotationAllowed(...) - Whether a gap-evacuation rotation is geometrically valid
+ *   - isEvacuationSizeStillValid(...) - Re-proof a stamped evacuation size against live geometry
+ *   - validateBoundaryCommit(...) - Validate a proposed boundary commit against geometry
+ *   - validatePersistedBoundary(...) - Validate a boundary restored from disk
+ *   - isTransientInBandRejection(reason) - Whether a persisted-boundary rejection is transient
+ *   - BOUNDARY_REJECT_PLACED_IN_BAND - Rejection reason: target slot holds an in-band order
+ *
+ * SECTION 2: PARSING & VALIDATION (10 functions)
  *   - isExplicitZeroAllocation(value) - Check if value is explicitly zero
  *   - isPercentageString(v) - Check if value is percentage string
+ *   - isPositiveNumber(value) - Check if value is a positive number
+ *   - isPositiveNumberOrPercent(value) - Positive number or positive percentage string
+ *   - isPositiveInt(value) - Check if value is a positive integer
  *   - parsePercentageString(v) - Parse percentage string to decimal
+ *   - toDecimal(value) - Convert number/percentage/numeric string to a decimal
  *   - parseRelativeMultiplier(value) - Parse "3x" multiplier syntax to number
  *   - resolveRelativePrice(value, startPrice, mode) - Resolve relative price values
  *   - validateGridPriceBounds(min, max, center) - Reject bounds not bracketing center
  *
- * SECTION 2: FUND CALCULATIONS (4 functions)
+ * SECTION 3: FUND CALCULATIONS (8 functions)
  *   - computeChainFundTotals(accountTotals, committedChain) - Compute total funds
  *   - calculateAvailableFundsValue(side, accountTotals, funds, ...) - Calculate available funds
+ *   - adjustBudgetForBtsFees(budget, btsFeeData, ...) - Reserve BTS fees from a side budget
+ *   - getGridBestPrices(manager) - Best (highest) buy and best (lowest) sell price
  *   - calculateSpreadFromOrders(activeBuys, activeSells) - Calculate spread percentage
  *   - resolveConfigValue(value, total) - Resolve percentage or absolute config value
- *
- * SECTION 3: BLOCKCHAIN CONVERSIONS (5 functions)
- *   - blockchainToFloat(intValue, precision) - Convert blockchain int to float
- *   - floatToBlockchainInt(floatValue, precision) - Convert float to blockchain int
- *   - quantizeFloat(value, precision) - Round float to blockchain precision
- *   - normalizeInt(value, precision) - Normalize int within precision bounds
+ *   - resolveConfigValueWithRegistry(value, total, registry) - Config value incl. shared-account funds
  *   - hasValidAccountTotals(accountTotals, checkFree) - Validate account totals structure
  *
- * SECTION 4: PRECISION & FORMATTING UTILITIES (8 functions)
- *   - roundTo(value, factor) - Round to a factor
- *   - fixedTo(value, decimals) - Format to fixed decimal string
- *   - roundToDecimals(value, decimals) - Round to N decimal places
+ * SECTION 4: BLOCKCHAIN CONVERSIONS (6 functions)
+ *   - blockchainToFloat(intValue, precision) - Convert blockchain int to float
+ *   - floatToBlockchainInt(floatValue, precision) - Convert float to blockchain int
+ *   - floorToBlockchainInt(floatValue, precision) - Convert float to int by flooring
+ *   - quantizeFloat(value, precision) - Round float to blockchain precision
+ *   - normalizeInt(value, precision) - Normalize int within precision bounds
+ *   - quantumForPrecision(precision) - Smallest representable unit for a precision
+ *
+ * SECTION 5: PRECISION UTILITIES (4 functions)
  *   - getPrecision(assets, orderType) - Get precision for order type
  *   - getPrecisionByOrderType(assets, orderType) - Alias for getPrecision
- *   - getPrecisionForSide(assets, side) - Get precision by side (buy/sell)
  *   - getPrecisionsForManager(manager) - Get both asset precisions
  *   - getPrecisionSlack(precision) - Calculate tolerance for precision
  *
- * SECTION 5: ORDER SIZE VALIDATION (7 functions)
+ * SECTION 6: ORDER SIZE VALIDATION (8 functions)
  *   - calculatePriceTolerance(price, size, type, assets) - Calculate price match tolerance
+ *   - findCrossedOrder(...) - Find an opposite-side order a placement would CROSS
  *   - validateOrderAmountsWithinLimits(amountToSell, minToReceive) - Validate order limits
- *   - getMinOrderSize(assets, type) - Get minimum order size for type
+ *   - getMinOrderSize(orderType, assets, factor) - Get minimum order size
  *   - getDustThresholdFactor() - Get dust threshold multiplier
  *   - getSingleDustThreshold(idealSize, dustThresholdPercent) - Get single dust threshold
  *   - getDoubleDustThreshold(idealSize, dustThresholdPercent) - Get double dust threshold
- *   - getMinOrderSize(orderType, assets, factor) - Get minimum order size
  *   - validateOrderSize(manager, size, type, context) - Validate order size against minimums
  *
- * SECTION 6: FEE CALCULATIONS (2 functions + 2 internal)
+ * SECTION 7: FEE CALCULATIONS (3 functions)
  *   - getAssetFees(assetSymbol, assetAmount, isMaker) - Get fee info for asset
+ *   - getAssetFeesSafe(assetSymbol, assetAmount, isMaker) - Fee info without throwing
  *   - _setFeeCache(cache) - Set internal fee cache (internal)
- *   - _getFeeCache() - Get internal fee cache (internal)
  *
- * SECTION 7: FUND ALLOCATION (6 functions)
+ * SECTION 8: FUND ALLOCATION (6 functions)
  *   - allocateFundsByWeights(available, targetCount) - Allocate funds by weight
  *   - cloneWeightDistribution(weightDistribution, base) - Clone weight distribution safely
  *   - calculateOrderSizes(manager, orderType) - Calculate order sizes for placement
@@ -61,13 +98,14 @@
  *   - calculateGridSideDivergenceMetric(manager, orderType, threshold) - Calculate divergence
  *   - clamp(value, min, max) - Clamp a value between min and max bounds
  *
- * SECTION 8: FEE DEDUCTION (3 functions)
+ * SECTION 9: FEE DEDUCTION (2 functions)
  *   - calculateOrderCreationFees(count, btsFeeData) - Calculate total creation fees
- *   - deductOrderFeesFromFunds(available, count, btsFeeData, btsSide) - Deduct fees from funds
  *   - calculateSwapInAmount(targetReceive, poolReserveOut, poolReserveIn) - AMM swap math
  *
- * SECTION 9: GRID UTILITIES (1 function)
- *   - calculateGapSlots(incrementPercent, targetSpreadPercent) - Calculate gap slots count
+ * SECTION 10: FORMATTING (3 functions)
+ *   - roundTo(value, factor) - Round to a factor
+ *   - fixedTo(value, decimals) - Format to fixed decimal string
+ *   - roundToDecimals(value, decimals) - Round to N decimal places
  *
  * ===============================================================================
  */
@@ -1489,7 +1527,7 @@ function calculateSwapInAmount(targetReceive: number, poolReserveOut: number, po
  *
  * @param {number} incrementPercent - Grid increment percentage
  * @param {number} targetSpreadPercent - Target spread percentage
- * @param {Object} GRID_LIMITS - Grid limits constants (optional, uses defaults)
+ * @param {Object} [gridLimits] - Grid limits constants (optional, uses defaults)
  * @returns {number} Number of gap slots
  */
 function calculateGapSlots(incrementPercent: number | undefined, targetSpreadPercent: number | undefined, gridLimits: GridLimitsLike = {}): number {

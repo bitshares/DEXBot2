@@ -15,12 +15,17 @@
  * Uses AsyncLock to prevent concurrent sync operations (defense-in-depth locking).
  *
  * ===============================================================================
- * TABLE OF CONTENTS - SyncEngine Class (8 methods) + 1 module-level helper
+ * TABLE OF CONTENTS - SyncEngine Class (12 methods) + module-level helpers
  * ===============================================================================
  *
- * MODULE-LEVEL HELPER (internal, not exported):
- *   hasEquivalentRawOnChainOrder(a, b) - Compare two chain orders for equivalence
- *      Used internally during sync to detect redundant/duplicate chain entries
+ * MODULE-LEVEL HELPERS (internal, not exported):
+ *   readSingleOrderSeam / batchReadOrdersSeam - Chain-order read indirection seams
+ *   confirmSuspectEmptyRead(mgr) - Re-read after a suspicious empty snapshot
+ *   describeNearestAdoptionCandidates(mgr, chainOrder, precision, matchedIds) -
+ *      Diagnostic candidates for nearest-slot adoption
+ *   chainPriceOnSameLevel(...) - Chain price vs a grid level under precision rules
+ *   adoptedSlotKeepsItsOwnPrice(mgr, adopted, chainOrderId, path) - Adoption guard
+ *   adoptChainOrderIntoSlot(...) - Adopt an unmatched chain order into a free slot
  *
  * INITIALIZATION (1 method)
  *   1. constructor(manager) - Create new SyncEngine with manager reference
@@ -39,30 +44,40 @@
  *      Pass 1: Match grid orders to chain (known grid → chain, includes orphan cleanup)
  *      Pass 2: Add missing chain orders (unknown chain → grid)
  *
- * FILL PROCESSING (2 methods)
- *   5. syncFromFillHistory(fill) - Process single fill event synchronously
+ * FILL PROCESSING (5 methods)
+ *   5. _findMatchingGridOrder(mgr, orderId) - Look up the grid slot owning a chain order (internal)
+ *
+ *   6. _computeFillContext(mgr, matchedGridOrder, paysAssetId, paysAmountRaw) -
+ *      Resolve the asset/side context for a fill (internal)
+ *
+ *   7. _computeFillTransitionResult(mgr, params) - Compute the post-fill slot
+ *      transition and fund deltas without mutating state (internal, async)
+ *
+ *   8. syncFromFillHistory(fill) - Process single fill event synchronously
  *      Updates grid order state based on fill data
  *      Updates fund state and accounting
  *      Handles both maker and taker fills
  *
- *   6. syncFromFillHistoryBatch(fills) - Process multiple fill events in batch
+ *   9. syncFromFillHistoryBatch(fills) - Process multiple fill events in batch
  *      Acquires _gridLock once for all fills in block group
  *      Batches drift refetch into one get_objects RPC call
  *      Applies all grid mutations in a single applyGridUpdateBatch
  *
- * FULL SYNCHRONIZATION (1 method - async)
- *   7. synchronizeWithChain(chainData, source) - Full sync (fetch + sync) (async)
+ * FULL SYNCHRONIZATION (2 methods - async)
+ *  10. _assertGenesisInvariant(mgr) - Fail-closed check that a snapshot has a genesis ladder (internal)
+ *
+ *  11. synchronizeWithChain(chainData, source) - Full sync (fetch + sync) (async)
  *      Fetches fresh account balances
  *      Calls syncFromOpenOrders() with chain data
  *      Source: event type that triggered sync (fill, poll, broadcast, etc.)
  *
  * ACCOUNT STATE (2 methods - async)
- *   8. fetchAccountBalancesAndSetTotals(accountId) - Fetch account totals (async)
+ *  12. fetchAccountBalancesAndSetTotals() - Fetch account totals (async)
  *      Retrieves BUY/SELL totals and free balances from blockchain
  *      Sets manager.accountTotals
  *      Triggers fund recalculation
  *
- *   9. initializeAssets() - Initialize asset metadata (async)
+ *  13. initializeAssets() - Initialize asset metadata (async)
  *      Fetches asset precision and other metadata
  *      Sets manager.assets
  *      Called once at bot startup

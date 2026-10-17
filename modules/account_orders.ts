@@ -10,7 +10,7 @@
  * which makes the doubled-entry bug structurally impossible.
  *
  * ===============================================================================
- * EXPORTS (1 class + 1 helper)
+ * EXPORTS (1 class + 2 helpers)
  * ===============================================================================
  *
  * 1. AccountOrders(options) - Class for per-bot order persistence
@@ -25,6 +25,9 @@
  *
  * 2. createBotKey(bot, index) - Generate unique bot key string
  *    Uses sanitized bot.name; unnamed bots fall back to asset pair + index
+ *
+ * 3. sanitizeKey(value) - Re-export of utils/sanitize_key: filename-safe key
+ *    normalization (trim, lowercase, collapse non-alphanumeric runs to '-')
  *
  * ===============================================================================
  *

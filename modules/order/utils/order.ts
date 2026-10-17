@@ -5,68 +5,112 @@
  * Includes grid indexing, order comparison, delta building, and strategy calculations.
  *
  * ===============================================================================
- * TABLE OF CONTENTS (35 exported functions)
+ * TABLE OF CONTENTS (76 exported functions)
  * ===============================================================================
  *
- * SECTION 1: CHAIN ORDER MATCHING & RECONCILIATION (5 functions)
+ * SECTION 1: CHAIN ORDER MATCHING & RECONCILIATION (7 functions)
  *   - parseChainOrder(chainOrder, assets) - Parse blockchain order to grid format
  *   - applyChainSizeToGridOrder(manager, gridOrder, chainSize) - Apply chain size to grid
  *   - correctOrderPriceOnChain(manager, correctionInfo, ...) - Correct order price on chain
  *   - correctAllPriceMismatches(manager, accountName, ...) - Correct all price mismatches
+ *   - _validatePriceCorrectionEntry(...) - Drain-time staleness check for a queued correction
+ *   - _stampCorrectionProvenance(...) - Stamp queue provenance on a correction entry
+ *   - findLiveOrderOwnerByChainId(...) - Find the live grid slot that owns a chain order
  *
- * SECTION 2: ORDER CONSTRUCTION (3 functions)
+ * SECTION 2: CROSSING-PLACEMENT GUARDS (8 functions)
+ *   - chainOrderMatchesSlot(...) - Exact chain-order/grid-slot match
+ *   - chainOrderMatchesSlotWithTolerance(...) - Match within price tolerance
+ *   - crossingCandidateChainId(order) - Chain id of a crossing-check candidate
+ *   - isCrossingCheckCandidate(order) - Predicate for crossing-placement guards
+ *   - buildCrossingCheckCandidates(...) - Candidate set for crossing-placement checks
+ *   - chainOrderUnchangedFromCache(...) - Chain order still matches cached pre-update state
+ *   - detectCrossedBookPlan(...) - Pre-broadcast crossed-book assert
+ *   - collectKnownOnChainOrderIds(...) - On-chain ids master must converge against
+ *
+ * SECTION 3: ORDER CONSTRUCTION (5 functions)
  *   - buildCreateOrderArgs(order, assetA, assetB) - Build create order arguments
  *   - getOrderTypeFromUpdatedFlags(buyUpdated, sellUpdated) - Get type from update flags
  *   - resolveConfiguredPriceBound(value, fallback, startPrice, mode) - Resolve price bounds
  *   - buildFillKey(fillOrParts) - Build a stable fill dedupe key
  *   - buildCreateOpFingerprint(params) - Build fingerprint for create operations
  *
- * SECTION 3: STATE TRANSITIONS (2 functions)
+ * SECTION 4: STATE TRANSITIONS & PLACEHOLDERS (6 functions)
  *   - virtualizeOrder(order) - Convert order to VIRTUAL state
  *   - convertToSpreadPlaceholder(order) - Convert order to SPREAD placeholder
+ *   - toRailHolePlaceholder(order) - Convert to a rail-typed hole placeholder
+ *   - geometryTypeForSlotIndex(...) - BUY/SELL type for a slot index
+ *   - resolveSpreadOrderSide(order) - Resolve the real side of a SPREAD slot
+ *   - resolveOnChainRetypeType(...) - Type to keep when a live-order slot would retype
  *
- * SECTION 4: FILTERING & COUNTING (5 functions)
+ * SECTION 5: GAP EVACUATION (3 functions)
+ *   - detectGapEvacuationCandidates(...) - Detect gap-evacuation candidates by geometry
+ *   - updateGapEvacuationStreaks(...) - Tick per-slot gap-evacuation streak counter
+ *   - collectRefillSlotIds(...) - Refill-slot wire for the COW boundary hold
+ *
+ * SECTION 6: FILTERING & DRIFT DIAGNOSTICS (12 functions)
+ *   - parseSlotIndex(id) - Parse "slot-N" to its rail index
  *   - filterOrdersByType(orders, orderType) - Filter orders by type
-
  *   - buildOutsideInPairGroups(items, accessors) - Outside->center pair grouping
  *   - extractBatchOperationResults(result) - Extract operation_results from chain batch result
  *   - formatUnmatchedChainOrder(order) - Format structural drift diagnostics
+ *   - isNonBlockingUnmatchedOrder(...) - Deliberate hold that must not read as drift
+ *   - isStrandedHoldOrder(...) - Stranded hold detection
+ *   - isOrderGoneErrorMessage(err) - Detect "chain order does not exist"
+ *   - recordDuplicateOrphanDetection(orderId) - Record a duplicate-orphan detection
+ *   - clearDuplicateOrphanDetection(orderId) - Clear the detection counter
+ *   - duplicateOrphanLogInfo(...) - Log level + re-detection info for duplicate orphans
+ *   - _filterUnmatchedChainOrders(...) - Drop a satisfied id from the unmatched list
  *
- * SECTION 5: STATE PREDICATES (7 functions)
+ * SECTION 7: STATE PREDICATES (8 functions)
  *   - isOrderOnChain(order) - Check if order is ACTIVE or PARTIAL
  *   - isOrderVirtual(order) - Check if order is VIRTUAL
  *   - hasOnChainId(order) - Check if order has blockchain orderId
  *   - isOrderPlaced(order) - Check if order is placed on chain
  *   - isPhantomOrder(order) - Check if order is phantom (ACTIVE without orderId)
  *   - isSlotAvailable(order) - Check if slot is available for placement
+ *   - isEmptyGridSlot(order) - Empty reusable placeholder test
  *   - isOrderHealthy(order, context) - Comprehensive order health check
  *
- * SECTION 6: SIZE VALIDATION (2 functions)
+ * SECTION 8: SIZE VALIDATION (2 functions)
  *   - checkSizeThreshold(size, threshold) - Check if size exceeds threshold
  *   - checkSizesBeforeMinimum(sizes, minSize) - Check sizes against minimum
  *
- * SECTION 7: GRID BOUNDARY & ROLES (3 functions)
+ * SECTION 9: GRID BOUNDARY & ROLES (5 functions)
  *   - calculateIdealBoundary(allSlots, startPrice, gapSlots) - Calculate ideal boundary
  *   - assignGridRoles(allSlots, boundaryIdx, gapSlots, ...) - Assign BUY/SELL roles
  *   - shouldFlagOutOfSpread(order, startPrice, configSpread) - Check if order is out of spread
+ *   - deriveTargetBoundary(...) - Target boundary for a rebalance plan
+ *   - isShiftEligibleFill(...) - Whether a fill may drive boundary shift/rotation
  *
- * SECTION 8: GRID INDEXING (2 functions)
+ * SECTION 10: GRID INDEXING (2 functions)
  *   - buildIndexes(grid) - Build complete index set from grid
  *   - validateIndexes(grid, indexes) - Validate index consistency
  *
- * SECTION 9: ORDER COMPARISON & DELTA (3 functions)
+ * SECTION 11: ORDER COMPARISON & DELTA (2 functions)
  *   - ordersEqual(a, b) - Compare two orders for equality
  *   - buildDelta(masterGrid, workingGrid) - Build delta actions between grids
- *   - getOrderSize(order) - Extract order size with fallback
  *
- * SECTION 10: STRATEGY CALCULATIONS (7 functions)
+ * SECTION 12: STRATEGY / EDGE / BUDGET (11 functions)
  *   - resolveEdgeCount(config, side) - Clamped per-side edge count (>=0 int, 0 disables)
  *   - resolveEdgeOrders(config) - Total edge orders buy+sell (fee/count totals)
- *   - resolveLiveEdgeAnchorPrice(manager, side) - Live-grid edge anchor (genesis ladder extreme; null when no usable ladder)
- *   - resolveEdgeAnchorPrice(config, side) - Config-bound anchor fallback (buy→minPrice, sell→maxPrice; null when unresolvable)
- *   - compareEdge(a, b, edge, anchorPrice) - Shared anchored edge comparator (single ordering source)
- *   - edgeOrderIdSet(allSlots, config, orderType, anchorPrice?, excludeIds?) - Edge order id set (config count; shares the picker ordering; excludeIds carries the window exclusion)
  *   - selectEdgeSlots(sortedAsc, count, excludeIds, edge, anchorPrice?) - Shared position picker (both edges anchor toward their bound)
+ *   - getCoreOrdersTotal(config) - Total target order count across both sides
+ *   - getSideBudget(...) - Side budget after BTS fee deduction
+ *   - calculateBudgetedSizes(...) - Sizes for all slots on a side using weighted distribution
+ *   - edgeOrderIdSet(allSlots, config, orderType, anchorPrice?, excludeIds?) - Edge order id set (config count; shares the picker ordering; excludeIds carries the window exclusion)
+ *   - liveWindowIdSet(...) - Window member ids for one side from the live manager
+ *   - resolveEdgeAnchorPrice(config, side) - Config-bound anchor fallback (buy→minPrice, sell→maxPrice; null when unresolvable)
+ *   - resolveLiveEdgeAnchorPrice(manager, side) - Live-grid edge anchor (genesis ladder extreme; null when no usable ladder)
+ *   - compareEdge(a, b, edge, anchorPrice) - Shared anchored edge comparator (single ordering source)
+ *
+ * SECTION 13: GRID PRICE INVARIANT (2 functions)
+ *   - checkGridPriceInvariant(...) - The price emitted for a slot must equal its genesis price
+ *   - reportGridPriceInvariant(...) - Report one GRID-PRICE-INVARIANT check
+ *
+ * SECTION 14: PERSISTED CRAWL & PLACEMENT GRACE (3 functions)
+ *   - consumePendingFillCrawls(...) - Apply recorded-but-uncommitted fill crawls to the boundary
+ *   - recordOrderPlacement(...) - Record a fresh on-chain placement timestamp
+ *   - isFreshlyPlacedOrder(...) - Chain order placed within the surplus-cancel grace
  *
  * ===============================================================================
  */
@@ -1898,7 +1942,7 @@ function isOrderOnChain(order: SlotLike | null | undefined) {
  * @param {Object} slot - The slot being retyped
  * @param {number} idx - Slot index
  * @param {number} buyEndIdx - Boundary index (last BUY slot)
- * @param {Object} ORDER_TYPES - ORDER_TYPES constants
+ * @param {Object} orderTypes - ORDER_TYPES constants
  * @returns {string} Type to keep for the on-chain slot
  */
 function resolveOnChainRetypeType(slot: SlotLike, idx: number, buyEndIdx: number, orderTypes: { BUY: OrderType; SELL: OrderType }): OrderType {

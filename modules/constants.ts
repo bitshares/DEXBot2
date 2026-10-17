@@ -106,6 +106,7 @@
  *   17. COW_PERFORMANCE - Copy-on-write grid performance settings
  *   18. REBALANCE_STATES - Rebalance lifecycle state enum
  *   19. COW_ACTIONS - Copy-on-write action type enum
+ *       COW_ORIGINS - Copy-on-write action origin/source enum
  *   20. CR_ZONES - Credit ratio zone constants
  *   21. DEFAULT_TARGET_CR - Default target collateral ratio
  *   22. NATIVE_CLIENT - Native blockchain client configuration
@@ -115,6 +116,10 @@
  *   26. DAEMON_ERRORS - Credential daemon error codes
  *   27. DAEMON_CODES - Credential daemon codes
  *   28. CREDENTIAL_PROMPTS - Credential prompt configuration
+ *   29. RANGE_QUALITY - Bot-editor pre-entry price-range legend thresholds
+ *   30. buildDefaultGeneralSettings() - Build the canonical default
+ *       general.settings.json document (first-run seed, editor fallback,
+ *       and local-overrides merge all share it)
  *
  * ===============================================================================
  *
@@ -1320,7 +1325,8 @@ let MARKET_ADAPTER = {
     DYNAMIC_WEIGHT_AMA_NEUTRAL_ZONE_PCT: 0,
 
     // DYNAMIC_WEIGHT_AMA_HUBER: Single source of truth for the canonical AMA-slope
-    // estimator (computeHuberWindowSlopePct in strategy/dynamic_weight_series.ts).
+    // estimator (computeHuberWindowSlopePct in
+    // market_adapter/core/strategies/dynamic_weight_series.ts).
     // Every consumer — live market adapter, grid-reset replay, bot-fitting
     // backtests, both browser-embedded research charts — reads these values:
     // Node callers via the module import, generated HTML via an injected

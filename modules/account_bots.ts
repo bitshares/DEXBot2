@@ -5,7 +5,7 @@
  * Manages multi-bot configuration and metadata.
  *
  * ===============================================================================
- * EXPORTS (10 functions)
+ * EXPORTS (12 functions)
  * ===============================================================================
  *
  * MAIN ENTRY POINT:
@@ -21,7 +21,7 @@
  * SUPPORTING EXPORTS:
  *   ensureBotAccountId, parseJsonWithComments, parseBooleanInput,
  *   colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice,
- *   isPoolRefClearInput
+ *   isPoolRefClearInput, resolveAdapterCommitPlan, sameAdapterFlags
  *
  * INTERNAL HELPERS (not exported):
  *   ask* prompt family (askString, askNumberWithBounds, askIntegerInRange,
