@@ -39,6 +39,8 @@ market_adapter/**/*.json
 # Test temporary files
 tests/tmp/
 tmp/
+test-results/
+playwright-report/
 
 # Generated files
 opencode.json

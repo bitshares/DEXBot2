@@ -108,6 +108,35 @@ PM2 lifecycle, startup ordering, bot supervision, launcher version reporting.
 Interactive tools and performance benchmarks (not part of CI).
 *Examples:* `connection_test.ts`, `diag_adapter_client.ts`, `diag_ws_nodes.ts`, `diag_ws_lifecycle.ts`, `benchmark_cow.ts`, `sim_batching.ts`, `repro_phantom_orders.ts`
 
+### Browser Charts (Playwright)
+End-to-end tests for the generated HTML charts (currently the `dexbot tv`
+TradingView exporter). These load a real chart page in Firefox and assert on
+canvas draw work and pixels, so they live under `tests/playwright/` as
+`.spec.mjs` files and are **not** picked up by the plain `node` runner.
+
+```bash
+npm run test:playwright          # builds, then runs tests/playwright
+```
+
+The runner and browsers come from a global Playwright install (the repo keeps
+zero runtime deps); `test:playwright` points `NODE_PATH` at `npm root -g`, and
+the spec resolves `playwright/test` dynamically. That inline `NODE_PATH=` is
+POSIX-shell syntax (Linux/macOS); on Windows set it in your shell
+(`$env:NODE_PATH=(npm root -g)`) or add a local `playwright` devDependency.
+**Firefox is the default target** (set in
+`tests/playwright/playwright.config.mjs`) because that is the browser the
+generated charts are hand-checked in. If Playwright or the Firefox build is
+missing: `npm i -g playwright && npx playwright install firefox`.
+
+`tv_chart_perf.spec.mjs` pins the range-band draw hook to the visible bar
+window: it counts `CanvasRenderingContext2D.lineTo` calls to prove the band's
+per-redraw cost scales with the viewport (not the full series), and diffs
+canvas pixels to prove the band still spans the plot when zoomed in. By default
+it generates a synthetic TV page; set `TV_CHART_HTML=<path>` to run the load
+check against any already-generated chart HTML (the uPlot interception is
+generic; the Range-band assertions are skipped when the page has no Range
+toggle).
+
 ### Edge Cases & Regression
 Tests targeting specific bugs, race conditions, and failure modes.
 *Examples:* `test_critical_bug_fixes.ts`, `test_race_condition_fixes_batch1.ts`, `test_patch17_invariants.ts`, `test_shutdown_reentrancy.ts`, `test_multifill_opposite_partial.ts`, `test_correction_queue_staleness.ts`, `test_spread_pure_fund_driven.ts`, `test_spread_correction_resilience.ts`, `test_sync_lock_id_verification.ts`
