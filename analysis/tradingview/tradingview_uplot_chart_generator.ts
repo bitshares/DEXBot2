@@ -633,6 +633,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             <div id="toolbar">
                 <div class="toolbar-row primary-toolbar-row">
                 <div class="group">
+                    <div class="indicator"><label><input type="checkbox" id="volume-toggle" checked> Volume</label> <button type="button" class="reset-btn" id="volume-unit-toggle" data-volume-mode="base" title="Volume units: base asset — click for quote asset">${escapeHtml(defaultPairMode === 'inverse' ? assetLabelB : assetLabelA)}</button></div>
                     <div class="indicator">
                         <span class="tag">pair</span>
                         <button type="button" class="pair-toggle${defaultPairMode === 'inverse' ? ' is-inverse' : ''}" id="pair-toggle" aria-label="Swap pair orientation" title="Swap pair orientation" data-pair-mode="${escapeHtml(defaultPairMode)}">
@@ -666,7 +667,6 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
                             <button type="button" class="step-btn" id="vwap-bars-dec">▼</button>
                         </span>
                     </div>
-                    <div class="indicator"><label><input type="checkbox" id="volume-toggle" checked> Volume</label> <button type="button" class="reset-btn" id="volume-unit-toggle" data-volume-mode="base" title="Volume units: base asset — click for quote asset">${escapeHtml(defaultPairMode === 'inverse' ? assetLabelB : assetLabelA)}</button></div>
                     ${(((payload.orderBuys?.length || 0) + (payload.orderSells?.length || 0) > 0 || payload.gridBounds?.low != null || payload.gridBounds?.high != null) ? '<div class="indicator"><label><input type="checkbox" id="orders-toggle" checked> Orders</label></div>' : '')}
                 </div>
                 </div>
