@@ -70,7 +70,8 @@ This is the empty gap between the best buy and best sell rails.
 
 This controls how size is distributed across the ladder.
 
-- `0.5` is the neutral baseline
+- `0.5` is the neutral baseline; `1.0` is the shipped default (mountain)
+- the scale runs from `-1` (super-valley) to `2` (super-mountain)
 - values above `0.5` concentrate more size near the market-adjacent orders
 - values below `0.5` flatten the ladder
 
@@ -211,7 +212,7 @@ For a conservative starting point:
 - `incrementPercent: 0.5`
 - `targetSpreadPercent: 2.0`
 - `coreOrders: 20 / 20`
-- `weightDistribution: 0.5 / 0.5`
+- `weightDistribution: 1.0 / 1.0` — the shipped default (mountain); flatten toward `0.5 / 0.5` only if you deliberately want a flatter ladder
 - `minPrice` and `maxPrice`: as narrow as the expected drift allows, not blindly `3x`
 
 For a more competitive market:

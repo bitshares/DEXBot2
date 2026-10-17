@@ -157,7 +157,7 @@ plans, `LANDED`/`REVERTED`/`SUPERSEDED` statuses, commit hashes, and verificatio
 
 ### 1. Gap-Band Orphan — Prevention Plan (P1–P6)
 
-> **Source:** `GAP_BAND_ORPHAN_PREVENTION_PLAN.md` · **Status:** implemented `f94d6ec4` (2026-08-29), with subsequent amendments — landing map below.
+> **Source:** former `GAP_BAND_ORPHAN_PREVENTION_PLAN.md` (deleted 2026-08-31; merged here) · **Status:** implemented `f94d6ec4` (2026-08-29), with subsequent amendments — landing map below.
 
 **Landing map (corrected 2026-08-31):**
 - **P1** — landed `f94d6ec4` (same-batch CANCEL injection in `COWRebalanceEngine.execute` + `_assertGapBandIntactPostCommit` cancelOnly). **REVERTED `e2898e51`** ("remove placement guards that interfered with normal operation") — both sites removed; stranding is now handled by `calculateIdealBoundary` + `LAST-FILL-GUARD` + adoption path (P3 gate removed `e7231534`).
@@ -226,7 +226,7 @@ Sequence `Restored boundary index: 131` *then* `[SNAPSHOT-REJECT] Deleting corru
 
 ### 2. Ladder Recenter Orphan — Root Cause (Aug 26–30 2026)
 
-> **Source:** `LADDER_RECENTER_ORPHAN_ROOT_CAUSE.md` · **Status:** fixes #1–#7 landed 2026-08-30.
+> **Source:** former `LADDER_RECENTER_ORPHAN_ROOT_CAUSE.md` (deleted 2026-08-31; merged here) · **Status:** fixes #1–#7 landed 2026-08-30.
 
 #### 2.1 Symptom
 
@@ -317,7 +317,7 @@ Throttle `Structural resync defer` to first/last per cap window (was 120/30s); l
 
 ### 3. Orphan-Fill & Fund-Invariant — Root Cause & Fix Plan
 
-> **Source:** `ORPHAN_FILL_INVARIANT_ROOT_CAUSE_AND_FIX.md` · **Status:** P0s + rotation landed `1b27f6eb`/`4838bcb0`/`d808c052`; P1 atomicity partial; duplicate-cancel hard-error and P2 counters still open.
+> **Source:** former `ORPHAN_FILL_INVARIANT_ROOT_CAUSE_AND_FIX.md` (deleted 2026-08-31; merged here) · **Status:** P0s + rotation landed `1b27f6eb`/`4838bcb0`/`d808c052`; P1 atomicity partial; duplicate-cancel hard-error and P2 counters still open.
 > **Scope:** `dexbot_cow_runtime.ts`, `sync_engine.ts`, `chain_orders.ts`, `dexbot_state_recovery.ts`, `dexbot_maintenance_runtime.ts`, `strategy.ts`, `constants.ts` · **Evidence:** `profiles/logs/<bot>.log` Aug 28 17:40–17:57, Aug 29 15:13–15:19.
 
 #### 3.1 TL;DR — one cascade
@@ -388,7 +388,7 @@ All eight surface through `getMetrics()`; the five baseline counters via the exi
 
 ### 4. Price-First Alignment Plan
 
-> **Source:** `PRICE_FIRST_ALIGNMENT_PLAN.md` · **Status:** Phase 1 shipped and live as shadow telemetry; Phase 2 projection was enabled (`1bbf1a23`) then **removed** (`3713c496`) after a live-bot incident — the anchor veto overrode chain evidence and drove destructive gap-band cancels. The anchor is now observability-only; the boundary is chain-evidence-derived. Phase 3 is moot (no second write path to retire); boundary geometry is pinned by `tests/test_boundary_anchor_recovery.ts` (ANCHOR-001..004) and `tests/test_grid_price_slot_invariant.ts`.
+> **Source:** former `PRICE_FIRST_ALIGNMENT_PLAN.md` (deleted 2026-08-31; merged here) · **Status:** Phase 1 shipped and live as shadow telemetry; Phase 2 projection was enabled (`1bbf1a23`) then **removed** (`3713c496`) after a live-bot incident — the anchor veto overrode chain evidence and drove destructive gap-band cancels. The anchor is now observability-only; the boundary is chain-evidence-derived. Phase 3 is moot (no second write path to retire); boundary geometry is pinned by `tests/test_boundary_anchor_recovery.ts` (ANCHOR-001..004) and `tests/test_grid_price_slot_invariant.ts`.
 > **Scope:** grid boundary state `modules/order/` · **Related:** three-layer crawl/anchor/guard fix.
 
 #### 4.1 Goal

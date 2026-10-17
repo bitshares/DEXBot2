@@ -158,12 +158,18 @@ node dist/market_adapter/market_adapter.js --deltaPercent 2
 ```json
 {
   "ama": {
-    "erPeriod": 10,      // Efficiency Ratio lookback period (candles)
-    "fastPeriod": 2,     // Fast smoothing period for trending markets
-    "slowPeriod": 30     // Slow smoothing period for choppy markets
+    "erPeriod": 781,     // Efficiency Ratio lookback period (candles)
+    "fastPeriod": 5.2,   // Fast smoothing period for trending markets
+    "slowPeriod": 83.6   // Slow smoothing period for choppy markets
   }
 }
 ```
+
+> Optional. A bot-level `ama` block overrides the preset (or matched pair profile)
+> field by field, and supplying any period marks the bot's AMA as `custom` in the
+> adapter state. The values above are the fitted `AMA3` built-in defaults
+> (`MARKET_ADAPTER.AMAS`): `erPeriod: 781` and `fastPeriod: 5.2` are shared, while
+> `slowPeriod` runs `62.1` (AMA1) to `96.9` (AMA4).
 
 > **`gridPrice` is the only switch.** A bot is AMA-driven when `gridPrice` says
 > so — `usesAmaGridPrice()`, the source of truth shared by the bot, maintenance
@@ -199,9 +205,15 @@ The pool is fetched directly by ID, bypassing pool discovery. Useful when the tr
   - Higher = more lag, filters noise
   - Built-in presets range from `AMA1` (fastest) to `AMA4` (slowest) — see `MARKET_ADAPTER.AMAS` in `modules/constants.ts` for the exact `slowPeriod` values
 
-AMA parameters are resolved exclusively from **presets** (`AMA1`–`AMA4`): a matched
-pair profile in `profiles/market_profiles.json` wins, otherwise the built-in defaults
-(`MARKET_ADAPTER.AMAS` in `modules/constants.ts`, default key `AMA3`) are used.
+AMA parameters resolve in this order: a matched pair profile in
+`profiles/market_profiles.json` wins for that pair; otherwise the bot's own `ama`
+block overrides the preset field by field; any period the bot does not supply is
+taken from the preset named by `gridPrice` (`"ama"` → the pair's `defaultAma`,
+which falls back to `AMA3`; `"ama1"`–`"ama4"` → that exact preset); and any
+remaining missing field falls back to the built-in `MARKET_ADAPTER.AMAS` defaults
+(`modules/constants.ts`, default key `AMA3`). A bot that hand-writes any of the
+three periods is reported as `custom` in the adapter state rather than by a preset
+name.
 
 ### How It Works
 

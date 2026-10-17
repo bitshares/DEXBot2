@@ -52,7 +52,7 @@ funds.allocated → _getSizingContext()       (budget for spread correction)
 **Key points:**
 - `botFunds` percentage applies to **total** capital (free + locked in orders), not just free. A bot at `"50%"` gets half of everything, not half of what's currently idle.
 - `funds.allocated` is the ceiling for each side. Existing orders already consume part of it; the remaining free portion is available for new placements.
-- The downstream `applyBotFundsAllocation()` (`manager.ts:1296`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
+- The downstream `applyBotFundsAllocation()` (`manager.ts:1287`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
 
 ---
 
@@ -123,7 +123,7 @@ See [developer_guide.md#order-state-helper-functions](developer_guide.md#order-s
 **Per-Batch Execution**:
 
 1. **Peek & Pop**: Check `_incomingFillQueue`, pop up to N fills (batch size)
-2. **Replay-safe Accounting Pass**: Each fill is accounted individually via `processFillAccounting(fillOp, fillKey)` with replay-safe dedup (`applyReplaySafeFillAccounting`, `dexbot_fill_runtime.ts:303`)
+2. **Replay-safe Accounting Pass**: Each fill is accounted individually via `processFillAccounting(fillOp, fillKey)` with replay-safe dedup (`applyReplaySafeFillAccounting`, `dexbot_fill_runtime.ts:300`)
    - Proceeds credited directly to `chainFree` (via `adjustTotalBalance`)
    - Same-order fill batching (sync_engine Phase 6 cumulative transition) aggregates multiple fill transitions on one order before a single rebalance
    - All proceeds immediately available to next rebalance cycle (not split across cycles)

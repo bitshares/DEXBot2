@@ -257,7 +257,7 @@ This document defines the non-negotiable behavioral invariants for the DEXBot2 s
 
 - `INV-BATCH-001` Illegal state batch abort
   - `executeBatch` throws `ILLEGAL_SPREAD_STATE` on an illegal grid layout (emitted at `modules/order/utils/validate.ts`, propagated via `modules/order/manager.ts` `_throwOnIllegalState`).
-  - The `_handleBatchHardAbort` catch for `ILLEGAL_ORDER_STATE` (`dexbot_class.ts:501`) is a test-only dead branch — production never emits that code; only a test stub uses it.
+  - The `_handleBatchHardAbort` catch for `ILLEGAL_ORDER_STATE` (`dexbot_class.ts:533`) is a test-only dead branch — production never emits that code; only a test stub uses it.
   - In production, recovery + cooldown are armed on the next maintenance tick via `_abortFlowIfIllegalState` (the `INV-MAINT-002` path), returning `abortedForIllegalState: true` to the caller. The caller does not need to return immediately; the maintenance tick handles recovery.
   - Hard abort triggers one immediate recovery sync (`_triggerStateRecoverySync`) plus arms one maintenance cooldown cycle (`_maintenanceCooldownCycles = Math.max(current, 1)`).
 

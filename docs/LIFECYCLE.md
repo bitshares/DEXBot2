@@ -90,7 +90,7 @@ sequenceDiagram
     participant CO as chain_orders (broadcast)
     participant STORE as Storage
 
-    CH->>Q: enqueue fill(s)  (dexbot_fill_runtime.ts:466)
+    CH->>Q: enqueue fill(s)  (dexbot_fill_runtime.ts:463)
     FR->>FR: drain queue -> _processFillsWithBatching
     FR->>OM: processFilledOrders()  (manager.ts)
     OM->>AC: processFillAccounting()  (single call, batch)
@@ -134,9 +134,9 @@ sequenceDiagram
     participant STORE as Storage
 
     MA->>CL: AMA center snapshot updated
-    CL->>CL: _performPeriodicGridChecks()  (dexbot_class.ts:1720)
+    CL->>CL: _performPeriodicGridChecks()  (dexbot_class.ts:1747)
     CL->>RT: performPeriodicGridChecks()  (dexbot_maintenance_runtime.ts:1677)
-    RT->>RT: runGridMaintenance(bot,'periodic')  (dexbot_maintenance_runtime.ts:2953)
+    RT->>RT: runGridMaintenance(bot,'periodic')  (dexbot_maintenance_runtime.ts:2981)
     RT->>RT: executeMaintenanceLogic()  (dexbot_maintenance_runtime.ts:2462)
     RT->>AC: recalculate funds from balances
     RT->>GD: promote AMA center -> grid center
@@ -157,13 +157,13 @@ The AMA signal stack (AMA/Kalman/Hurst/PE) is *research-tuned* in `analysis/` an
 the parameters.
 
 > Note: `runMaintenance()` is a **different** subsystem — the credit/MPA debt
-> runtime (`modules/credit_runtime.ts:3441`, reached via
-> `_runCreditRuntimeMaintenance` at `dexbot_class.ts:1837`). The grid maintenance
+> runtime (`modules/credit_runtime.ts:3623`, reached via
+> `_runCreditRuntimeMaintenance` at `dexbot_class.ts:1864`). The grid maintenance
 > chain above is the one that matters for order/price upkeep.
 
-References: `modules/dexbot_class.ts:1720` (`_performPeriodicGridChecks`) →
+References: `modules/dexbot_class.ts:1747` (`_performPeriodicGridChecks`) →
 `modules/dexbot_maintenance_runtime.ts:1677` (`performPeriodicGridChecks`) →
-`:2953` (`runGridMaintenance`) → `:2462` (`executeMaintenanceLogic`),
+`:2981` (`runGridMaintenance`) → `:2462` (`executeMaintenanceLogic`),
 `docs/GRID_RECALCULATION.md`, `docs/GRID_RECONCILE.md`.
 
 ---
@@ -192,7 +192,7 @@ enforced*, not compiler-enforced — learn them or you will introduce fund bugs.
 | How a fill becomes orders | `modules/dexbot_fill_runtime.ts` → `modules/order/manager.ts` |
 | Grid math / recalculation | `modules/order/grid.ts`, `docs/GRID_RECALCULATION.md` |
 | Funds & accounting | `modules/order/accounting.ts`, `docs/FUND_MOVEMENT_AND_ACCOUNTING.md` |
-| Periodic loop & AMA hook | `modules/dexbot_maintenance_runtime.ts`, `modules/dexbot_class.ts:1720` |
+| Periodic loop & AMA hook | `modules/dexbot_maintenance_runtime.ts`, `modules/dexbot_class.ts:1747` |
 | Market signal source | `market_adapter/market_adapter.ts`, `analysis/README.md` |
 | Startup & orchestration | `modules/dexbot_class.ts`, `docs/developer_guide.md` §"Startup Sequence" |
 | Why COW exists | `docs/architecture.md` §"Copy-on-Write (COW) Grid Pattern", `docs/COW_INVARIANTS.md` |
