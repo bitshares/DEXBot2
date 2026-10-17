@@ -585,6 +585,7 @@ Typical fields:
 market_adapter/
 |-- market_adapter.ts              main adapter daemon
 |-- ama_signal_runner.ts           one-cycle JSON signal CLI
+|-- cli_args.ts                    shared CLI argument walker
 |-- candle_utils.ts                candle transforms, gap detection, pruning
 |-- interval_utils.ts              shared interval label + chain-time helpers
 |-- lp_chart_core.ts               chart HTML renderer
@@ -628,6 +629,7 @@ market_adapter/
 |   |-- file_lock.ts               single-instance file lock
 |   |-- file_json_cache.ts         write-through JSON read cache
 |   |-- month_shards.ts            calendar-month shard naming + coverage-span primitives (shared by candle and fills caches)
+|   |-- pair_orientation.ts        canonical pair orientation + reciprocal inversion helpers
 |   |-- data_discovery.ts          data directory auto-discovery + shard-family assembly
 |   |-- atomic_write.ts            atomic file write utility
 |   |-- dynamic_grid_snapshot.ts   dynamic grid snapshot helpers

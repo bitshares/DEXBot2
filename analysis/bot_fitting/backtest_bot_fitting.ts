@@ -50,10 +50,6 @@ const DEFAULT_BTS_FEE_CAPITAL = 10000;
 // baseline mirrors botState.gridRangeScalingAmaSlope (re-seeded every reset).
 const SLOPE_NEUTRAL_ZONE_PCT = MARKET_ADAPTER.DYNAMIC_WEIGHT_AMA_NEUTRAL_ZONE_PCT;
 
-// Spread-gap floor knobs (GRID_LIMITS): the effective target spread is
-// clamped up to incrementPercent × MIN_SPREAD_FACTOR and the gap is never
-// narrower than MIN_SPREAD_ORDERS slots — mirrored from calculateGapSlots
-// (modules/order/utils/math.ts).
 const RISK_W_DURATION = 1.0;   // avg open bars
 const RISK_W_PEAK_OPEN = 2.0;  // peak simultaneous open orders
 const RISK_W_IMBALANCE = 1.2;  // avg |openBuy-openSell|
@@ -202,7 +198,7 @@ interface AmaStrategy {
 
 /**
  * Spread-gap width in slots — direct port of calculateGapSlots
- * (modules/order/utils/math.ts:1228). The effective target spread is clamped
+ * (modules/order/utils/math.ts). The effective target spread is clamped
  * up to incrementPercent × MIN_SPREAD_FACTOR and the gap never drops below
  * MIN_SPREAD_ORDERS slots. `incrementPercent`/`targetSpreadPercent` in PERCENT
  * units, matching the production signature.
@@ -217,7 +213,7 @@ function computeGapSlots(incrementPercent: number, targetSpreadPercent: number) 
 
 /**
  * Slope-ratio grid price offset — port of computeGridPriceOffsetPlan
- * (market_adapter/core/market_adapter_service.ts:92-119) combined with the
+ * (market_adapter/core/market_adapter_service.ts) combined with the
  * trend/slopeRatio semantics of computeAmaSlopeWeights
  * (market_adapter/core/strategies/ama_slope_model.ts):
  *
@@ -226,8 +222,9 @@ function computeGapSlots(incrementPercent: number, targetSpreadPercent: number) 
  *   direction            = sign(slopePct) (0 inside the neutral zone)
  *   offsetPct            = direction × slopeRatio × maxGridPriceOffsetPct
  *
- * Production applies this to startPrice (grid.ts:982: startPrice × (1 +
- * offset/100)) only for asymmetricBounds-whitelisted bots; the sim applies it
+ * Production applies this to startPrice (modules/order/grid.ts,
+ * initializeGrid: startPrice × (1 + offset/100)) only for
+ * asymmetricBounds-whitelisted bots; the sim applies it
  * to the placement center on every grid build when asymmetricBounds is on.
  */
 function computeGridPriceOffsetPct(slopePct: number, targetSpreadPercent: number) {
@@ -242,11 +239,12 @@ function computeGridPriceOffsetPct(slopePct: number, targetSpreadPercent: number
 
 /**
  * Build a persistent grid with FIXED chain prices from a master rail —
- * port of createOrderGrid (modules/order/grid.ts:374-505):
+ * port of createOrderGrid (modules/order/grid.ts):
  *
  *   - Master rail: geometric progression starting at √(1±inc) × center and
  *     expanding by (1±inc) steps outward, bounded by
- *     [center/maxMinRatio, center×maxMinRatio] (grid.ts:428-444).
+ *     [center/maxMinRatio, center×maxMinRatio] (rail expansion:
+ *     derivePriceLevels in modules/order/utils/math.ts).
  *   - Spread gap: gapSlots empty slots centered on the center price
  *     (calculateIdealBoundary: boundaryIdx = splitIdx − floor(gap/2) − 1;
  *     sells start at boundaryIdx + gapSlots + 1).

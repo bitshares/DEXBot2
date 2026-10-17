@@ -365,7 +365,8 @@ function resolveAmaConfig(botKey: unknown): AmaConfig {
     const botAmaInline = (botMeta.ama && typeof botMeta.ama === 'object') ? botMeta.ama as BotEntry : null;
 
     // Priority: inline bot.ama overrides market profile for analysis visibility.
-    // Production inverts this (profiles first, inline as fallback — market_adapter.ts:694-730).
+    // Production inverts this (profiles first, inline as fallback —
+    // resolveAmaForBot in market_adapter.ts).
     if (botAmaInline) {
         const cfg: AmaConfig = {
             erPeriod: Number(botAmaInline.erPeriod),
