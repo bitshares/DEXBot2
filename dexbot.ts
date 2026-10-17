@@ -130,24 +130,18 @@ const {
 } = require('./modules/bot_settings');
 const { buildRuntimeScriptArgs } = require('./modules/launcher/runtime_entry');
 const { parseWorkerArgs, LAUNCHER_WORKER_COMMAND } = require('./modules/launcher/launch_modes');
+const { detectRuntimeMode, runtimeControlHelp, runtimeModeLabel, checkStatusTarget, resolveStatusRoute } = require('./modules/launcher/runtime_mode');
 const { PATHS, getHomeProfilesDir, getRecalculateTriggerFile, printRelocationNotices } = require('./modules/paths');
 const credentialPolicy = require('./modules/credential_policy');
 const { Config } = require('./modules/config');
 const { isSameBotName } = require('./modules/utils/sanitize_key');
 const { normalizeAssetRef } = require('./modules/utils/asset_symbols');
 import type { BotEntry } from './modules/bot_settings.js';
+import type { Pm2Proc, RuntimeHelpEntry, RuntimeInfo } from './modules/launcher/runtime_mode.js';
 
 interface LauncherStyle {
     botName?: string | null;
     dryRun?: boolean;
-}
-
-interface Pm2Proc {
-    pid?: number | string;
-    name?: string;
-    pm2_env?: { pm_uptime?: unknown; status?: string };
-    monit?: { memory?: number };
-    [key: string]: unknown;
 }
 
 // Setup graceful shutdown handlers
@@ -218,17 +212,13 @@ const cliArgs = process.argv.slice(2);
  */
 function printCLIUsage() {
     // Grouped so the full command set stays scannable; descriptions are one line each
-    // and the description column is derived, so alignment never drifts.
+    // and the description column is derived, so alignment never drifts. The
+    // Runtime group is phrased for the runtime that is actually up — the
+    // detection and the mode→instructions mapping are centralized in
+    // modules/launcher/runtime_mode.ts so `help` and `status` agree.
+    const runtime: RuntimeInfo = detectRuntimeMode();
     const groups: Array<[string, Array<[string, string]>]> = [
-        ['Runtime', [
-            ['start [bot]', 'Start the bot runtime (flags below).'],
-            ['stop', 'Stop the runtime.'],
-            ['reload', 'Reload the runtime without re-unlocking keys.'],
-            ['restart', 'Restart the runtime and re-unlock keys.'],
-            ['delete', 'Stop and delete all runtime processes.'],
-            ['status', 'Show runtime status.'],
-            ['pm2 [<sub>]', 'Manage PM2 bots (see: dexbot pm2 help).'],
-        ]],
+        ['Runtime', runtimeControlHelp(runtime.mode).map((entry: RuntimeHelpEntry) => [entry.command, entry.description] as [string, string])],
         ['Trading', [
             ['test <bot>', 'Run a bot live once.'],
             ['drystart <bot>', 'Run a bot without broadcasting.'],
@@ -260,6 +250,12 @@ function printCLIUsage() {
     ];
     const width = Math.max(...groups.flatMap(([, entries]) => entries.map(([cmd]) => cmd.length))) + 2;
     console.log('Usage: dexbot [command] [bot]');
+    console.log(`Active runtime: ${runtimeModeLabel(runtime)}`);
+    if (runtime.mode === 'none') {
+        console.log('  Standard start: dexbot start (monolithic)');
+        console.log('  Alternatives:   dexbot start --isolated | dexbot pm2');
+    }
+    console.log();
     for (const [title, entries] of groups) {
         console.log(`${title}:`);
         for (const [cmd, desc] of entries) {
@@ -1231,52 +1227,20 @@ async function handleCLICommands() {
                 process.exit(code);
                 return true;
             };
-            const { spawnSync, execSync } = require('child_process') as typeof import('node:child_process');
-            const MONOLITHIC_PID_FILE = PATHS.PROFILES.MONOLITHIC_PID;
-            const MONOLITHIC_CRED_PID_FILE = PATHS.PROFILES.MONOLITHIC_CRED_PID;
-            const SUPERVISOR_SOCK = PATHS.PROFILES.SUPERVISOR_SOCK;
-            let unlockRunning = false;
+            const { spawnSync } = require('child_process') as typeof import('node:child_process');
 
-            if (storage.exists(MONOLITHIC_PID_FILE)) {
-                try {
-                    const pid = Number(storage.readFile(MONOLITHIC_PID_FILE).trim());
-                    if (Number.isInteger(pid) && pid > 0) {
-                        try { process.kill(pid, 0); unlockRunning = true; } catch (err) {
-                            if (getErrorCode(err) === 'EACCES') {
-                                console.warn('[dexbot]', `process.kill(${pid}, 0) EACCES — process exists but permission denied`);
-                                unlockRunning = true;
-                            } else if (getErrorCode(err) !== 'ESRCH') {
-                                console.warn('[dexbot]', `process.kill(${pid}, 0) unexpected error: ${getErrorMessage(err)}`);
-                            }
-                        }
-                    }
-                } catch (_) {}
-            }
+            // Centralized detection (modules/launcher/runtime_mode.ts), shared
+            // with the mode-aware help output so the two cannot disagree.
+            const runtimeInfo: RuntimeInfo = detectRuntimeMode();
 
-            if (!unlockRunning && storage.exists(SUPERVISOR_SOCK)) {
-                unlockRunning = true;
-            }
-
-            // A credential daemon can outlive a `dexbot stop` (bots + market
-            // adapter stop; the daemon stays up for fast re-unlock). Report it
-            // too, so `stat` does not show "No DEXBot2 processes running." when
-            // only the daemon remains.
-            if (!unlockRunning && storage.exists(MONOLITHIC_CRED_PID_FILE)) {
-                try {
-                    const pid = Number(storage.readFile(MONOLITHIC_CRED_PID_FILE).trim());
-                    if (Number.isInteger(pid) && pid > 0) {
-                        try { process.kill(pid, 0); unlockRunning = true; } catch (err) {
-                            if (getErrorCode(err) === 'EACCES') unlockRunning = true;
-                        }
-                    }
-                } catch (_) {}
-            }
-
-            if (unlockRunning) {
+            // PM2 bots win over a stray credential daemon (resolveStatusRoute)
+            // so the report matches the help banner; otherwise a live unlock
+            // runtime is shown by delegating to `unlock status`.
+            if (resolveStatusRoute(runtimeInfo) === 'unlock') {
                 const unlockArgs = buildRuntimeScriptArgs({
                     codeRoot: __dirname,
                     scriptSegments: ['unlock'],
-                    scriptArgs: ['status'],
+                    scriptArgs: ['status', ...(target ? [target] : [])],
                 });
                 const result = spawnSync(Config.EXEC_PATH, unlockArgs, {
                     cwd: PATHS.PROJECT_ROOT,
@@ -1285,84 +1249,75 @@ async function handleCLICommands() {
                 return finish(result.status ?? 0);
             }
 
-            try {
-                const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).toString().trim();
-                const jsonStart = output.indexOf('[');
-                if (jsonStart === -1) {
-                    console.log('No DEXBot2 processes running.');
-                    return finish(0);
-                }
+            // status is whole-runtime on every surface. With no unlock bot
+            // runtime up, validate and ignore a bot name here so the behavior
+            // matches the `unlock status <bot>` path.
+            const statusCheck = checkStatusTarget(target);
+            if (statusCheck.error) {
+                console.error(startupError(statusCheck.error));
+                return finish(1);
+            }
+            if (statusCheck.notice) {
+                console.warn(statusCheck.notice);
+            }
 
-                const allProcs = JSON.parse(output.slice(jsonStart));
-                if (!Array.isArray(allProcs) || allProcs.length === 0) {
-                    console.log('No DEXBot2 processes running.');
-                    return finish(0);
-                }
-
-                const serviceNames = new Set(['dexbot-cred', 'dexbot-adapter', 'dexbot-update']);
-                const botNames = new Set<string>();
-                try {
-                    const { config } = loadSettingsFile(PROFILES_BOTS_FILE);
-                    const entries = resolveRawBotEntries(config);
-                    for (const b of entries) {
-                        if (b.name) botNames.add(b.name);
-                    }
-                } catch (_) {}
-
-                const dexbotProcs = allProcs.filter((p: Pm2Proc) => {
-                    const name = String(p?.name || '');
-                    return serviceNames.has(name) || botNames.has(name);
-                });
-
-                if (dexbotProcs.length === 0) {
-                    console.log('No DEXBot2 processes running.');
-                    return finish(0);
-                }
-
-                console.log('='.repeat(50));
-                console.log('DEXBot2 PM2 Processes');
-                console.log('='.repeat(50));
-                console.log('');
-
-                const fmtUptime = (p: Pm2Proc): string => {
-                    if (!p?.pm2_env?.pm_uptime) return '-';
-                    const ms = Date.now() - new Date(p.pm2_env.pm_uptime as string | number).getTime();
-                    const s = Math.floor(Math.abs(ms) / 1000);
-                    if (s < 60) return `${s}s`;
-                    const m = Math.floor(s / 60);
-                    if (m < 60) return `${m}m ${s % 60}s`;
-                    const h = Math.floor(m / 60);
-                    if (h < 24) return `${h}h ${m % 60}m`;
-                    const d = Math.floor(h / 24);
-                    return `${d}d ${h % 24}h`;
-                };
-
-                const fmtMem = (p: Pm2Proc): string => {
-                    const bytes = p?.monit?.memory;
-                    if (!bytes || bytes <= 0) return '-';
-                    if (bytes < 1024) return `${bytes}B`;
-                    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-                    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-                };
-
-                const rows = dexbotProcs.map((p: Pm2Proc) => ({
-                    pid: String(p?.pid || '-'),
-                    name: String(p?.name || '-'),
-                    status: String(p?.pm2_env?.status || '-'),
-                    uptime: fmtUptime(p),
-                    mem: fmtMem(p),
-                }));
-
-                const nameWidth = Math.max(...rows.map(r => r.name.length), 4);
-                const statusWidth = Math.max(...rows.map(r => r.status.length), 6);
-                const header = `${'PID'.padEnd(8)} ${'NAME'.padEnd(nameWidth)} ${'STATUS'.padEnd(statusWidth)} ${'UPTIME'.padEnd(12)} ${'MEMORY'}`;
-                console.log(header);
-                console.log('-'.repeat(header.length));
-                for (const r of rows) {
-                    console.log(`${r.pid.padEnd(8)} ${r.name.padEnd(nameWidth)} ${r.status.padEnd(statusWidth)} ${r.uptime.padEnd(12)} ${r.mem}`);
-                }
-            } catch {
+            // No unlock runtime: render the PM2 table for this install's own
+            // processes (already filtered by the shared detector).
+            const dexbotProcs = runtimeInfo.pm2Processes;
+            if (dexbotProcs.length === 0) {
                 console.log('No DEXBot2 processes running.');
+                return finish(0);
+            }
+
+            console.log('='.repeat(50));
+            console.log('DEXBot2 PM2 Processes');
+            console.log('='.repeat(50));
+            console.log('');
+
+            const fmtUptime = (p: Pm2Proc): string => {
+                if (!p?.pm2_env?.pm_uptime) return '-';
+                const ms = Date.now() - new Date(p.pm2_env.pm_uptime as string | number).getTime();
+                const s = Math.floor(Math.abs(ms) / 1000);
+                if (s < 60) return `${s}s`;
+                const m = Math.floor(s / 60);
+                if (m < 60) return `${m}m ${s % 60}s`;
+                const h = Math.floor(m / 60);
+                if (h < 24) return `${h}h ${m % 60}m`;
+                const d = Math.floor(h / 24);
+                return `${d}d ${h % 24}h`;
+            };
+
+            const fmtMem = (p: Pm2Proc): string => {
+                const bytes = p?.monit?.memory;
+                if (!bytes || bytes <= 0) return '-';
+                if (bytes < 1024) return `${bytes}B`;
+                if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+                return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+            };
+
+            const rows = dexbotProcs.map((p: Pm2Proc) => ({
+                pid: String(p?.pid || '-'),
+                name: String(p?.name || '-'),
+                status: String(p?.pm2_env?.status || '-'),
+                uptime: fmtUptime(p),
+                mem: fmtMem(p),
+            }));
+
+            const nameWidth = Math.max(...rows.map(r => r.name.length), 4);
+            const statusWidth = Math.max(...rows.map(r => r.status.length), 6);
+            const header = `${'PID'.padEnd(8)} ${'NAME'.padEnd(nameWidth)} ${'STATUS'.padEnd(statusWidth)} ${'UPTIME'.padEnd(12)} ${'MEMORY'}`;
+            console.log(header);
+            console.log('-'.repeat(header.length));
+            for (const r of rows) {
+                console.log(`${r.pid.padEnd(8)} ${r.name.padEnd(nameWidth)} ${r.status.padEnd(statusWidth)} ${r.uptime.padEnd(12)} ${r.mem}`);
+            }
+
+            // Mixed state: surface a stray unlock-mode credential daemon too —
+            // it holds unlocked keys in memory and would otherwise be invisible
+            // here because PM2 wins the status route.
+            if (runtimeInfo.credentialDaemonPid > 0) {
+                console.log();
+                console.log(`Credential daemon also running (unlock mode), PID ${runtimeInfo.credentialDaemonPid}.`);
             }
             return finish(0);
         }

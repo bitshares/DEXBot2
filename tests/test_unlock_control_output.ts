@@ -57,12 +57,14 @@ async function runControlOutputStage() {
     const originalReadFileSync = fs.readFileSync;
     const originalConsoleLog = console.log;
     const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
     const originalProcessExit = process.exit;
     const childProcess = require('child_process');
     const originalSpawn = childProcess.spawn;
 
     const logs: any[] = [];
     const errors: any[] = [];
+    const warns: any[] = [];
     const state = {
         controlCalls: [],
         staleMonolithicPid: false,
@@ -124,6 +126,10 @@ async function runControlOutputStage() {
             const line = args.map((part) => String(part)).join(' ').trim();
             if (line) errors.push(line);
         };
+        console.warn = (...args) => {
+            const line = args.map((part) => String(part)).join(' ').trim();
+            if (line) warns.push(line);
+        };
     }
 
     function restoreStubs() {
@@ -133,12 +139,14 @@ async function runControlOutputStage() {
         fs.readFileSync = originalReadFileSync;
         console.log = originalConsoleLog;
         console.error = originalConsoleError;
+        console.warn = originalConsoleWarn;
     }
 
     function resetState() {
         process.exitCode = 0;
         logs.length = 0;
         errors.length = 0;
+        warns.length = 0;
         state.controlCalls.length = 0;
         state.staleMonolithicPid = false;
         state.supervisorDeleteTransient = false;
@@ -158,6 +166,24 @@ async function runControlOutputStage() {
         assert.deepStrictEqual(state.controlCalls[0], { cmd: command, bot: botName });
         assert.ok(logs.includes(`DEXBot2 ${actionWord} 1 bot`), `should print the ${actionWord} summary`);
         assert.ok(logs.some((line) => stripAnsi(line).includes(`- ${botName}`)), 'should list the affected bot');
+    }
+
+    async function assertRejectedControl(args, messageSubstring) {
+        await runControl(args);
+        assert.strictEqual(state.controlCalls.length, 0, `rejected control '${args.join(' ')}' must not reach the supervisor socket`);
+        assert.ok(
+            errors.some((line) => stripAnsi(line).includes(messageSubstring)),
+            `rejected control '${args.join(' ')}' should report: ${messageSubstring}`
+        );
+    }
+
+    async function assertStatusTargetFolded(botName) {
+        await runControl(['status', botName]);
+        assert.deepStrictEqual(state.controlCalls[0], { cmd: 'status' }, 'status <bot> should fold to a whole-runtime status');
+        assert.ok(
+            warns.some((line) => line.includes('whole-runtime') && line.includes(botName)),
+            'status <bot> should warn that the target is ignored'
+        );
     }
 
     async function assertWholeRuntimeControl(command, actionWord) {
@@ -193,6 +219,12 @@ async function runControlOutputStage() {
 
         await assertTargetControl('stop', 'stopping', activeBotNames[0]);
         await assertTargetControl('restart', 'restarting', activeBotNames[0]);
+        await assertRejectedControl(['delete', activeBotNames[0]], 'whole-runtime control');
+        await assertRejectedControl(['status', 'DOES-NOT-EXIST'], 'not found in bots.json');
+        // Isolated pass-through: an unknown (or renamed) name is left for the
+        // supervisor, which knows the bots it actually runs.
+        await assertTargetControl('reload', 'reloading', 'DOES-NOT-EXIST');
+        await assertStatusTargetFolded(activeBotNames[0]);
         await assertWholeRuntimeControl('stop-all', 'stopping');
         await assertWholeRuntimeControl('restart-all', 'restarting');
         await assertWholeRuntimeControl('delete', 'shutting down');

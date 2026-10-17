@@ -59,10 +59,12 @@ function parseUnlockArgs(argv = process.argv) {
         const target = positionalArgs[1] || null;
 
         // Normalize whole-runtime controls: restart/reload/stop (no target or 'all') → *-all
-        // reload mirrors restart but skips the credential daemon re-unlock.
-        const consumedAll = (cmd === 'restart' || cmd === 'reload' || cmd === 'stop') && (!target || target === 'all');
+        // and delete (no target or 'all') → delete. reload mirrors restart but
+        // skips the credential daemon re-unlock.
+        const wholeRuntime = cmd === 'restart' || cmd === 'reload' || cmd === 'stop' || cmd === 'delete';
+        const consumedAll = wholeRuntime && (!target || target === 'all');
         if (consumedAll) {
-            cmd += '-all';
+            if (cmd !== 'delete') cmd += '-all';
         }
 
         return {

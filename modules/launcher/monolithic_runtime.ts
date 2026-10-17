@@ -386,6 +386,95 @@ function getControlActionLabel(cmd: string) {
     return 'stopping';
 }
 
+/**
+ * Decide the effective `(cmd, target)` for a runtime control request.
+ *
+ * `all` always selects the whole runtime. A per-bot target exists only under
+ * the isolated supervisor: a live monolithic runtime runs every active bot in
+ * one worker, so a target cannot select a single bot and the request degrades
+ * to the whole-runtime command. `delete` is whole-runtime on every surface and
+ * rejects a bot target; `status` is whole-runtime and ignores one.
+ *
+ * Pure, so the routing contract is unit-testable without a live runtime.
+ */
+interface ControlRouting {
+    /** Canonical command to dispatch. */
+    cmd: string;
+    /** Target to act on (null for a whole-runtime action). */
+    target: string | null;
+    /** The normalized target the user asked for, before any fold (for validation). */
+    requestedTarget: string | null;
+    /** True when a requested target was dropped into a whole-runtime action. */
+    folded: boolean;
+    /** Informational message to print when a target was folded. */
+    notice: string | null;
+    /** Error message when the request must be refused. */
+    reject: string | null;
+}
+
+/**
+ * Normalize a target selector: `all` (and empty) select the whole runtime;
+ * anything else is treated as a bot name. Single source of the alias rule.
+ */
+function normalizeControlTarget(target?: string | null): string | null {
+    return target === 'all' ? null : (target || null);
+}
+
+// Shared control/status text, built here so the same message cannot drift
+// between the control router, the status validator and the status branch.
+function botNotFoundMessage(name: string): string {
+    return `Bot '${name}' not found in bots.json`;
+}
+
+function statusIgnoresTargetMessage(name: string): string {
+    return `'status' is whole-runtime; ignoring target '${name}'.`;
+}
+
+function resolveControlRouting({ cmd, target, monolithicLive }: { cmd: string; target?: string | null; monolithicLive: boolean }): ControlRouting {
+    const baseCmd = cmd === 'shutdown' ? 'delete' : cmd === 'stat' ? 'status' : cmd;
+    const requestedTarget = normalizeControlTarget(target);
+    if (!requestedTarget) {
+        // Canonicalize the whole-runtime form so a caller that passes a bare
+        // `stop`/`restart`/`reload` still gets the `*-all` command the
+        // monolithic dispatch expects (the parser usually does this earlier).
+        const wholeCmd = (baseCmd === 'stop' || baseCmd === 'restart' || baseCmd === 'reload')
+            ? `${baseCmd}-all`
+            : baseCmd;
+        return { cmd: wholeCmd, target: null, requestedTarget: null, folded: false, notice: null, reject: null };
+    }
+    if (baseCmd === 'delete') {
+        return {
+            cmd: baseCmd,
+            target: null,
+            requestedTarget,
+            folded: true,
+            notice: null,
+            reject: `'delete' is a whole-runtime control and does not accept a bot name; use 'dexbot delete' or 'dexbot stop ${requestedTarget}'.`,
+        };
+    }
+    if (baseCmd === 'status') {
+        return {
+            cmd: baseCmd,
+            target: null,
+            requestedTarget,
+            folded: true,
+            notice: statusIgnoresTargetMessage(requestedTarget),
+            reject: null,
+        };
+    }
+    if (monolithicLive) {
+        return {
+            cmd: `${baseCmd}-all`,
+            target: null,
+            requestedTarget,
+            folded: true,
+            notice: `Monolithic runtime runs all active bots in one worker; '${baseCmd} ${requestedTarget}' applies to the whole runtime.`,
+            reject: null,
+        };
+    }
+    return { cmd: baseCmd, target: requestedTarget, requestedTarget, folded: false, notice: null, reject: null };
+}
+
 function getControlServiceNames(cmd: string, botNames: string[]): string[] {
     if (!['stop-all', 'restart-all', 'reload-all', 'delete', 'shutdown'].includes(cmd)) return [];
     const serviceNames: string[] = [];
@@ -417,5 +506,6 @@ function printControlActionSummary(action: string, botNames: string[], serviceNa
     console.log();
 }
 
-export { MONOLITHIC_PID_FILE, MONOLITHIC_BOT_PID_FILE, MONOLITHIC_BOT_INFO_FILE, MONOLITHIC_CRED_PID_FILE, MONOLITHIC_OUT_LOG, MONOLITHIC_ERROR_LOG, CREDENTIAL_SOCKET_FILE, CREDENTIAL_READY_FILE, cleanupStateFiles, readLiveMonolithicPid, readMonolithicBotInfo, isLikelyCredentialDaemonProcess, isExpectedMonolithicBotPid, readProcStat, isProcessInDstate, stopCredentialDaemonPid, cleanupCredentialRuntimeFiles, stopCredentialDaemon, ensureNoForeignCredentialDaemon, findCredentialSocketOwnerPid, readCredentialDaemonStatus, ensureLogDir, buildDexbotStartArgs, createUpdateScheduler, getActiveAmaBotFingerprint, listConfiguredBots, getControlBotNames, getControlActionLabel, getControlServiceNames, printControlActionSummary, formatBotCount }
+export { MONOLITHIC_PID_FILE, MONOLITHIC_BOT_PID_FILE, MONOLITHIC_BOT_INFO_FILE, MONOLITHIC_CRED_PID_FILE, MONOLITHIC_OUT_LOG, MONOLITHIC_ERROR_LOG, CREDENTIAL_SOCKET_FILE, CREDENTIAL_READY_FILE, cleanupStateFiles, readLiveMonolithicPid, readMonolithicBotInfo, isLikelyCredentialDaemonProcess, isExpectedMonolithicBotPid, readProcStat, isProcessInDstate, stopCredentialDaemonPid, cleanupCredentialRuntimeFiles, stopCredentialDaemon, ensureNoForeignCredentialDaemon, findCredentialSocketOwnerPid, readCredentialDaemonStatus, ensureLogDir, buildDexbotStartArgs, createUpdateScheduler, getActiveAmaBotFingerprint, listConfiguredBots, getControlBotNames, getControlActionLabel, getControlServiceNames, resolveControlRouting, normalizeControlTarget, botNotFoundMessage, statusIgnoresTargetMessage, printControlActionSummary, formatBotCount }
+export type { ControlRouting };
 

@@ -257,12 +257,12 @@ the canonical name is preferred in scripts and docs.
 | `dexbot dw <target>` | — | Dynamic-weight research chart: same targets/flags as `tv` |
 | `dexbot pnl <account>` | — | HTML PnL report for a bot/account over `--month N`, optional `--pair BASE/QUOTE` filter |
 | `dexbot git` | — | Analyze repository git history and write an added/deleted-lines HTML chart (`repo-stats.html`; source checkouts only) |
-| `dexbot status` | `stat`, `stats` | Unified runtime health — daemon, adapter, bots |
+| `dexbot status` | `stat`, `stats` | Unified runtime health — daemon, adapter, bots. Whole-runtime: an optional bot name is validated, then ignored |
 | `dexbot start` | `unlock` | Run credential daemon + bot (equivalent to running the `unlock` runtime, `dist/unlock.js`) |
-| `dexbot stop` | `stp`, `stopall` | Stop the monolithic runtime (unlock mode) |
-| `dexbot reload` | `reloadall` | Reload the monolithic runtime without touching the credential daemon (unlock mode) |
-| `dexbot restart` | `restartall` | Restart the monolithic runtime (unlock mode, re-unlocks credential daemon) |
-| `dexbot delete` | — | Shut down and clean up the monolithic runtime (unlock mode) |
+| `dexbot stop [<bot>]` | `stp`, `stopall` | Stop the runtime. Monolithic: whole runtime (a bot argument folds into it with a notice); `--isolated`: just that bot |
+| `dexbot reload [<bot>]` | `reloadall` | Reload without touching the credential daemon. Same per-bot target rules as `stop` |
+| `dexbot restart [<bot>]` | `restartall` | Restart and re-unlock the credential daemon. Same per-bot target rules as `stop` |
+| `dexbot delete` | — | Shut down and clean up the monolithic runtime. Whole-runtime only; rejects a bot argument |
 | `dexbot clear` | — | Delete `*.log`, rotated `*.log.*` and `*.jsonl*` from the logs directory (`<profiles>/logs`) |
 | `dexbot clear-orders` | — | Delete all persisted order files (`<profiles>/orders`); grids regenerate on next start |
 | `dexbot clear-market-adapter` | — | Delete market adapter data, state (incl. `market_adapter.lock`), and adapter logs |

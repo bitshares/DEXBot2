@@ -803,6 +803,9 @@ function createBotSupervisor({
                     await restartAll({ logAction: 'reload-all' });
                     return { ok: true };
                 case 'delete':
+                    // delete tears the supervisor down as a whole; a bot target
+                    // would silently kill every bot, so refuse it explicitly.
+                    if (cmd.bot) return { error: `'delete' is whole-runtime; use 'stop ${cmd.bot}' to stop one bot` };
                     await shutdown({ preserveSockets: cmd.preserveSockets || [] });
                     return { ok: true };
                 default:

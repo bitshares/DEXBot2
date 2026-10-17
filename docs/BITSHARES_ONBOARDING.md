@@ -304,6 +304,13 @@ You can re-run `dexbot bot` and save while the bot runs:
 - **Market/account changes** — run `dexbot reload` (reloads the runtime
   without logging you out; a full `restart` also works).
 
+> `dexbot reload` / `restart` / `stop` are **whole-runtime** in the default
+> monolithic mode: every active bot shares one worker process, so passing a bot
+> name (e.g. `dexbot reload <bot>`) is validated and then applied to the whole
+> runtime with a notice. To act on a single bot, start with `dexbot start
+> --isolated` first. `delete` is whole-runtime and rejects a bot name; `status`
+> is whole-runtime and validates, then ignores, one.
+
 The editor prints exactly which group your save falls into every time it
 saves, so you always know whether anything else is needed.
 

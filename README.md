@@ -314,14 +314,14 @@ Defaults in [`modules/constants.ts`](modules/constants.ts) are overridable at gl
 
 ## 🎯 Zero-Dependency Process Management
 
-`dexbot start` is the recommended production runtime (global install). Repo-root users can run `./unlock` instead. It runs the selected bot set as one monolithic bot process, with the credential daemon and market adapter in separate helper processes. Monolithic start/stop/reload/restart controls apply to the whole runtime, not to individual bots.
+`dexbot start` is the recommended production runtime (global install). Repo-root users can run `./unlock` instead. It runs the selected bot set as one monolithic bot process, with the credential daemon and market adapter in separate helper processes. Monolithic start/stop/reload/restart controls apply to the whole runtime, not to individual bots: a bot argument (e.g. `dexbot reload <bot>`) is validated and then folds into the whole-runtime action with a notice. Per-bot control needs `--isolated` (one supervisor process per bot, then `stop`/`reload`/`restart <bot>` acts on just that bot). `delete` and `status` are whole-runtime only. `dexbot help` detects which runtime is up (monolithic, isolated, or PM2) and lists the controls for that mode.
 
 ```bash
 dexbot start/stop          # Stop/start the monolithic runtime
 dexbot start --dryrun      # Dry-run (no transactions broadcast)
-dexbot reload              # Reload the runtime (leaves credential daemon untouched)
-dexbot restart             # Restart the runtime (re-unlocks credential daemon)
-dexbot delete              # Shut down and clean up
+dexbot reload [<bot>]      # Reload (monolithic: whole runtime; isolated: one bot)
+dexbot restart [<bot>]     # Restart (re-unlocks credential daemon)
+dexbot delete              # Shut down and clean up (whole runtime)
 ```
 
 First-run details and common mistakes are covered in the [BitShares Onboarding Tutorial](docs/BITSHARES_ONBOARDING.md).

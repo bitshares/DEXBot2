@@ -26,10 +26,13 @@ const __dirname = _esmDirname(__filename);
  *   dexbot start --headless              Non-interactive (requires env var or --password-file)
  *   dexbot start --headless --password-file <path>
  *   dexbot stat, status        Runtime status
- *   dexbot stop                Stop the monolithic runtime
- *   dexbot reload              Reload the monolithic runtime (leaves credential daemon untouched)
- *   dexbot restart             Restart the monolithic runtime (re-unlocks credential daemon)
- *   dexbot delete              Shut down and clean up
+ *   dexbot stop [<bot>]        Stop the runtime. In monolithic mode a target folds
+ *                              into the whole runtime (one worker owns every bot);
+ *                              under --isolated it stops just that bot.
+ *   dexbot reload [<bot>]      Reload without re-unlocking the credential daemon
+ *                              (same target rules as stop)
+ *   dexbot restart [<bot>]     Restart (re-unlocks the credential daemon)
+ *   dexbot delete              Shut down and clean up (whole runtime only)
  *
  * Repo-root users can run `./unlock` instead.
  * `dexbot unlock` is kept as a legacy alias for `dexbot start`.
@@ -100,8 +103,9 @@ const {
     cleanupCredentialRuntimeFiles, readCredentialDaemonStatus, ensureLogDir: ensureMonolithicLogDir,
     buildDexbotStartArgs, createUpdateScheduler,
     listConfiguredBots, getControlBotNames, getControlActionLabel,
-    getControlServiceNames, printControlActionSummary, formatBotCount,
+    getControlServiceNames, resolveControlRouting, botNotFoundMessage, printControlActionSummary, formatBotCount,
 } = require('./modules/launcher/monolithic_runtime');
+const { isConfiguredBotName } = require('./modules/launcher/runtime_mode');
 
 const CODE_ROOT = __dirname;
 const BOTS_FILE = PATHS.PROFILES.BOTS_JSON;
@@ -387,7 +391,7 @@ async function runIsolated({ botName, botEntry = null, stayResident = false, sta
     if (botName) {
         const bot = botEntry || resolveBotEntryForName(botName);
         if (!bot) {
-            throw new Error(`Bot '${botName}' not found in bots.json`);
+            throw new Error(botNotFoundMessage(botName));
         }
         supervisor = createBotSupervisor({ bots: [bot] });
     } else {
@@ -574,7 +578,7 @@ async function main({ argv = process.argv, startupGraceMs = DEFAULT_STARTUP_GRAC
     let daemonReleased = false;
 
     if (botName && !selectedBot) {
-        throw new Error(`Bot '${botName}' not found in bots.json`);
+        throw new Error(botNotFoundMessage(botName));
     }
 
     if (shouldStartMonolithicBackground) {
@@ -980,11 +984,40 @@ async function drainMonolithicWorkers(deadlineMs = 15000): Promise<boolean> {
 }
 
 async function handleControl({ cmd, target }: { cmd: string; target?: string }) {
-    const effectiveCmd = cmd === 'shutdown' ? 'delete' : cmd === 'stat' ? 'status' : cmd;
+    // Resolve the whole-runtime vs per-bot contract in one place. A live
+    // monolithic runtime owns every active bot in a single worker, so a bot
+    // target cannot be honored and degrades to the whole-runtime command with
+    // a printed notice (see resolveControlRouting). `all` is an alias for the
+    // whole runtime; `delete` rejects a bot target and `status` validates then
+    // ignores one.
+    const monolithic = readLiveMonolithicPid();
+    const routing = resolveControlRouting({ cmd, target, monolithicLive: monolithic.pid > 0 });
+    const effectiveCmd = routing.cmd;
+    const effectiveTarget = routing.target;
     const actionLabel = getControlActionLabel(cmd);
 
-    if ((effectiveCmd === 'stop-all' || effectiveCmd === 'delete' || effectiveCmd === 'status' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all') && !target) {
-        const { pid, stale } = readLiveMonolithicPid();
+    if (routing.reject) {
+        console.error(statusError(routing.reject));
+        process.exitCode = 1;
+        return;
+    }
+
+    // Validate a target only when it is about to be folded into a whole-runtime
+    // action (monolithic, or an ignored `status`): a typo must not reload/stop
+    // every bot by mistake. A pass-through to the isolated supervisor is
+    // validated there against the bots it actually runs, so a bot renamed or
+    // removed from bots.json while running can still be controlled by name.
+    const requestedTarget = routing.requestedTarget;
+    if (routing.folded && requestedTarget && !isConfiguredBotName(requestedTarget)) {
+        console.error(statusError(botNotFoundMessage(requestedTarget)));
+        process.exitCode = 1;
+        return;
+    }
+
+    if (routing.notice) console.warn(routing.notice);
+
+    if ((effectiveCmd === 'stop-all' || effectiveCmd === 'delete' || effectiveCmd === 'status' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all') && !effectiveTarget) {
+        const { pid, stale } = monolithic;
 
         if (pid > 0) {
             const summaryBotNames = getControlBotNames(undefined, true);
@@ -1154,12 +1187,12 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
     // wrapper was killed without leaving a pid file, or cleanupStateFiles
     // already ran). Drain before the isolated fall-through so that path cannot
     // race a start into a duplicate worker.
-    if (!target && effectiveCmd !== 'status'
+    if (!effectiveTarget && effectiveCmd !== 'status'
         && (effectiveCmd === 'stop-all' || effectiveCmd === 'delete' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all')) {
         await drainMonolithicWorkers();
     }
 
-    if (effectiveCmd === 'delete' && !target && storage.exists(MONOLITHIC_CRED_PID_FILE)) {
+    if (effectiveCmd === 'delete' && !effectiveTarget && storage.exists(MONOLITHIC_CRED_PID_FILE)) {
         await sendIsolatedDeleteIfAvailable();
         const credResult = await stopCredentialDaemon();
         if (credResult.signaled) {
@@ -1174,10 +1207,10 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
 
     // Fall through to isolated supervisor socket
     const controlCmd: { cmd: string; bot?: string } = { cmd: effectiveCmd };
-    if (target) controlCmd.bot = target;
+    if (effectiveTarget) controlCmd.bot = effectiveTarget;
 
     // Restart credential daemon for restart-all (no target) in isolated mode
-    if (!target && effectiveCmd === 'restart-all' && process.stdin.isTTY) {
+    if (!effectiveTarget && effectiveCmd === 'restart-all' && process.stdin.isTTY) {
         const ownerPid = findCredentialSocketOwnerPid();
         if (ownerPid > 0 && isLikelyCredentialDaemonProcess(ownerPid)) {
             await stopCredentialDaemonPid(ownerPid);
@@ -1196,15 +1229,15 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
         if (resp.ok && resp.status) {
             printControlStatus(resp.status);
         } else {
-            if (target || effectiveCmd === 'stop-all' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all' || effectiveCmd === 'delete') {
-                const summaryBotNames = getControlBotNames(target, !target && (effectiveCmd === 'stop-all' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all' || effectiveCmd === 'delete'));
+            if (effectiveTarget || effectiveCmd === 'stop-all' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all' || effectiveCmd === 'delete') {
+                const summaryBotNames = getControlBotNames(effectiveTarget, !effectiveTarget && (effectiveCmd === 'stop-all' || effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all' || effectiveCmd === 'delete'));
                 const summaryServiceNames = getControlServiceNames(effectiveCmd, summaryBotNames);
                 printControlActionSummary(actionLabel, summaryBotNames, summaryServiceNames);
             }
             console.log('OK');
         }
     } catch (err) {
-        if (effectiveCmd === 'delete' && !target && isSupervisorTransientError(err)) {
+        if (effectiveCmd === 'delete' && !effectiveTarget && isSupervisorTransientError(err)) {
             console.log('No runtime processes found.');
             return;
         }
