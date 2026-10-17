@@ -2289,7 +2289,15 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
                     segTop = [];
                     segBot = [];
                 };
-                for (let i = 0; i < xs.length; i++) {
+                // Clip to the visible bar window (same rule as the grid-reset
+                // band below) so a zoomed-in redraw does not walk every bar.
+                // One bar of padding each side keeps segments that cross the
+                // viewport edge connected; only contiguous valid runs are
+                // painted, so off-screen bars add no pixels either way.
+                const idxs = (u.series[0] && u.series[0].idxs) ? u.series[0].idxs : [0, xs.length - 1];
+                const iLo = Math.max(0, idxs[0] - 1);
+                const iHi = Math.min(xs.length - 1, idxs[1] + 1);
+                for (let i = iLo; i <= iHi; i++) {
                     const a = currentAma[i];
                     const up = currentRangeUpper[i];
                     const lo = currentRangeLower[i];
