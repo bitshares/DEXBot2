@@ -554,6 +554,7 @@ function generateHTML(data: VolatilityChartInput, title = 'ATR Volatility Resear
                 axes: [
                     { show: false, stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, size: 28, font: '11px Segoe UI, sans-serif' },
                     { scale: 'y', stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, size: Y_AXIS_SIZE, font: '11px Segoe UI, sans-serif',
+                      splits: logAxisSplits,
                       values: (u, v) => v.map(x => x != null ? fmtNum(x, 6) : '') },
                 ],
                 cursor: cursorCfg,

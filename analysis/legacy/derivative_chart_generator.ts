@@ -757,7 +757,7 @@ priceChart = initChart('price-chart', {
     }),
     axes: [
         makeAxis(false, 'x'),
-        makeYAxis(true, (u, vals) => vals.map((v) => fixedTo(v, 6)), 62, 'Price'),
+        { ...makeYAxis(true, (u, vals) => vals.map((v) => fixedTo(v, 6)), 62, 'Price'), splits: logAxisSplits },
     ],
     plugins: [tooltipPlugin()],
     series: [

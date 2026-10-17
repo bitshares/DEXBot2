@@ -10,7 +10,7 @@ import {
     resolveKalmanVelocitySmoothingConfig,
     smoothKalmanVelocityPoint,
 } from '../../market_adapter/core/signals/kalman_velocity_smoothing.js';
-import { embedFunctionSources, escapeHtml, serializeJsonForScript, toEpochSeconds, UPLOT_SHARED_SCRIPT, uplotInlineTags } from '../chart_utils.js';
+import { embedFunctionSources, escapeHtml, serializeJsonForScript, toEpochSeconds, UPLOT_SHARED_SCRIPT, VIEWPORT_CLIP_SCRIPT, uplotInlineTags } from '../chart_utils.js';
 import { sharedChartCSS } from '../chart_css.js';
 import { Y_AXIS_SIZE, makeCursorConfig, bindHoverStateFn, wireChartEvents, zoomResetScript, sizeChartsFn, formatTimeLabelFn, refreshChartsPreservingZoomFn } from '../chart_ui.js';
 
@@ -769,6 +769,8 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
 
         ${UPLOT_SHARED_SCRIPT}
 
+        ${VIEWPORT_CLIP_SCRIPT}
+
         ${refreshChartsPreservingZoomFn({
             anchor: 'outputChart?.scales?.x',
             reload: [
@@ -861,6 +863,11 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
                 ctx.save();
                 ctx.beginPath(); ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height); ctx.clip();
                 ctx.globalCompositeOperation = 'destination-over';
+                // Cull segments that cannot intersect the viewport so we skip
+                // their (expensive, destination-over) fillRect and valToPos work.
+                const xScale = u.scales.x || {};
+                const smin = xScale.min, smax = xScale.max;
+                const canCull = Number.isFinite(smin) && Number.isFinite(smax);
                 let i = 0;
                 while (i < data.signals.length) {
                     const s = currentLatchedSignals[i] || data.signals[i];
@@ -872,6 +879,16 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
                         const sj = currentLatchedSignals[j] || data.signals[j];
                         if (sj !== s) break;
                         j++;
+                    }
+                    if (canCull) {
+                        // A run that reaches the last real bar is drawn all the way
+                        // to bbox.right, so it is visible for any viewport past its
+                        // start (never cull it on the right). Only runs that end at a
+                        // real bar can be entirely left of the viewport.
+                        const reachesRightEdge = j >= data.realBarCount;
+                        const segEnd = reachesRightEdge ? Infinity : data.dates[j];
+                        if (segEnd < smin) { i = j; continue; }
+                        if (data.dates[i] > smax) break;
                     }
                     const x0 = u.valToPos(data.dates[i], 'x', true);
                     const x1 = j < data.realBarCount ? u.valToPos(data.dates[j], 'x', true) : bbox.left + bbox.width;
@@ -899,7 +916,8 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
                 const zeroY = u.valToPos(0, scaleKey, true);
                 const path = new Path2D();
                 let inSeg = false, lastX = 0;
-                for (let i = 0; i < values.length; i++) {
+                const [lo, hi] = visibleBarRange(u, values.length);
+                for (let i = lo; i <= hi; i++) {
                     const v = values[i];
                     if (v === null) { if (inSeg) { path.lineTo(lastX, zeroY); inSeg = false; } continue; }
                     const x = u.valToPos(data.dates[i], 'x', true);
@@ -1031,6 +1049,7 @@ function generateHTML(data: DynamicWeightChartInput, title = 'Dynamic Weight Res
                 axes: [
                     makeTimeAxis(false),
                     { scale: 'y', stroke: '#ffffff', grid: { stroke: '#1c2128' }, ticks: { stroke: '#30363d', width: 1 }, size: Y_AXIS_SIZE, font: '11px Segoe UI, sans-serif',
+                      splits: logAxisSplits,
                       values: (u, v) => v.map(x => x != null ? x.toFixed(4) : ''), }
                 ],
                 cursor: cursorCfg,

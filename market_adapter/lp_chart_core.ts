@@ -583,6 +583,7 @@ priceChart = initChart('price-chart', {
         makeAxis(false, 'x'),
         {
             ...makeYAxis(true, null, 80),
+            splits: logAxisSplits,
             border: { show: true, stroke: THEME.axis, width: 2 },
             grid: { show: true, stroke: THEME.grid, width: 2 },
         },

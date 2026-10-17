@@ -290,7 +290,7 @@ function generateRegimeHTML(data: RegimeChartInput, title = 'Regime Analysis') {
                 ],
                 axes: [
                     X_AXIS_CFG,
-                    { ...yAxis('y'), values: (u, v) => v.map(x => x != null ? fmtPrice(x) : '') },
+                    { ...yAxis('y'), splits: logAxisSplits, values: (u, v) => v.map(x => x != null ? fmtPrice(x) : '') },
                 ],
                 cursor: cursorCfg,
                 hooks: { draw: [(u) => { updateLegend(u.cursor.idx); }] },

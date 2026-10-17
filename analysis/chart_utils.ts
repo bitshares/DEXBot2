@@ -121,6 +121,29 @@ function clampXRange(min, max) {
     return { min: nextMin, max: nextMax };
 }
 
+// Safe tick generator for uPlot log axes (scale distr: 3). uPlot 1.6.32's
+// built-in log splits (Je) can loop forever on a narrow price range: its step
+// is reassigned to an intermediate tick that is missing from the nice-number
+// cache, so subsequent rounding collapses the step to 0 and the tick array
+// grows until the engine throws "Invalid array length" / runs out of memory
+// (browser tab hang). Emitting only 1/2/5 x 10^d values inside [min, max]
+// never diverges. Assigned per-axis via \`splits: logAxisSplits\`.
+function logAxisSplits(u, axisIdx, min, max) {
+    const out = [];
+    if (!(min > 0) || !(max > min)) return out;
+    const lo = Math.floor(Math.log10(min));
+    const hi = Math.ceil(Math.log10(max));
+    const mults = [1, 2, 5];
+    for (let d = lo; d <= hi; d++) {
+        const base = Math.pow(10, d);
+        for (let m = 0; m < mults.length; m++) {
+            const v = mults[m] * base;
+            if (v >= min && v <= max) out.push(v);
+        }
+    }
+    return out.length >= 2 ? out : [min, max];
+}
+
 function syncXRange(min, max) {
     pendingRange = clampXRange(min, max);
     if (pendingRangeRaf) return;
@@ -215,5 +238,33 @@ function bindPan(chart) {
 }
 `;
 
-export { escapeHtml, serializeJsonForScript, toEpochSeconds, writeChartFile, toFileUrl, embedFunctionSources, UPLOT_SHARED_SCRIPT, uplotInlineTags }
+/**
+ * Optional per-bar viewport-clipping helper for draw hooks that walk the whole
+ * series every redraw (dynamic-weight fills). Kept out of UPLOT_SHARED_SCRIPT so
+ * charts that don't use it don't embed it. Consumers must have x data in
+ * u.data[0] and the x-scale min/max on u.scales.x.
+ */
+const VIEWPORT_CLIP_SCRIPT = `
+// Index window for per-bar draw hooks: binary-search the visible x-range and
+// widen it by one bar on each side so line segments that cross the viewport
+// edge still start/end off-screen. Cuts per-redraw work from O(all bars) to
+// O(visible bars) when a chart is zoomed in.
+function visibleBarRange(u, len) {
+    const xs = u.data && u.data[0];
+    const x = (u.scales && u.scales.x) || {};
+    if (!xs || xs.length !== len || !Number.isFinite(x.min) || !Number.isFinite(x.max)) {
+        return [0, len - 1];
+    }
+    const smin = x.min, smax = x.max;
+    let a = 0, b = len - 1;
+    while (a < b) { const m = (a + b) >> 1; if (xs[m] < smin) a = m + 1; else b = m; }
+    const lo = a - 1;
+    a = 0; b = len - 1;
+    while (a < b) { const m = (a + b + 1) >> 1; if (xs[m] > smax) b = m - 1; else a = m; }
+    const hi = a + 1;
+    return [Math.max(0, lo), Math.min(len - 1, hi)];
+}
+`;
+
+export { escapeHtml, serializeJsonForScript, toEpochSeconds, writeChartFile, toFileUrl, embedFunctionSources, UPLOT_SHARED_SCRIPT, VIEWPORT_CLIP_SCRIPT, uplotInlineTags }
 

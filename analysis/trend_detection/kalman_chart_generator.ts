@@ -376,6 +376,7 @@ function generateHTML(data: KalmanChartInput, title = 'Kalman Trajectory Analysi
                         ticks: { stroke: '#30363d', width: 1 },
                         size: ${Y_AXIS_SIZE},
                         font: '11px Segoe UI, sans-serif',
+                        splits: logAxisSplits,
                         values: (u, v) => v.map(x => x != null ? x.toFixed(4) : ''),
                     }
                 ],
