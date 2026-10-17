@@ -12,7 +12,7 @@ const TEMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dexbot-adapter-flags-'))
 const WHITELIST_FILE = path.join(TEMP_DIR, 'market_adapter_whitelist.json');
 process.env.DEXBOT_TEST_MARKET_ADAPTER_WHITELIST_FILE = WHITELIST_FILE;
 
-const { parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput } = require('../modules/account_bots');
+const { parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput, resolveAdapterCommitPlan, sameAdapterFlags } = require('../modules/account_bots');
 const { CLI_COLORS } = require('../modules/cli_colors');
 const {
     setWhitelistFlags,
@@ -201,6 +201,50 @@ function testIsPoolRefClearInput() {
     }
 }
 
+function testResolveAdapterCommitPlan() {
+    const plan = (baseKey, newKey, isCopy) => resolveAdapterCommitPlan({ baseKey, newKey, isCopy });
+
+    // New bot: no source, so nothing to move; compare/write the new key.
+    assert.deepStrictEqual(plan('', 'alpha', false), { renameFrom: null, compareKey: 'alpha', writeKey: 'alpha' });
+    // Modify without a rename keeps the same key.
+    assert.deepStrictEqual(plan('alpha', 'alpha', false), { renameFrom: null, compareKey: 'alpha', writeKey: 'alpha' });
+    // Modify with a rename moves the entry and compares the pre-move source.
+    assert.deepStrictEqual(plan('alpha', 'beta', false), { renameFrom: 'alpha', compareKey: 'alpha', writeKey: 'beta' });
+    // Copy must NEVER move the source entry; it compares/writes the copy key.
+    assert.deepStrictEqual(plan('alpha', 'beta', true), { renameFrom: null, compareKey: 'beta', writeKey: 'beta' });
+    // Copy to an empty key is degenerate but must still not move anything.
+    assert.deepStrictEqual(plan('alpha', '', true), { renameFrom: null, compareKey: '', writeKey: '' });
+    // A renamed bot with an empty new key can not move anywhere.
+    assert.deepStrictEqual(plan('alpha', '', false), { renameFrom: null, compareKey: 'alpha', writeKey: '' });
+}
+
+function testSameAdapterFlags() {
+    const reference = { ama: true, dynamicWeight: false, asymmetricBounds: true };
+    assert.strictEqual(sameAdapterFlags(reference, { ...reference }), true, 'identical flag sets match');
+    assert.strictEqual(sameAdapterFlags(reference, { ...reference, ama: false }), false, 'ama difference is detected');
+    assert.strictEqual(sameAdapterFlags(reference, { ...reference, dynamicWeight: true }), false, 'weight difference is detected');
+    assert.strictEqual(sameAdapterFlags(reference, { ...reference, asymmetricBounds: false }), false, 'range difference is detected');
+}
+
+// Regression: a copy used to be treated as a rename, which moved (and deleted)
+// the source bot's whitelist entry. Drive the same primitive sequence the editor
+// commit hook uses and assert the source is never touched.
+function testCopyCommitRetainsSourceEntry() {
+    const sourceFlags = { ama: true, dynamicWeight: true, asymmetricBounds: false };
+    writeDoc({ whitelist: { source: sourceFlags } });
+
+    const plan = resolveAdapterCommitPlan({ baseKey: 'source', newKey: 'target', isCopy: true });
+    assert.strictEqual(plan.renameFrom, null, 'a copy must never arm a whitelist rename');
+
+    const desired = getWhitelistFlags('source');
+    const unchanged = sameAdapterFlags(desired, getWhitelistFlags(plan.compareKey));
+    if (!unchanged) assert.strictEqual(setWhitelistFlags(plan.writeKey, desired), true);
+
+    const doc = readDoc();
+    assert.deepStrictEqual(doc.whitelist.source, sourceFlags, 'source entry survives the copy');
+    assert.deepStrictEqual(doc.whitelist.target, sourceFlags, 'copy receives the source flags under its own key');
+}
+
 function main() {
     console.log('Running account bot adapter flag tests');
     testParseBooleanInputAcceptsYesSpellings();
@@ -215,6 +259,9 @@ function main() {
     testMalformedFileIsNeverOverwritten();
     testRenameWhitelistEntry();
     testRemoveWhitelistEntry();
+    testResolveAdapterCommitPlan();
+    testSameAdapterFlags();
+    testCopyCommitRetainsSourceEntry();
     fs.rmSync(TEMP_DIR, { recursive: true, force: true });
     console.log('account bot adapter flag tests passed');
 }

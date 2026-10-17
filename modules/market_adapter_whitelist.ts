@@ -186,6 +186,14 @@ function writeWhitelistDocument(doc: Record<string, unknown>, entries: Record<st
  * Stores the market-adapter flags for a single bot key. This is the bot
  * editor's write-through path for section `6) Adapter` and writes the same
  * file/shape the market adapter reads back.
+ *
+ * Unlike renameWhitelistEntry this intentionally overwrites any existing entry
+ * for the key: it is the generic "set flags for this key" primitive used by
+ * new-bot, modify and copy, where claiming a stale/orphan entry is expected. A
+ * live key collision can not reach here because bots.json rejects duplicate
+ * botKeys before the editor's commit hook runs. The rename guard is stricter
+ * only because a move deletes the source, so refusing on an occupied target
+ * keeps both entries intact.
  * @param {string} botKey - Whitelist key (sanitized bot name).
  * @param {Partial<WhitelistFlags>} flags - Flags to apply; omitted keys keep
  *   their current value.

@@ -1267,14 +1267,66 @@ async function ensureBotAccountId(data: Record<string, unknown>, timeoutMs = 150
     }
 }
 
+type BotEditorMode = 'new' | 'modify' | 'copy';
+
+interface AdapterFlags {
+    ama: boolean;
+    dynamicWeight: boolean;
+    asymmetricBounds: boolean;
+}
+
+interface AdapterCommitPlan {
+    /** Source key to move first, or null when no entry is being renamed. */
+    renameFrom: string | null;
+    /** Key read to decide whether the stored flags already match. */
+    compareKey: string;
+    /** Key the flags are written to when they differ. */
+    writeKey: string;
+}
+
+/**
+ * Decide how an editor save should commit the adapter whitelist entry,
+ * independent of I/O so the copy/rename semantics are unit-testable:
+ *
+ * - new bot      : no rename; compare and write the new key.
+ * - modify       : no rename; compare and write the same key.
+ * - modify/rename: move baseKey -> newKey; compare the source pre-move so an
+ *                  unchanged flag set still performs the move.
+ * - copy         : never moves — the source entry must survive — so compare
+ *                  and write the new key.
+ *
+ * An empty newKey (or baseKey) can not be a rename target and falls back to
+ * comparing the source.
+ */
+function resolveAdapterCommitPlan({ baseKey, newKey, isCopy }: { baseKey: string; newKey: string; isCopy: boolean }): AdapterCommitPlan {
+    const base = String(baseKey || '');
+    const next = String(newKey || '');
+    const renameFrom = (!isCopy && base && next && base !== next) ? base : null;
+    return {
+        renameFrom,
+        compareKey: isCopy ? next : (base || next),
+        writeKey: next,
+    };
+}
+
+/** Field-wise comparison of two adapter flag sets. */
+function sameAdapterFlags(a: AdapterFlags, b: AdapterFlags): boolean {
+    return a.ama === b.ama
+        && a.dynamicWeight === b.dynamicWeight
+        && a.asymmetricBounds === b.asymmetricBounds;
+}
+
 /**
  * Interactive menu to edit bot data.
  * @param {Object} [base={}] - The initial bot data to edit.
  * @param {number} [index=0] - Position the edited bot will occupy in the
  *   bots array (used to derive the same botKey the runtime uses for unnamed
  *   fallback entries).
- * @param {number} [baseIndex=index] - Position the base entry currently
- *   occupies (differs from `index` for copies, whose source sits elsewhere).
+ * @param {BotEditorMode} [mode='new'] - Editor intent. `copy` derives the
+ *   source whitelist key from `sourceIndex` and never moves it; `modify`
+ *   renames/moves the entry when the name changes; `new` starts empty.
+ * @param {number} [sourceIndex=index] - Position the base entry currently
+ *   occupies (differs from `index` only for copies).
  * @returns {Promise<{ data: any, commitAdapter: (() => 'saved'|'unchanged'|'failed')|null }|null>}
  *   The edited draft plus a commit hook for staged `6) Adapter` flags — the
  *   caller MUST run `commitAdapter()` only after its bots.json save succeeded
@@ -1283,7 +1335,7 @@ async function ensureBotAccountId(data: Record<string, unknown>, timeoutMs = 150
  *   ('saved'), was unnecessary ('unchanged'), or failed ('failed', already
  *   printed as a warning) so the caller can fold it into one status line.
  */
-async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseIndex = index) {
+async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, mode: BotEditorMode = 'new', sourceIndex = index) {
     const data = normalizeBotDraft(base);
 
     // Market-adapter flags (6) Adapter) live in
@@ -1292,11 +1344,9 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     // commit hook so Cancel (or a failed bots.json save) discards them
     // together with the rest of the draft.
     const baseEntry = base && typeof base === 'object' && Object.keys(base).length > 0 ? base : null;
-    const baseBotKey = baseEntry ? String(normalizeBotEntry(baseEntry as BotEntry, baseIndex).botKey || '') : '';
-    const isNewBot = !baseEntry;
-    // Copy is the only caller that points at a source entry elsewhere while
-    // inserting a new one; modify keeps the same slot (baseIndex === index).
-    const isCopy = baseIndex !== index;
+    const baseBotKey = baseEntry ? String(normalizeBotEntry(baseEntry as BotEntry, sourceIndex).botKey || '') : '';
+    const isNewBot = mode === 'new';
+    const isCopy = mode === 'copy';
     let adapterStaged: { ama: boolean; dynamicWeight: boolean; asymmetricBounds: boolean } | null = null;
     const isAmaGridPriceDraft = () => /^ama(?:[1-4])?$/.test(String(data.gridPrice ?? '').trim().toLowerCase());
     // Staged menu-6 edits win. Otherwise an existing bot uses its stored entry;
@@ -1524,31 +1574,25 @@ async function promptBotData(base: BotDraft = {} as BotDraft, index = 0, baseInd
     // flags already match what is stored — an unchanged save never creates a
     // placeholder entry.
     const stagedFlags = adapterStaged;
-    // A new bot also commits without an explicit menu-6 edit: its resolved
-    // default (record if present, else AMA-on) must be persisted so the market
-    // adapter sees the same value the editor displayed. An unchanged save still
-    // writes nothing.
-    const commitAdapter: (() => 'saved'|'unchanged'|'failed') | null = (stagedFlags || isNewBot || isCopy) ? () => {
-        const newKey = String(normalizeBotEntry(data, index).botKey || '');
-        // Copy keeps the source bot and its whitelist entry and writes the
-        // source's flags under newKey; only a genuine rename (modify) moves the
-        // entry. Without this, copying a bot would strip the source's flags.
-        const needRename = !isCopy && !!(baseBotKey && newKey && baseBotKey !== newKey);
+    // Resolve the whitelist commit up front. A rename must arm the hook even
+    // when menu 6 was never touched, otherwise the entry stays under the old
+    // key and the renamed bot silently falls back to defaults. An unchanged
+    // save still writes nothing.
+    const newKey = String(normalizeBotEntry(data, index).botKey || '');
+    const adapterPlan = resolveAdapterCommitPlan({ baseKey: baseBotKey, newKey, isCopy });
+    const commitAdapter: (() => 'saved'|'unchanged'|'failed') | null = (stagedFlags || isNewBot || isCopy || adapterPlan.renameFrom) ? () => {
         const desired = stagedFlags || adapterFlags();
-        // A copy writes a fresh entry under newKey, so compare against newKey;
-        // otherwise compare against the source, whose entry is being renamed.
-        const current = getWhitelistFlags(isCopy ? newKey : (baseBotKey || newKey));
-        const unchanged = desired.ama === current.ama
-            && desired.dynamicWeight === current.dynamicWeight
-            && desired.asymmetricBounds === current.asymmetricBounds;
-        if (needRename && !renameWhitelistEntry(baseBotKey, newKey)) {
+        // Read before any rename: for a rename the compare key still holds the
+        // pre-move entry, which is what decides "unchanged".
+        const unchanged = sameAdapterFlags(desired, getWhitelistFlags(adapterPlan.compareKey));
+        if (adapterPlan.renameFrom && !renameWhitelistEntry(adapterPlan.renameFrom, adapterPlan.writeKey)) {
             console.log(`${COLORS.yellow}Adapter flags not saved — see the warning above.${COLORS.reset}`);
             return 'failed';
         }
         // Unchanged flags need no write — a successful rename above already
         // migrated the entry under the new key.
         if (unchanged) return 'unchanged';
-        if (!setWhitelistFlags(newKey, desired)) {
+        if (!setWhitelistFlags(adapterPlan.writeKey, desired)) {
             console.log(`${COLORS.yellow}Warning: adapter flags not saved — could not write ${whitelistFile()}.${COLORS.reset}`);
             return 'failed';
         }
@@ -1753,7 +1797,7 @@ async function main() {
             case '1': {
                 while (true) {
                     try {
-                        const result = await promptBotData({} as BotDraft, config.bots.length);
+                        const result = await promptBotData({} as BotDraft, config.bots.length, 'new');
                         if (!result) break;
                         config.bots.push(result.data);
                         saveBotsConfig(config, filePath);
@@ -1777,7 +1821,7 @@ async function main() {
                     const idx = await selectBotIndex(config.bots, 'modify or leave (Enter/Esc)');
                     if (idx === null || idx === '\x1b') break;
                     try {
-                        const result = await promptBotData(config.bots[idx] as unknown as BotDraft, idx);
+                        const result = await promptBotData(config.bots[idx] as unknown as BotDraft, idx, 'modify');
                         if (result) {
                             config.bots[idx] = result.data;
                             saveBotsConfig(config, filePath);
@@ -1824,7 +1868,7 @@ async function main() {
                     const idx = await selectBotIndex(config.bots, 'copy or leave (Enter/Esc)');
                     if (idx === null || idx === '\x1b') break;
                     try {
-                        const result = await promptBotData(config.bots[idx] as unknown as BotDraft, idx + 1, idx);
+                        const result = await promptBotData(config.bots[idx] as unknown as BotDraft, idx + 1, 'copy', idx);
                         if (result) {
                             config.bots.splice(idx + 1, 0, result.data);
                             saveBotsConfig(config, filePath);
@@ -1856,5 +1900,5 @@ async function main() {
     console.log('Botmanager closed!');
 }
 
-export { main, normalizeBotDraft, ensureBotAccountId, parseJsonWithComments, parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput, loadGeneralSettings }
+export { main, normalizeBotDraft, ensureBotAccountId, parseJsonWithComments, parseBooleanInput, colorGridPriceValue, formatPoolRefLabel, isPoolStartPrice, isPoolRefClearInput, loadGeneralSettings, resolveAdapterCommitPlan, sameAdapterFlags }
 
