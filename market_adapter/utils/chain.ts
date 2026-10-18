@@ -64,9 +64,10 @@ async function resolveAsset(symbol: unknown, bitsharesClient: RpcClient | null =
     if (!symbol || typeof symbol !== 'string') {
         throw new Error(`Cannot resolve asset: invalid or missing symbol "${String(symbol)}"`);
     }
-    // BitShares symbols are canonical UPPERCASE; nodes answer lowercase lookups
-    // silently, so normalize here and hand the canonical symbol downstream
-    // (cache keys, Kibana terms, chart labels) instead of the raw input.
+    // BitShares symbols are canonical UPPERCASE and `lookup_asset_symbols` is
+    // case-sensitive (a lowercase symbol resolves to null), so normalize here
+    // and hand the canonical symbol downstream (cache keys, Kibana terms,
+    // chart labels) instead of the raw input.
     const canonical = normalizeAssetSymbol(symbol);
     const client = bitsharesClient || getBitsharesClient();
     const results = await client.BitShares.db.lookup_asset_symbols([canonical]);

@@ -41,9 +41,9 @@ async function getDynamicGlobalProperties() {
 }
 
 async function getAsset(symbolOrId: any) {
-  // Symbols arrive from a user-supplied `pair: "BASE/QUOTE"` option; BitShares
-  // answers lowercase lookups without error, so canonicalize before the id
-  // test and both lookup paths.
+  // Symbols arrive from a user-supplied `pair: "BASE/QUOTE"` option; the chain
+  // lookup is case-sensitive, so canonicalize before the id test and both
+  // lookup paths.
   const ref = normalizeAssetRef(symbolOrId);
   if (/^1\.3\.\d+$/.test(ref)) {
     const assets = await dbCall('get_assets', [[ref]]);

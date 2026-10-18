@@ -4,9 +4,9 @@
  * Asset-symbol normalization is centralized in modules/utils/asset_symbols.ts
  * and applied at every boundary that accepts a pair (CLI prompts, `dexbot tv`/
  * `dexbot dw` targets, bots.json) or hands a symbol to the chain. BitShares
- * accepts lowercase lookups without error, so a miss here is silent: the wrong
- * casing simply propagates into cache keys, chart titles and strict
- * comparisons like `assetA === 'ASSET_A'`.
+ * `lookup_asset_symbols` is case-sensitive, so a miss here is a silent miss:
+ * the lowercase symbol resolves to null and the wrong casing propagates into
+ * cache keys, chart titles and strict comparisons like `assetA === 'ASSET_A'`.
  */
 
 const assert = require('assert');

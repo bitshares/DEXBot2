@@ -3,11 +3,11 @@
  *
  * BitShares stores asset symbols canonically UPPERCASE, so the assetA and
  * assetB symbols of a bot pair are always UPPERCASE on chain.
- * Nodes accept a lowercase lookup and answer it without error, so a lowercase
- * symbol never fails — it just travels on as lowercase into everything built
- * from it: the `symbol` field we attach to resolved assets, chart titles,
- * cache-file names, Kibana query terms, and strict in-process comparisons such
- * as the core-asset side check `assetA === 'CORE'`. That is a
+ * `lookup_asset_symbols` is case-sensitive: a lowercase symbol resolves to
+ * null (not an error), so a lowercase input silently drops the asset. Casing
+ * also leaks into everything built from a resolved symbol: the `symbol` field
+ * we attach to assets, chart titles, cache-file names, Kibana query terms, and
+ * strict in-process comparisons such as `assetA === 'CORE'`. That is a
  * silent-wrong-answer class of bug, not a loud
  * one, so the conversion is done ONCE here and applied at every boundary that
  * accepts a pair from a human (CLI prompts, `dexbot tv`/`dw` targets) or hands

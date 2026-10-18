@@ -43,9 +43,9 @@ function createResolvers(chainClient: ChainClient) {
     async function resolveAsset(idOrSymbol: string): Promise<AssetLike> {
         if (!idOrSymbol) throw new Error('asset id or symbol required');
 
-        // Canonicalize before the cache key and the chain call: a lowercase
-        // symbol would otherwise occupy a second cache slot and be echoed back
-        // lowercase to every caller.
+        // Canonicalize before the cache key and the chain call: the chain
+        // lookup is case-sensitive, so a lowercase symbol would both miss the
+        // cache and fail to resolve.
         idOrSymbol = normalizeAssetRef(idOrSymbol);
         const cacheKey = `asset:${idOrSymbol}`;
         const cached = assetCache.get(cacheKey);

@@ -126,9 +126,9 @@ function normalizeBotEntry(entry: BotEntry, index: number = 0): BotEntry {
     // (shared with the claw copy — one semantics for both).
     const normalized = seedBotEntry(entry);
     // Asset symbols are canonical UPPERCASE on BitShares. A hand-edited
-    // lowercase "assetA": "tokena" is accepted by the chain without error but
-    // breaks every strict symbol comparison downstream (e.g. the core-asset
-    // side check that reads `assetA === 'CORE'`,
+    // lowercase "assetA": "tokena" both fails the case-sensitive chain lookup
+    // and breaks every strict symbol comparison downstream (e.g. the
+    // core-asset side check that reads `assetA === 'CORE'`,
     // getBtsSide, fee/pool cache keys), so canonicalize at this single read
     // funnel — which key names hold a symbol is defined once, in
     // modules/utils/asset_symbols.canonicalizeBotAssetSymbols, shared with

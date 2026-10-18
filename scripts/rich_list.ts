@@ -15,6 +15,9 @@
  *       npm run richlist -- <ASSET> --top 10
  */
 
+import { pathToFileURL } from 'node:url';
+import { normalizeAssetSymbol } from '../modules/utils/asset_symbols.js';
+
 const DB_API = 0;          // database_api is always registered first
 const LOGIN_API = 1;       // login_api (registered second)
 const FALLBACK_HOLDER_LIMIT = 100;  // used when the node does not report api_limit_get_asset_holders
@@ -285,12 +288,17 @@ async function readHolderLimit(client: RpcClient): Promise<number> {
 // Chain queries
 // ---------------------------------------------------------------------------
 
-async function lookupSymbols(session: Session, symbolsOrIds: string[]): Promise<AssetRef[]> {
+export async function lookupSymbols(session: Session, symbolsOrIds: string[]): Promise<AssetRef[]> {
     const out: AssetRef[] = [];
     for (let i = 0; i < symbolsOrIds.length; i += LOOKUP_PAGE) {
         const slice = symbolsOrIds.slice(i, i + LOOKUP_PAGE);
+        // `lookup_asset_symbols` is case-sensitive: a lowercase symbol returns
+        // null on-chain, so canonicalize before handing it to the node. Asset
+        // object ids ("1.3.x") pass through untouched. `request` keeps the
+        // caller's spelling so "asset not found" still echoes the input.
+        const refs = slice.map((s) => normalizeAssetSymbol(s));
         const res = await session.client.call<(AssetObject | null)[]>(
-            session.dbApi, 'lookup_asset_symbols', [slice]);
+            session.dbApi, 'lookup_asset_symbols', [refs]);
         res.forEach((a, j) => out.push(a
             ? { request: slice[j], found: true, id: a.id, symbol: a.symbol, precision: a.precision }
             : { request: slice[j], found: false }));
@@ -303,7 +311,7 @@ async function lookupSymbols(session: Session, symbolsOrIds: string[]): Promise<
  * `bit` prefix, so unresolved `bit*` names are retried stripped and reported as
  * an alias.
  */
-async function fetchAssets(session: Session, symbolsOrIds: string[]): Promise<AssetRef[]> {
+export async function fetchAssets(session: Session, symbolsOrIds: string[]): Promise<AssetRef[]> {
     const out = await lookupSymbols(session, symbolsOrIds);
     const retry: number[] = [];
     out.forEach((a, i) => {
@@ -496,7 +504,9 @@ async function main(): Promise<void> {
     }
 }
 
-main().catch((e) => {
-    console.error(`Error: ${(e as Error).message}`);
-    process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    main().catch((e) => {
+        console.error(`Error: ${(e as Error).message}`);
+        process.exit(1);
+    });
+}
