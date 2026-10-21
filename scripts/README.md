@@ -123,6 +123,25 @@ node that exposes it; exchange tags are name heuristics, not verified identities
 also splits the residual into account balances, blinded balances and order books, and adds
 concentration plus balance bands. Read-only: no keys, no transactions.
 
+### Token Distribution
+**File:** `token_distribution.ts` (npm: `npm run token-distribution`)
+**Purpose:** Per-asset companion to BTS Supply Distribution. Buckets a token into free account
+balances, limit orders, liquidity pools, vesting balances, P2P credit offers and deal collateral,
+SameT funds, HTLC escrow, accumulated market fees and blinded supply, then reconciles the total
+against `current_supply`. Liquidity is grouped by counterpart asset (token/BTS, token/USD, ...);
+the HTML report adds a separate liquidity donut plus a 3% price-change liquidity table:
+token sellable (price −3%) and buyable (+3%), orderbook + pool combined per market and expressed
+as a share of total supply. Writes the report to
+`analysis/charts/token-<SYMBOL>-distribution.html`.
+```bash
+npm run token-distribution -- <token>
+node dist/scripts/token_distribution.js <asset-id> --json
+node dist/scripts/token_distribution.js <token> --no-orders   # skip the ~6k order queries
+```
+Limit orders have no by-asset index in bitshares-core, so the exact scan queries every listed
+asset concurrently (~20s); vesting balances scan 1.13.x with a gap tolerance. Read-only: no keys,
+no transactions. BTS itself is rejected; use `npm run distribution`.
+
 ### Configuration Audit
 **File:** `validate_bots.ts`
 **Purpose:** Check `bots.json` for schema errors or missing required fields.
@@ -332,6 +351,7 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run analysis:resolve-accounts` | Batch-resolve on-chain bot accounts (`resolve_bot_accounts.ts`) |
 | `npm run richlist` | Per-asset rich list / top holder (`rich_list.ts`) |
 | `npm run distribution` | BTS supply distribution + HTML donut report (`bts_distribution.ts`) |
+| `npm run token-distribution` | Per-token supply distribution + HTML report (`token_distribution.ts`) |
 | `npm run ama:chart:lp-local` | Generate local LP comparison chart |
 | `npm run lp:chart` | Generate uPlot LP chart |
 | `npm run test:credit-renewal` | Test credit offer renewal for a specific bot |
@@ -363,7 +383,7 @@ load `profiles/orders/<botKey>.json` automatically.
 dexbot tv <bot>                                  # bot, 3 months
 dexbot tv 133 --month 6                          # pool
 dexbot tv TOKENA/TOKENB --month 1 --chart analysis/charts/custom.html
-dexbot tv BTS/HONEST.USD --feed --month 1        # MPA price feed
+dexbot tv TOKENA/BTS --feed --month 1            # MPA price feed
 ```
 
 ### Dynamic Weight (`dexbot dw`)
@@ -376,7 +396,7 @@ Same pipeline and flags as `tv`; renders the dynamic-weight research chart
 dexbot dw <bot>
 dexbot dw 133 --month 6
 dexbot dw TOKENA/TOKENB --month 1 --chart analysis/charts/custom.html
-dexbot dw BTS/HONEST.USD --feed --month 1
+dexbot dw TOKENA/BTS --feed --month 1
 ```
 
 ### PnL Report (`dexbot pnl`)
