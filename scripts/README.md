@@ -19,93 +19,34 @@ dexbot update
 
 ## 🧹 CLEANING & RESET (DANGER ZONE)
 
-All clear/reset scripts resolve their directories via `scripts/lib/dexbot-paths.sh`,
-which mirrors `modules/paths.ts`. Defaults depend on the install type:
+All clear/reset scripts resolve paths through `scripts/lib/dexbot-paths.sh`
+(mirrors `modules/paths.ts`). Env overrides: `DEXBOT_PROFILE_ROOT`,
+`DEXBOT_MARKET_ADAPTER_DATA_DIR`, `DEXBOT_MARKET_ADAPTER_STATE_DIR`,
+`DEXBOT_CLAW_DATA_DIR`; the `dexbot` CLI passes the resolved dirs automatically.
 
 | Install | Profile root | Market adapter data/state | Claw data |
 |---------|--------------|---------------------------|-----------|
 | Source checkout | `<repo>/profiles` | `<repo>/market_adapter/{data,state}` | `<repo>/claw/data` |
 | Global npm (`npm i -g dexbot`) | `~/.config/dexbot2/profiles` | `<profiles>/market_adapter/{data,state}` | `<profiles>/claw/data` |
 
-Env overrides: `DEXBOT_PROFILE_ROOT`, `DEXBOT_MARKET_ADAPTER_DATA_DIR`,
-`DEXBOT_MARKET_ADAPTER_STATE_DIR`, `DEXBOT_CLAW_DATA_DIR`. When run through the
-`dexbot` CLI, the resolved runtime dirs are passed automatically, so the CLI
-always clears the same dirs the runtime uses.
+Shared behavior:
+- **Advisory live-runtime warning.** Before the prompt the scripts check runtime
+  PIDs and this install's online PM2 apps. A live bot re-persists its grid and a
+  live adapter can recreate its state/lock, so stop first with `dexbot stop`.
+  The warning never blocks the deletion or changes the exit code.
+- **One log predicate** (`*.log`, rotated `*.log.*`, `*.jsonl*`) so preview,
+  count, delete and verify always agree. It also removes the credential audit
+  trail `daemon-audit.jsonl*`, which is named in the preview.
 
-**Two behaviors are shared by all four `clear-*` scripts** (helpers in
-`scripts/lib/dexbot-paths.sh`):
+| Script | Deletes |
+|:---|:---|
+| `clear-logs.sh` | `<profiles>/logs/*.{log,jsonl}`, including market adapter logs and `daemon-audit.jsonl*` |
+| `clear-orders.sh` | `<profiles>/orders/*` |
+| `clear-market-adapter.sh` | market adapter `data/`, `state/`, and its runtime logs |
+| `clear-all.sh` | orders + logs + market adapter data/state + claw data |
+| `reset-settings.sh` | general, market and market-adapter settings files (defaults restored next run) |
 
-- **Advisory live-runtime warning.** Before the confirmation prompt, the scripts
-  read `<profiles>/{monolithic,monolithic-bot,monolithic-cred}.pid` and — only when
-  the PM2 daemon is already up, so a cleanup script can never spawn one — the
-  online PM2 apps belonging to this install (`pm2 jlist`, filtered to
-  `cwd`/`script_path` under the project or profiles root). If anything is found, a
-  `YELLOW` warning is printed. It is **advisory**: the prompt still runs, the
-  deletion still happens, and the exit code is unchanged. The reason it matters:
-  a live bot re-persists its grid within seconds, a live adapter rewrites its
-  state file *and* `market_adapter.lock` (a deleted lock lets a second adapter
-  start), and open log FDs mean the disk space is only reclaimed on restart. Stop
-  first with `dexbot stop` / `dexbot pm2 stop all`.
-- **One log predicate.** Every `find` over the logs directory goes through
-  `log_files` (`*.log`, rotated `*.log.*`, `*.jsonl*`), so the preview, the count,
-  the delete and the verification can never disagree. `*.jsonl*` also sweeps the
-  credential audit trail `logs/daemon-audit.jsonl` **and** its rotated
-  `daemon-audit.jsonl.1` siblings, which match no other pattern — they used to
-  survive a "clear" and leave a partial wipe. The audit trail is deleted with
-  everything else, with no extra prompt and no opt-in flag; it is only named in
-  the preview (`Includes the credential audit trail: daemon-audit.jsonl*`) so the
-  deletion is never a surprise.
-
-### Wipe Logs
-**File:** `clear-logs.sh`
-**Purpose:** Delete all bot `.log` and `.jsonl` files, including `profiles/logs/market_adapter.log`.
-```bash
-# IRREVERSIBLE: Deletes all files in profiles/logs/*.log and *.jsonl, including market_adapter.log
-# (also the credential audit trail daemon-audit.jsonl and its rotated siblings)
-# Prompts for confirmation before deleting; warns first if a runtime is live.
-bash scripts/clear-logs.sh
-```
-
-### Wipe Orders
-**File:** `clear-orders.sh`
-**Purpose:** Delete all persistent order state files.
-```bash
-# IRREVERSIBLE: Deletes all files in profiles/orders/*
-# Prompts for confirmation before deleting.
-bash scripts/clear-orders.sh
-```
-
-### Clear Market Adapter State
-**File:** `clear-market-adapter.sh`
-**Purpose:** Delete all market adapter candle data, state files, and runtime logs.
-```bash
-# IRREVERSIBLE: Removes market_adapter/{data,state}/ and profiles/logs/{market_adapter,dexbot-adapter,dexbot-adapter-error}.log
-# (paths relocate under the profiles dir for global npm installs)
-# Prompts for confirmation before deleting.
-bash scripts/clear-market-adapter.sh
-```
-
-### Wipe Orders + Logs + Market Adapter + Claw
-**File:** `clear-all.sh`
-**Purpose:** Delete order state files, log files, market adapter data/state, and claw data in one confirmed operation.
-```bash
-# IRREVERSIBLE: Deletes profiles/orders/*, profiles/logs/*.{log,jsonl},
-# market_adapter/{data,state}/*, and claw data (positions.json, watcher-health.json, memu/) under
-# <profiles>/claw/data (or <repo>/claw/data for source checkouts).
-# Also deletes daemon-audit.jsonl and its rotated siblings.
-# Prompts for confirmation before deleting; warns first if a runtime is live.
-bash scripts/clear-all.sh
-```
-
-### Reset Settings
-**File:** `reset-settings.sh`
-**Purpose:** Delete the three settings files and restore built-in defaults on next run.
-```bash
-# IRREVERSIBLE: Deletes profiles/general.settings.json, profiles/market_profiles.json,
-# and profiles/market_adapter_settings.json
-# Prompts for confirmation before deleting.
-bash scripts/reset-settings.sh
-```
+All are irreversible and prompt for confirmation.
 
 ---
 
@@ -161,6 +102,26 @@ the `bit` prefix; the script retries an unresolved `bit*` name stripped and note
 the rename. Note:
 `get_asset_holders_count` is reported by the node as `distance(range) - 1`, so
 the `holders=` figure can be off by one.
+
+### BTS Supply Distribution
+**File:** `bts_distribution.ts` (npm: `npm run distribution`)
+**Purpose:** Live-chain breakdown of where BTS sits: call-order collateral, global/individual
+settlement funds (plus force-settlement debt and parameters), governance tickets, vesting and
+legacy balances, liquidity pools, SameT/credit funds, HTLC escrow and asset fee pools. The
+remainder is reported as a derived liquid residual and compared with total supply and a derived
+circulating float. Also writes a self-contained HTML donut report to
+`analysis/charts/bts-distribution.html` (`--html PATH`, `--no-html`).
+```bash
+npm run distribution                                   # terminal + HTML
+node dist/scripts/bts_distribution.js --json           # JSON (HTML still written)
+node dist/scripts/bts_distribution.js --circulating <reference-supply>
+node dist/scripts/bts_distribution.js --holders all    # full rich list (~5 min)
+```
+Call-order collateral uses `api_helper_indexes` `total_in_collateral` (falls back to summing
+`get_call_orders`). Top liquid holders come from `asset_api::get_asset_holders`, retrying on a
+node that exposes it; exchange tags are name heuristics, not verified identities. `--holders all`
+also splits the residual into account balances, blinded balances and order books, and adds
+concentration plus balance bands. Read-only: no keys, no transactions.
 
 ### Configuration Audit
 **File:** `validate_bots.ts`
@@ -301,35 +262,11 @@ npm run version:sync
 > global npm package installs (`npm install -g dexbot`). They are intended for
 > source checkout workflows only.
 
-### Synchronize test → dev → main
-**File:** `pmain.sh` (also: `npm run pmain`)
-**Purpose:** Sync local test branch through dev to main remote.
-```bash
-# Push test → dev → main
-bash scripts/pmain.sh
-# OR
-npm run pmain
-```
-
-### Synchronize test → dev
-**File:** `pdev.sh` (also: `npm run pdev`)
-**Purpose:** Sync local test branch to dev remote.
-```bash
-# Push test → dev
-bash scripts/pdev.sh
-# OR
-npm run pdev
-```
-
-### Synchronize local test → origin/test
-**File:** `ptest.sh` (also: `npm run ptest`)
-**Purpose:** Push local test branch to remote.
-```bash
-# Push test to origin/test
-bash scripts/ptest.sh
-# OR
-npm run ptest
-```
+| Script | npm | Action |
+|:---|:---|:---|
+| `ptest.sh` | `npm run ptest` | push local `test` → `origin/test` |
+| `pdev.sh` | `npm run pdev` | sync `test` → `dev` |
+| `pmain.sh` | `npm run pmain` | sync `test` → `dev` → `main` |
 
 ---
 
@@ -379,13 +316,6 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run pm2:start` | Unlock + start bots via PM2 (alias of `pm2:unlock`) |
 | `npm run pm2:stop` | Stop all dexbot PM2 processes via the launcher |
 
-### Branch Sync *(git checkout only)*
-| Command | Purpose |
-|:---|:---|
-| `npm run ptest` | Push local test → origin/test |
-| `npm run pdev` | Sync local test → dev |
-| `npm run pmain` | Sync local test → dev → main |
-
 ### Version
 | Command | Purpose |
 |:---|:---|
@@ -401,6 +331,7 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 | `npm run analysis:grid-check` | Last-fill-guard check (`grid_correction_check.ts`) |
 | `npm run analysis:resolve-accounts` | Batch-resolve on-chain bot accounts (`resolve_bot_accounts.ts`) |
 | `npm run richlist` | Per-asset rich list / top holder (`rich_list.ts`) |
+| `npm run distribution` | BTS supply distribution + HTML donut report (`bts_distribution.ts`) |
 | `npm run ama:chart:lp-local` | Generate local LP comparison chart |
 | `npm run lp:chart` | Generate uPlot LP chart |
 | `npm run test:credit-renewal` | Test credit offer renewal for a specific bot |
@@ -418,36 +349,35 @@ The following scripts allow you to call `dexbot` commands directly from the `scr
 
 ## 📈 CHART GENERATION
 
-`dexbot tv` and `dexbot dw` share ONE fetch pipeline ([`chart_command.ts`](chart_command.ts)): identical target resolution, source routing, cached candle chunks, and temp-file handoff — only the renderer registration (`RENDERERS` table) differs.
+`dexbot tv` and `dexbot dw` share the `chart_command.ts` pipeline (target
+resolution, source routing, cached monthly candle chunks); only the renderer
+differs. Both write to `analysis/charts/` and support `--month`, `--feed`,
+`--pool`, `--book` and `--chart`.
 
 ### TradingView (`dexbot tv`)
-**File:** `tv.ts` (thin entry; shared pipeline: `chart_command.ts`)
-**Purpose:** One-step TradingView-style 1h chart for a bot (with AMA + order overlay), pool, or pair. Fetches candles in monthly Kibana chunks (pool-first with order-book fallback; `--feed` for MPA price-feed history), then renders via `analysis/tradingview/`. Bot charts pick up the order overlay from `profiles/orders/<botKey>.json` automatically.
-**Output:** `analysis/charts/tv_<bot|pool_<id>|<a>_<b>>_1h_<N>m.html` (`_feed` suffix for feed charts)
+**File:** `tv.ts`
+One-step 1h chart for a bot, pool or pair, with AMA + order overlay. Bot charts
+load `profiles/orders/<botKey>.json` automatically.
+**Output:** `tv_<bot|pool_<id>|<a>_<b>>_1h_<N>m.html` (`_feed` for feed charts)
 ```bash
-# Bot chart (default: 3 months)
-dexbot tv <bot>
-# Pool or pair, custom window
-dexbot tv 133 --month 6
+dexbot tv <bot>                                  # bot, 3 months
+dexbot tv 133 --month 6                          # pool
 dexbot tv TOKENA/TOKENB --month 1 --chart analysis/charts/custom.html
-# MPA price-feed history instead of market candles (opt-in)
-dexbot tv BTS/HONEST.USD --feed --month 1
+dexbot tv BTS/HONEST.USD --feed --month 1        # MPA price feed
 ```
 
-### Dynamic Weight (`dexbot dw`) — advanced
-**File:** `dw.ts` (thin entry; shared pipeline: `chart_command.ts`)
-**Purpose:** Identical one-step pipeline to `dexbot tv` (same targets, `--month`, `--feed/--pool/--book`, same cached monthly candle chunks) — the only difference is the renderer: it writes the dynamic-weight research chart via `analysis/analyze_dynamic_weight.ts` (AMA slope + Kalman blend, Hurst/PE regime gate) instead of a TradingView chart. For weight-tuning research, not general charting.
-**Output:** `analysis/charts/dw_<bot|pool_<id>|<a>_<b>>_1h_<N>m.html` (`_feed` suffix for feed charts)
+### Dynamic Weight (`dexbot dw`)
+**File:** `dw.ts`
+Same pipeline and flags as `tv`; renders the dynamic-weight research chart
+(AMA slope + Kalman blend, Hurst/PE regime gate). Research knobs (`--alpha`,
+`--gain`, `--dw`, `--lb`, `--clip`) live on `analysis/analyze_dynamic_weight.js`.
+**Output:** `dw_<bot|pool_<id>|<a>_<b>>_1h_<N>m.html` (`_feed` for feed charts)
 ```bash
-# Bot chart (default: 3 months)
 dexbot dw <bot>
-# Pool or pair, custom window
 dexbot dw 133 --month 6
 dexbot dw TOKENA/TOKENB --month 1 --chart analysis/charts/custom.html
-# MPA price-feed history instead of market candles (opt-in)
 dexbot dw BTS/HONEST.USD --feed --month 1
 ```
-Research knobs (`--alpha`, `--gain`, `--dw`, `--lb`, `--clip`) stay on the analyzer itself — call `node dist/analysis/analyze_dynamic_weight.js` directly for parameter sweeps (see `analysis/README.md`).
 
 ### PnL Report (`dexbot pnl`)
 **File:** `pnl.ts` (thin entry; analyzer + HTML renderer: `analysis/trade_profitability.ts` + `analysis/pnl_report.ts`)
@@ -504,20 +434,7 @@ alias dbr='bash scripts/clear-orders.sh'
 alias dba='bash scripts/clear-all.sh'
 alias dbv='node dist/scripts/validate_bots.js'
 alias dbd='node dist/scripts/divergence-calc.js'
-```
 
----
-
-## 💡 PRO-TIPS FOR TERMINAL USERS
-
-**Monitor live updates while running a script:**
-```bash
-# Tail the update log in a separate pane
+# Tail the updater log in a separate pane
 tail -f <profiles>/logs/dexbot-update.log
-```
-
-**Run a specific bot dry-run from the CLI:**
-```bash
-# Force a clean start for 'my-bot'
-bash scripts/clear-orders.sh && BOT_NAME=my-bot dexbot test
 ```
