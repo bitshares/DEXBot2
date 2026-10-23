@@ -693,9 +693,9 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
                             <button type="button" class="step-btn" id="ama-slow-dec">▼</button>
                         </span>
                         <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA1" title="AMA1 (slow 62.1)">1</button>
-                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA2" title="AMA2 (slow 72.0)">2</button>
-                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA3" title="AMA3 (slow 83.6)">3</button>
-                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA4" title="AMA4 (slow 96.9)">4</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA2" title="AMA2 (slow 71.5)">2</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA3" title="AMA3 (slow 83.5)">3</button>
+                        <button type="button" class="reset-btn ama-preset-btn" data-ama-preset="AMA4" title="AMA4 (slow 99.3)">4</button>
                     </div>
                     <div class="indicator" title="Range min/max built only from the live AMA price (red above, green below); Scale sizes it by AMA slope like the grid build. Turning either on also turns on what it needs (Range → AMA, Scale → Range + AMA)">
                         <label><input type="checkbox" id="range-toggle"${defaults.rangeEnabled ? ' checked' : ''}> Range</label>

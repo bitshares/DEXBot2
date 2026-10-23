@@ -160,16 +160,16 @@ node dist/market_adapter/market_adapter.js --deltaPercent 2
   "ama": {
     "erPeriod": 781,     // Efficiency Ratio lookback period (candles)
     "fastPeriod": 5.2,   // Fast smoothing period for trending markets
-    "slowPeriod": 83.6   // Slow smoothing period for choppy markets
+    "slowPeriod": 83.5   // Slow smoothing period for choppy markets
   }
 }
 ```
 
 > Optional. A bot-level `ama` block overrides the preset (or matched pair profile)
 > field by field, and supplying any period marks the bot's AMA as `custom` in the
-> adapter state. The values above are the fitted `AMA3` built-in defaults
+> adapter state. The values above are the built-in `AMA3` defaults
 > (`MARKET_ADAPTER.AMAS`): `erPeriod: 781` and `fastPeriod: 5.2` are shared, while
-> `slowPeriod` runs `62.1` (AMA1) to `96.9` (AMA4).
+> `slowPeriod` runs `62.1` (AMA1) to `99.3` (AMA4).
 
 > **`gridPrice` is the only switch.** A bot is AMA-driven when `gridPrice` says
 > so — `usesAmaGridPrice()`, the source of truth shared by the bot, maintenance

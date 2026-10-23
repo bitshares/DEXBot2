@@ -155,7 +155,7 @@ function resolveAma(cfg: ReturnType<typeof parseArgs>): AmaDef {
     if (cfg.er != null || cfg.fast != null || cfg.slow != null) {
         const er = cfg.er ?? 781;
         const fast = cfg.fast ?? 5.2;
-        const slow = cfg.slow ?? 83.6;
+        const slow = cfg.slow ?? MA.AMAS.AMA3.slowPeriod;
         return { name: `custom(er=${er},f=${fast},s=${slow})`, er, fast, slow };
     }
     const presets = MA.AMAS as Record<string, { erPeriod: number; fastPeriod: number; slowPeriod: number }>;

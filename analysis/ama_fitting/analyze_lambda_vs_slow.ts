@@ -185,11 +185,13 @@ function generateChartHtml(results: BestEntry[], metricCache: MetricEntry[], fix
     const cacheSlow = metricCache.map((m) => m.slow);
     const cacheMove = metricCache.map((m) => m.movement);
 
+    // Current built-in presets: AMA1 is the λ=0.0031 fit, AMA2–AMA4 follow the
+    // exact −9%/step effective-smoothing ladder (see MARKET_ADAPTER.AMAS).
     const amaAnnotations = [
         { label: 'AMA1', lambda: 0.0031, slow: 62.1, color: '#ef5350' },
-        { label: 'AMA2', lambda: 0.0025, slow: 72.0, color: '#fb8c00' },
-        { label: 'AMA3', lambda: 0.00185, slow: 83.6, color: '#5c9ee6' },
-        { label: 'AMA4', lambda: 0.0013, slow: 96.9, color: '#26a69a' },
+        { label: 'AMA2', lambda: 0.0025, slow: 71.5, color: '#fb8c00' },
+        { label: 'AMA3', lambda: 0.00185, slow: 83.5, color: '#5c9ee6' },
+        { label: 'AMA4', lambda: 0.0013, slow: 99.3, color: '#26a69a' },
     ].filter(a => a.lambda >= xs[0] && a.lambda <= xs[xs.length - 1]);
 
     return `<!DOCTYPE html>

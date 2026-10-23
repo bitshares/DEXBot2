@@ -1561,9 +1561,15 @@ let MARKET_ADAPTER = {
     // pair-specific market_profiles entry exists.
     DEFAULT_AMA_KEY: 'AMA3',
 
-    // AMAS: Built-in AMA presets derived from the local LP 1.19.133 fitting results.
-    // Fitted with per-AMA λ weights (0.0031 / 0.0025 / 0.00185 / 0.0013) on 1h candles
+    // AMAS: Built-in AMA presets. AMA1 is the fitted winner (λ=0.0031) on 1h candles
     // (2023-07 → 2026-07, SMA-warmup-aligned optimizer, ER=781 fixed, Fast=5.2 fixed).
+    // AMA2–AMA4 are spaced from AMA1 on an exact −9%-per-step effective-smoothing
+    // ladder evaluated at AMA_CONVERGENCE_ER_AVG (0.151):
+    //   smooth = (ER·(fastSC−slowSC) + slowSC)², fastSC = 2/(fastPeriod+1),
+    //   slowSC = 2/(slowPeriod+1).
+    // Unrounded targets are 62.10 / 71.48 / 83.46 / 99.27; the values below are
+    // rounded to one decimal (the optimizer's 0.1 quantum). Re-derive if
+    // fastPeriod or AMA_CONVERGENCE_ER_AVG changes.
     // These serve as stable defaults for the market adapter and can be overridden by
     // pair-specific profiles in profiles/market_profiles.json.
     AMAS: {
@@ -1577,19 +1583,19 @@ let MARKET_ADAPTER = {
             name: 'AMA2',
             erPeriod: 781,
             fastPeriod: 5.2,
-            slowPeriod: 72.0,
+            slowPeriod: 71.5,
         },
         AMA3: {
             name: 'AMA3',
             erPeriod: 781,
             fastPeriod: 5.2,
-            slowPeriod: 83.6,
+            slowPeriod: 83.5,
         },
         AMA4: {
             name: 'AMA4',
             erPeriod: 781,
             fastPeriod: 5.2,
-            slowPeriod: 96.9,
+            slowPeriod: 99.3,
         },
     },
 

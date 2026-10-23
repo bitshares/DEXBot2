@@ -111,7 +111,7 @@ node dist/analysis/tradingview/analyze_tradingview.js \
 1. Reads `profiles/bots.json` to find the bot's `assetA`, `assetB`, and `ama` settings.
 2. Resolves the candle file at `market_adapter/data/market_adapter_<bot-key>_1h.json`.
 3. Looks up the matching market profile in `profiles/market_profiles.json` for AMA defaults.
-4. AMA settings priority: bot-specific `ama` object > market profile > constants (AMA3, slowPeriod 83.6).
+4. AMA settings priority: bot-specific `ama` object > market profile > constants (AMA3, slowPeriod 83.5).
 
 > The candle file must exist — run the market adapter LP exporter first if needed (see [Getting Blockchain Data](#getting-blockchain-data)).
 
@@ -189,7 +189,7 @@ Indicator on/off state is not a generation-time flag: `SMA`, `VWMA`, `AMA`, `Ran
 | `--sma-period <n>` | SMA period | `500` |
 | `--ama-er-period <n>` | AMA ER period | `781` |
 | `--ama-fast-period <n>` | AMA fast period | `5.2` |
-| `--ama-slow-period <n>` | AMA slow period | `83.6` |
+| `--ama-slow-period <n>` | AMA slow period | `83.5` |
 | `--vwap-bars <n>` | Rolling VWMA window | `500` |
 | `--no-sma` | Disable SMA | — |
 | `--no-vwap` | Disable VWMA | — |

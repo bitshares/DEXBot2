@@ -241,13 +241,13 @@ Pair-specific AMA profiles live in `profiles/market_profiles.json`:
     "defaultAma": "AMA1",
     "amas": {
       "AMA1": { "erPeriod": 781, "fastPeriod": 5.2, "slowPeriod": 62.1 },
-      "AMA2": { "erPeriod": 781, "fastPeriod": 5.2, "slowPeriod": 72.0 }
+      "AMA2": { "erPeriod": 781, "fastPeriod": 5.2, "slowPeriod": 71.5 }
     }
   }]
 }
 ```
 
-> The `amas` periods above are the fitted built-in presets (`MARKET_ADAPTER.AMAS`),
+> The `amas` periods above are the built-in presets (`MARKET_ADAPTER.AMAS`),
 > shown here only to make the shape concrete. A real pair profile needs just the
 > fields it changes — e.g. `"AMA3": { "slowPeriod": 90 }` keeps the built-in
 > `erPeriod`/`fastPeriod` and overrides only `slowPeriod`.
