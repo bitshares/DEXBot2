@@ -715,6 +715,42 @@ that passes its batch-dedupe, edge classification and `fallbackCap`. Any exclude
 lost — the same class `77e763f6` fixed for the held boundary, still open for the rest, and
 the mechanism behind a multi-slot sweep leaving the boundary *behind* the fills.
 
+#### 9.9 Two deadlocks that were bookkeeping, not market (`430dee6a` follow-up)
+
+Both incidents in §9.7/§9.8 ended in a rebuild. Neither was a fund shortage and
+neither needed a new guard — each was a self-referential calculation that could
+only be broken from outside.
+
+**The budget that vetoed its own placement.** `available = chainFree −
+virtualReservation` is the right question for "how much room is left beyond the
+projected rail", but the correction then spends it on *that same projection*:
+when the rail was sized from a larger balance (or from inventory locked in
+resting orders), the reservation exceeds chain free, `available` reads 0, no
+placement can consume the reservation, and it can never shrink. Live: free
+454560.80 vs virtual 456046.21 — `planned 3, placing 0` every cycle for 84
+minutes. The fix is arithmetic, not policy: for a known candidate set the budget
+is `min(chainFree, min(virtualReservation, Σ candidate ideals))` when `available`
+is 0 (`deriveChainTruthFundBudget`). Bound on both sides, and the chain rejects
+an over-commit anyway.
+
+**The crawl that could not catch up.** A boundary crawl is ±1 slot per committed
+fill, so once a sweep leaves the window *behind* the fill, crawling is
+arithmetically unable to recover: every tightening slot is then at/through the
+fill, `passesLastFill` refuses all of them, and the funds sit in the stranded
+resting inventory. The cheapest repair (rotate the stranded orders down) is
+itself a lower sell, which the same guard forbids — three locks, no key. The fill
+is the anchor: `SELL fill at f => boundary ≥ f − gapSlots`, `BUY fill at f =>
+boundary ≤ f − 1` (`reanchorBoundaryFromLastFill`), subject to a real
+fill-provenanced pivot, an on-ladder price and `validatePersistedBoundary`.
+
+**Deliberately rejected: the pair ledger.** Making each fill mint its counter
+order (reserve the exact proceeds) would prove per-trade funding and delete the
+`fund-constrained prefix` logic — but it also turns the ladder into a set of
+independent round trips, so sizes stop following the side budget. Spread repair
+must stay fund-driven from the side pool: a SELL fill returns quote while the
+same-side repair needs base, so no fill can ever fund its own side, and pairing
+would hide that asymmetry instead of resolving it.
+
 ---
 
 ### A. Grid-Price Invariant — former failure trace

@@ -1486,6 +1486,97 @@ export function resolveSpreadMarketReference(manager: OrderManagerLike): number 
  * @param {Object} manager - OrderManager instance
  * @returns {{price: number|null, type: string|null}} Effective pivot (both null when cold)
  */
+/**
+ * Re-anchor the boundary so the newest REAL fill sits outside its own window.
+ *
+ * A boundary crawl is ±1 slot per committed fill, so a window that ended up
+ * behind the fill (a sweep filled several slots while the commit dropped the
+ * owed crawls, or the crawl was capped) cannot catch up by crawling: every
+ * tightening slot on that side is then at/through the last fill and the
+ * last-fill guard refuses all of them, while the funds sit in the resting
+ * (stranded) inventory — the 2026-10-25 deadlock (7 sells swept slots 147-153,
+ * the boundary ended at 146 and stayed there; `last-fill-blocked` thereafter).
+ *
+ * The fill itself is the anchor, so place it outside its window:
+ *   SELL fill at slot f  -> boundary >= f - gapSlots  (sellStart = f + 1)
+ *   BUY  fill at slot f  -> boundary <= f - 1         (buy window ends below f)
+ *
+ * Only a genuine on-ladder fill price is accepted (same one-increment drift
+ * bound as `resolveOnGridPivot`), and the candidate must pass the same
+ * placed-order-aware validation the boundary commit gate uses, so a re-anchor
+ * can never strand a live order inside the re-typed band.
+ *
+ * @param {Object} manager - OrderManager (pivot + genesis)
+ * @param {number|null} boundaryIdx - Boundary the derivation would commit
+ * @param {Array<Object>} slots - Grid slots (current generation)
+ * @param {number} gapSlots - Gap band width
+ * @returns {{boundaryIdx: number|null, reanchored: boolean, from?: number|null, to?: number, side?: string, fillSlot?: number, reason?: string}}
+ */
+export function reanchorBoundaryFromLastFill(manager: OrderManagerLike, boundaryIdx: number | null | undefined, slots: ManagedOrder[] | null | undefined, gapSlots: number): { boundaryIdx: number | null; reanchored: boolean; from?: number | null; to?: number; side?: string; fillSlot?: number; reason?: string } {
+    // NB: Number(null) === 0 and Number('') === 0 — a boundary-less manager must
+    // not be re-anchored onto slot 0 (same absent-value trap as
+    // consumePendingFillCrawls).
+    if (boundaryIdx === null || boundaryIdx === undefined || (boundaryIdx as unknown) === '') {
+        return { boundaryIdx: (boundaryIdx as number | null | undefined) ?? null, reanchored: false, reason: 'no-boundary' };
+    }
+    const boundary = Number(boundaryIdx);
+    if (!Number.isFinite(boundary)) return { boundaryIdx: boundaryIdx ?? null, reanchored: false, reason: 'no-boundary' };
+    const ref = resolveLastFillGuardReference(manager);
+    const price = Number(ref?.price);
+    if (!Number.isFinite(price) || price <= 0) return { boundaryIdx: boundary, reanchored: false, reason: 'cold-pivot' };
+    const side = ref.type === ORDER_TYPES.SELL ? ORDER_TYPES.SELL : ref.type === ORDER_TYPES.BUY ? ORDER_TYPES.BUY : null;
+    if (!side) return { boundaryIdx: boundary, reanchored: false, reason: 'no-fill-side' };
+    const genesis = (manager as unknown as { _genesis?: Parameters<typeof MathUtils.slotIndexForPrice>[1] })?._genesis;
+    const levels = genesis?.priceLevels;
+    if (!genesis || !Array.isArray(levels) || levels.length === 0) {
+        return { boundaryIdx: boundary, reanchored: false, reason: 'no-genesis' };
+    }
+    let idx: number;
+    try {
+        idx = Number(MathUtils.slotIndexForPrice(price, genesis));
+    } catch {
+        return { boundaryIdx: boundary, reanchored: false, reason: 'unresolvable-price' };
+    }
+    if (!Number.isFinite(idx) || idx < 0) return { boundaryIdx: boundary, reanchored: false, reason: 'unresolvable-price' };
+    // Only a genuine ladder level: an off-ladder (orphan/adopted) fill price
+    // must not be snapped into geometry. One increment is the caller's drift
+    // bound everywhere else (resolveOnGridPivot), so reuse it here.
+    const levelPrice = Number(MathUtils.priceForSlot(idx, genesis));
+    const incrementPct = Math.abs(Number((manager as unknown as { config?: { incrementPercent?: unknown } })?.config?.incrementPercent));
+    const maxDrift = Number.isFinite(incrementPct) && incrementPct > 0 ? incrementPct / 100 : 0.005;
+    if (!Number.isFinite(levelPrice) || levelPrice <= 0 || Math.abs(levelPrice - price) / price > maxDrift) {
+        return { boundaryIdx: boundary, reanchored: false, reason: 'off-ladder-fill' };
+    }
+    const gap = Number.isFinite(Number(gapSlots)) && Number(gapSlots) >= 0 ? Math.floor(Number(gapSlots)) : 0;
+    const slotCount = Array.isArray(slots) ? slots.length : 0;
+    if (slotCount === 0) return { boundaryIdx: boundary, reanchored: false, reason: 'no-slots' };
+    const ceiling = (slotCount - gap - 1) >= 0 ? (slotCount - gap - 1) : (slotCount - 1);
+    const required = side === ORDER_TYPES.SELL ? idx - gap : idx - 1;
+    if (side === ORDER_TYPES.SELL ? boundary >= required : boundary <= required) {
+        return { boundaryIdx: boundary, reanchored: false, reason: 'already-outside' };
+    }
+    const candidate = Math.max(0, Math.min(ceiling, required));
+    if (candidate === boundary) return { boundaryIdx: boundary, reanchored: false, reason: 'no-op' };
+    let check: { ok: boolean; reason?: string } = { ok: true };
+    try {
+        check = MathUtils.validatePersistedBoundary(candidate, slots ?? [], gap);
+    } catch (err) {
+        check = { ok: false, reason: getErrorMessage(err) };
+    }
+    if (!check || check.ok !== true) {
+        return { boundaryIdx: boundary, reanchored: false, reason: `unsafe: ${check?.reason ?? 'unknown'}` };
+    }
+    try {
+        manager.logger?.log?.(
+            `[BOUNDARY] Re-anchored from the last fill: ${side} filled at slot ${idx} ` +
+            `(${price.toFixed(6)}); boundary ${boundary} -> ${candidate} so the fill sits outside ` +
+            `its own window (crawl alone cannot recover a window behind the fill)`,
+            'warn'
+        );
+    } catch { /* logging is best-effort */ }
+    return { boundaryIdx: candidate, reanchored: true, from: boundary, to: candidate, side, fillSlot: idx };
+}
+
 export function resolveLastFillGuardReference(manager: OrderManagerLike): { price: number | null; type: string | null } {
     const livePrice = Number(manager?._lastFilledPrice);
     const liveType = manager?._lastFilledType;

@@ -516,6 +516,53 @@ function getAssetFeesSafe(assetSymbol: string, assetAmount: number | null = null
 }
 
 /**
+ * Fund budget for placing a KNOWN set of pending slots (spread correction).
+ *
+ * `calculateAvailableFundsValue` computes `chainFree - virtual - fees`, where
+ * `virtual` is the projection of the side's not-yet-placed (VIRTUAL) slots.
+ * That is the right number for "how much room is left beyond the projected
+ * rail", but it is CIRCULAR when the caller is funding exactly those projected
+ * slots: if the projection is larger than the account holds free (a rail sized
+ * from a bigger balance, from inventory locked in resting orders, or from
+ * optimistic proceeds), `available` reads 0 while the chain clearly holds free
+ * funds, and the projection can never shrink because nothing gets placed.
+ * Live symptom: `planned 3, placing 0` every cycle for 84 minutes
+ * (`free 454560.80` vs `virtual 456046.21`).
+ *
+ * So for a known candidate set, re-derive the budget from chain truth: add the
+ * projection back, but never more than the candidates themselves need and never
+ * more than the chain actually holds free. The chain remains the final arbiter
+ * (an over-commit is rejected at broadcast), and the fee reservation stays
+ * inside `availableFund` for every healthy cycle.
+ *
+ * Only an OVERSUBSCRIPTION (projection > chain free) triggers the fallback. A
+ * zero caused by the fee reservation or by a genuinely empty balance is a real
+ * constraint: the projection fits, so honour it (and its fees) and place
+ * nothing.
+ *
+ * @param {{availableFund?: number, virtualIntent?: number, chainFree?: number, candidateIdeals?: number}} args
+ * @returns {{budget: number, oversubscribed: number, eroded: boolean}} budget to
+ *   place with; projection excess over chain free (0 = healthy); whether the
+ *   chain-truth re-derivation was needed
+ */
+function deriveChainTruthFundBudget(args: { availableFund?: number; virtualIntent?: number; chainFree?: number; candidateIdeals?: number } | null | undefined) {
+    const available = Math.max(0, toFiniteNumber(args?.availableFund, 0));
+    const virtual = Math.max(0, toFiniteNumber(args?.virtualIntent, 0));
+    const chainFree = Math.max(0, toFiniteNumber(args?.chainFree, 0));
+    const ideals = Math.max(0, toFiniteNumber(args?.candidateIdeals, 0));
+    const oversubscribed = Math.max(0, virtual - chainFree);
+    // `oversubscribed <= 0` means the projection FITS in the free balance, so a
+    // zero `available` is a real constraint (fees/reservation), not the circular
+    // case — never re-derive past it.
+    if (available > 0 || oversubscribed <= 0 || ideals <= 0 || chainFree <= 0) {
+        return { budget: available, oversubscribed, eroded: false };
+    }
+    // Oversubscribed: fund the candidates from what the chain really holds.
+    const budget = Math.min(chainFree, Math.min(virtual, ideals));
+    return { budget, oversubscribed, eroded: budget > 0 };
+}
+
+/**
  * Calculate available funds for a specific side (buy or sell).
  * Deducts virtual reservations, BTS fees owed, and BTS fee reservation from chain-free balance.
  * 
@@ -2237,7 +2284,7 @@ function buildGenesisFromPriceLevels(startPrice: number, incrementPercent: numbe
 
 export type { FeeCacheEntry };
 
-export { getBtsSide, getSellStartIdx, resolveGapBand, countGapBandSpread, calculateGapSlots, isSlotInRail, isSlotIndexInGapBand, isEvacuationRotationAllowed, isEvacuationSizeStillValid, validateBoundaryCommit, validatePersistedBoundary, isTransientInBandRejection, BOUNDARY_REJECT_PLACED_IN_BAND, resolveGapSlots, isPercentageString, isPositiveNumber, isPositiveNumberOrPercent, isPositiveInt, parsePercentageString, toDecimal, resolveRelativePrice, parseRelativeMultiplier, validateGridPriceBounds, isExplicitZeroAllocation, getPrecision, computeChainFundTotals, calculateAvailableFundsValue, adjustBudgetForBtsFees, getGridBestPrices, calculateSpreadFromOrders, resolveConfigValue, resolveConfigValueWithRegistry, hasValidAccountTotals, blockchainToFloat, floatToBlockchainInt, floorToBlockchainInt, quantizeFloat, normalizeInt, getPrecisionByOrderType, getPrecisionsForManager, getPrecisionSlack, quantumForPrecision, calculatePriceTolerance, findCrossedOrder, pricesOnSameLevel, sameGridPrice, validateOrderAmountsWithinLimits, getMinOrderSize, getDustThresholdFactor, getSingleDustThreshold, getDoubleDustThreshold, validateOrderSize, getAssetFees, getAssetFeesSafe, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, calculateOrderCreationFees, calculateSwapInAmount, _setFeeCache, cloneWeightDistribution, clamp, roundTo, fixedTo, roundToDecimals, priceLevelsForGenesis, priceForSlot, slotIndexForPrice, slotIdForPrice, assertSlotPriceInvariant, priceSlotEqual, derivePriceLevels, sameGridLevel, buildGenesisFromPriceLevels, hashPriceLevels, isChainPriceOutOfGrid }
+export { getBtsSide, getSellStartIdx, resolveGapBand, countGapBandSpread, calculateGapSlots, isSlotInRail, isSlotIndexInGapBand, isEvacuationRotationAllowed, isEvacuationSizeStillValid, validateBoundaryCommit, validatePersistedBoundary, isTransientInBandRejection, BOUNDARY_REJECT_PLACED_IN_BAND, resolveGapSlots, isPercentageString, isPositiveNumber, isPositiveNumberOrPercent, isPositiveInt, parsePercentageString, toDecimal, resolveRelativePrice, parseRelativeMultiplier, validateGridPriceBounds, isExplicitZeroAllocation, getPrecision, computeChainFundTotals, calculateAvailableFundsValue, deriveChainTruthFundBudget, adjustBudgetForBtsFees, getGridBestPrices, calculateSpreadFromOrders, resolveConfigValue, resolveConfigValueWithRegistry, hasValidAccountTotals, blockchainToFloat, floatToBlockchainInt, floorToBlockchainInt, quantizeFloat, normalizeInt, getPrecisionByOrderType, getPrecisionsForManager, getPrecisionSlack, quantumForPrecision, calculatePriceTolerance, findCrossedOrder, pricesOnSameLevel, sameGridPrice, validateOrderAmountsWithinLimits, getMinOrderSize, getDustThresholdFactor, getSingleDustThreshold, getDoubleDustThreshold, validateOrderSize, getAssetFees, getAssetFeesSafe, allocateFundsByWeights, calculateOrderSizes, calculateRotationOrderSizes, calculateGridSideDivergenceMetric, calculateOrderCreationFees, calculateSwapInAmount, _setFeeCache, cloneWeightDistribution, clamp, roundTo, fixedTo, roundToDecimals, priceLevelsForGenesis, priceForSlot, slotIndexForPrice, slotIdForPrice, assertSlotPriceInvariant, priceSlotEqual, derivePriceLevels, sameGridLevel, buildGenesisFromPriceLevels, hashPriceLevels, isChainPriceOutOfGrid }
 
 /**
  * Round a value to a given factor.

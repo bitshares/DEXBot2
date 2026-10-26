@@ -531,6 +531,44 @@ empty rail already reserves more than the chain holds. That state
 manager; the out-of-spread watchdog then escalates on its short fund window
 instead of waiting for a fill that cannot free existing inventory.
 
+The budget the loop spends is **not** `availableFund`, because subtracting the
+projection from the budget that funds that same projection is circular: a rail
+sized from a larger balance (or from inventory locked in resting orders) reads 0
+forever and no placement can ever shrink it. `deriveChainTruthFundBudget`
+(`order/utils/math.ts`) re-derives it for a known candidate set:
+
+```text
+budget = availableFund > 0            ? availableFund   // healthy: accounting wins
+       : virtualReservation > chainFree ? min(chainFree, min(virtualReservation, Σ candidate ideals))
+       : availableFund                                 // zero for fees/empty balance: honour it
+```
+
+so the correction funds what the chain actually holds free (capped by what the
+candidates need, and the chain stays the final arbiter). Live effect: the
+`planned 3, placing 0` cycle that ran for 84 minutes now places the three holes.
+
+### Boundary Re-Anchoring: the fill is the anchor
+
+A boundary crawl is ±1 slot per committed fill, so a window that ends up
+**behind** the newest real fill cannot catch up by crawling — every tightening
+slot on that side is then at/through the fill and `passesLastFill` refuses all of
+them while the funds sit in the resting (stranded) inventory. `reanchorBoundaryFromLastFill`
+(`order/utils/system.ts`, called from `calculateTargetGrid` right after the
+derivation) treats the fill as the anchor:
+
+```text
+SELL fill at slot f  ->  boundary >= f - gapSlots     (sellStart = f + 1)
+BUY  fill at slot f  ->  boundary <= f - 1            (buy window ends below f)
+```
+
+Preconditions, all fail-closed: a real fill-provenanced pivot (a cold/book-seeded
+pivot or a price without a recorded fill side never anchors), an on-ladder price
+within one increment (`off-ladder-fill`), and the candidate must pass
+`validatePersistedBoundary` — a re-anchor that would strand a live order inside
+the re-typed band is refused (`unsafe: placed_order_in_band`). Every accepted
+re-anchor is logged at warn with the fill slot, the pivot price and the boundary
+move.
+
 ### Candidate Selection: Spread Edge, Grid Slot, Last-Fill Consistent
 
 The planner only ever emits the tightening edge on a real grid slot:

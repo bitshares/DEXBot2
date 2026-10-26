@@ -53,7 +53,8 @@ funds.allocated → _getSizingContext()       (budget for spread correction)
 - `botFunds` percentage applies to **total** capital (free + locked in orders), not just free. A bot at `"50%"` gets half of everything, not half of what's currently idle.
 - `funds.allocated` is the ceiling for each side. Existing orders already consume part of it; the remaining free portion is available for new placements.
 - The downstream `applyBotFundsAllocation()` (`manager.ts:1287`) also caps `funds.available` to `<= allocated` as a safety net, but the primary budget chokepoint is `getSideBudget` / `_getSizingContext` reading `allocated` directly (v1.2.6).
-- `funds.available[side] = max(0, chainFree − virtualReservation − fees)`. When the empty rail already reserves more than the chain holds, this reads 0 while the side still holds inventory — the **rail oversubscribed** state. Spread correction names it in the log, flags it on the manager, and the out-of-spread watchdog escalates it on `TIMING.SPREAD_STALE_FUND_ESCALATE_MS`: it is repaired by re-sizing the rail from chain truth (structural re-center), not by waiting for a fill.
+- `funds.available[side] = max(0, chainFree − virtualReservation − fees)`. When the empty rail already reserves more than the chain holds, this reads 0 while the side still holds inventory — the **rail oversubscribed** state. Spread correction names it in the log, flags it on the manager, and the out-of-spread watchdog escalates it on `TIMING.SPREAD_STALE_FUND_ESCALATE_MS`: the durable repair is re-sizing the rail from chain truth (structural re-center).
+- For a KNOWN candidate set the reservation must not veto the placement it describes: `deriveChainTruthFundBudget` (`utils/math.ts`) re-derives `min(chainFree, min(virtualReservation, Σ candidate ideals))` when `available` reads 0, so an over-sized projection cannot deadlock placement. The chain rejects an over-commit at broadcast, so this cannot spend more than exists.
 
 ---
 

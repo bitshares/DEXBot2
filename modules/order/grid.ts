@@ -4111,8 +4111,9 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 manager.logger?.log?.(
                     `[SPREAD-CORRECTION] ${sideName} rail is OVERSUBSCRIBED: virtual reservation ` +
                     `${Format.formatAmount8(sideVirtual)} exceeds chain free ${Format.formatAmount8(sideChainFree)} ` +
-                    `by ${Format.formatAmount8(sideVirtual - sideChainFree)} — no correction can be funded ` +
-                    `until the rail is re-sized (structural re-center) or a fill frees inventory`,
+                    `by ${Format.formatAmount8(sideVirtual - sideChainFree)} — the projection is stale, so the ` +
+                    `correction funds what the chain actually holds free; a rail re-size (structural re-center) ` +
+                    `is still the durable repair`,
                     'warn'
                 );
             } else if (sideAvailable > epsilon) {
@@ -4195,17 +4196,50 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: 'no-candidates', origin: COW_ORIGINS.SPREAD_CORRECTION };
         }
 
-        let remainingBudget = availableFund;
+        // Chain-truth budget (see deriveChainTruthFundBudget): `availableFund`
+        // already had the virtual reservation subtracted, and that reservation
+        // is the projection of THESE candidates — subtracting it from the
+        // budget that funds them is circular. When the projection exceeds what
+        // the chain holds free it reads 0 forever, so the holes can never be
+        // filled and the projection can never shrink (live: `planned 3,
+        // placing 0` for 84 minutes). Re-derive from chain truth, capped by
+        // what the candidates need and by the real free balance.
+        const candidateIdeals = prioritizedTargets.reduce((sum, t) => sum + Math.max(0, Number(t.ideal) || 0), 0);
+        const chainFreeForSide = Math.max(0, Number(sideName === 'buy'
+            ? manager.accountTotals?.buyFree
+            : manager.accountTotals?.sellFree) || 0);
+        const virtualIntentForSide = Math.max(0, Number(sideName === 'buy'
+            ? manager.funds?.virtual?.buy
+            : manager.funds?.virtual?.sell) || 0);
+        const fundBudget = MathUtils.deriveChainTruthFundBudget({
+            availableFund,
+            virtualIntent: virtualIntentForSide,
+            chainFree: chainFreeForSide,
+            candidateIdeals,
+        });
+        if (fundBudget.eroded) {
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] ${sideName} projection exceeds chain free by ` +
+                `${Format.formatAmount8(fundBudget.oversubscribed)}; funding the candidates from chain truth ` +
+                `(${Format.formatAmount8(fundBudget.budget)} for ${Format.formatAmount8(candidateIdeals)} of ideal ` +
+                `size) instead of placing nothing`,
+                'warn'
+            );
+        }
+
+        let remainingBudget = fundBudget.budget;
 
         // FUNDING PROBE (diagnostic): one line per correction cycle showing the
         // quantities that decide whether candidates can be funded. availableFund
         // is min(funds.available[side], accountTotals[side]Free); when the
         // virtual rail has already reserved the free balance this reads ~0 even
-        // though the side still holds inventory — the state that makes the loop
-        // below place fewer orders than the plan's candidates.
+        // though the side still holds inventory. `spendable` is what the loop
+        // actually spends (chain truth when the projection is oversubscribed),
+        // so the two never have to be inferred from each other.
         manager.logger?.log?.(
             `[SPREAD-CORRECTION] Funding probe side=${sideName}: ` +
             `availableFund=${Format.formatAmount8(availableFund)} ` +
+            `spendable=${Format.formatAmount8(fundBudget.budget)} ` +
             `budget=${Format.formatAmount8(Number(ctx.budget || 0))} ` +
             `virtual=${Format.formatAmount8(Number(sideName === 'buy' ? manager.funds?.virtual?.buy : manager.funds?.virtual?.sell) || 0)} ` +
             `free=${Format.formatAmount8(Number(sideName === 'buy' ? manager.accountTotals?.buyFree : manager.accountTotals?.sellFree) || 0)} ` +

@@ -52,6 +52,7 @@ import { ORDER_TYPES, ORDER_STATES } from '../constants.js';
 import { calculateGapSlots } from './grid.js';
 import { isSlotInRail } from './utils/math.js';
 import { deriveTargetBoundary, getSideBudget, calculateBudgetedSizes, getCoreOrdersTotal, resolveEdgeCount, resolveLiveEdgeAnchorPrice, selectEdgeSlots, isShiftEligibleFill } from './utils/order.js';
+import { reanchorBoundaryFromLastFill } from './utils/system.js';
 import { assignGridRoles } from './utils/order.js';
 import {
     convertToSpreadPlaceholder,
@@ -313,9 +314,21 @@ class StrategyEngine {
             buy: resolveLiveEdgeAnchorPrice(this.manager, 'buy'),
             sell: resolveLiveEdgeAnchorPrice(this.manager, 'sell'),
         };
-        const { boundaryIdx: newBoundaryIdx, remainingBudget } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, edgeAnchors);
+        let { boundaryIdx: newBoundaryIdx, remainingBudget } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, edgeAnchors);
         if (crossChunkBudget != null) {
             this.manager._boundaryShiftBudget = remainingBudget;
+        }
+        // GEOMETRY RE-ANCHOR: the crawl is +-1 slot per committed fill, so a
+        // window that ended up BEHIND the newest real fill can never catch up —
+        // every tightening slot on that side is then at/through the fill and the
+        // last-fill guard refuses all of them while the funds sit in the resting
+        // inventory. The fill is the anchor: place it outside its own window.
+        // Validated like a boundary commit (strands no live in-band order), and
+        // only for an on-ladder fill price.
+        const reanchor = reanchorBoundaryFromLastFill(this.manager, newBoundaryIdx, allSlots, gapSlots);
+        if (reanchor.reanchored) {
+            newBoundaryIdx = reanchor.boundaryIdx;
+            try { this.manager._markGridDirty?.(); } catch { /* best-effort */ }
         }
         // Unanchorable (null boundary, no numeric center anywhere): refuse to
         // plan rotations on fabricated geometry. The COW engine routes this
