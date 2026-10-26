@@ -116,6 +116,12 @@ fixture), as is a destination hole carrying an already-corrupted price (28%).
 
 ### The seventh gate: final pre-broadcast pivot re-check
 
+The per-action LAST-FILL-GUARD rule is direction-only relative to that pivot —
+a BUY is blocked at/above it, a SELL at/below it (equal price is a re-place at
+the just-filled level). The spread-correction planner applies the SAME predicate
+to its candidates before planning, so a correction batch never contains an op
+the guard would drop.
+
 The per-action LAST-FILL-GUARD checks run against the pivot frozen at batch
 start. A fill queued between that freeze and the broadcast passes every
 per-action check on a stale pivot and ships (live incident: freeze at 0.745,

@@ -1501,6 +1501,42 @@ export function resolveLastFillGuardReference(manager: OrderManagerLike): { pric
 }
 
 /**
+ * LAST-FILL-GUARD — DIRECTION ONLY, relative to the last fill price.
+ *
+ *   BUY  blocked if price >= pivot   (never place a higher BUY)
+ *   SELL blocked if price <= pivot   (never place a lower SELL)
+ *
+ * Lives here (not in the COW runtime) so the spread-correction PLANNER and the
+ * broadcast guard judge candidates with literally the same predicate: a batch
+ * must never be built from a create the guard will drop, and a dropped batch
+ * must never be reported as an unexplained "prepared but not executed".
+ *
+ * A placement on the permitted side is always profitable against the last trade
+ * we actually did: a BUY below the last sell, a SELL above the last buy. Equal
+ * price counts as blocked — that is a re-place at the just-filled level, the
+ * immediate re-fill loop this guard exists to prevent. Cold (no numeric pivot,
+ * or no fill side recorded — e.g. a book-seeded pivot) => disabled. The grid
+ * increment takes no part (kept in the signature for call-site stability).
+ *
+ * @param {number} price - Target order price
+ * @param {number} _size - Order size (unused, kept for compat)
+ * @param {string} type - ORDER_TYPES.BUY/SELL
+ * @param {number|null} lastPrice - Most recent fill price
+ * @param {string|null} lastType - Most recent fill side; null keeps the guard cold
+ * @param {number|any} _incrementPercent - Unused (kept for signature compat)
+ * @returns {{blocked: boolean, pivot: number|null, threshold?: number|null}}
+ */
+export function isLastFillGuardBlocked(price: number, _size: number, type: unknown, lastPrice: number | null, lastType: string | null, _incrementPercent?: number): { blocked: boolean; pivot: number|null; threshold?: number|null } {
+    const numPrice = Number(price);
+    if (!Number.isFinite(numPrice)) return { blocked: false, pivot: null };
+    if (lastPrice == null || !Number.isFinite(Number(lastPrice)) || lastType == null) return { blocked: false, pivot: null };
+    const pivot = Number(lastPrice);
+    if (type === ORDER_TYPES.BUY && numPrice >= pivot) return { blocked: true, pivot, threshold: pivot };
+    if (type === ORDER_TYPES.SELL && numPrice <= pivot) return { blocked: true, pivot, threshold: pivot };
+    return { blocked: false, pivot: null, threshold: null };
+}
+
+/**
  * Restore the persisted bot-scoped last-market-fill reference into the
  * manager. Deliberately independent of the boundary and the genesis: this is
  * the anchor spread correction uses to avoid trading through the last real

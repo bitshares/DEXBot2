@@ -642,6 +642,79 @@ required is no longer reachable at runtime.
 - **Placed is not surplus:** an order inside `SURPLUS_CANCEL_GRACE_MS` is never cancelled by a
   sweep running on a stale snapshot.
 
+#### 9.7 The guard was a band, not an economic rule (`c86b4b0e`)
+
+**Observed (2026-10-24/25, a live market-pair bot).** A dump swept the grid and the
+market then held. Spread correction planned, the broadcast guard dropped the creates,
+`SPREAD-STALE` reported **84 minutes with no correction placed**, and only a structural
+re-center (grid rebuild) restored the spread. Two distinct guard defects, both from one
+predicate:
+
+1. **The pivot band ignored the fill's side.** `isLastFillGuardBlocked` judged against
+   `pivot ± increment/2`:
+   ```ts
+   BUY  blocked if price > pivot * (1 - inc/2/100)
+   SELL blocked if price < pivot * (1 + inc/2/100)
+   ```
+   The `lastType` argument was passed and never read. Consequences: a BUY **below** a SELL
+   fill was blocked (the doc claimed "buy-below-sell is never gated"; the code gated it),
+   and a SELL 0.2% **above** our cost was blocked after a BUY fill — exactly the spread
+   edge, which correction places tighter than a full increment by design. Repair therefore
+   depended on the `SPREAD_CORRECTION` bypass, which `09dbaad7` denies whenever a real fill
+   reference exists — so after any fill, tightening was structurally impossible.
+2. **Planner and guard disagreed.** `09dbaad7` intended a planner-side filter against the
+   fill reference, but the implementation used the readiness *crossing floor*, which
+   prefers a **fresh live market read** over the fill anchor. With a fresh read the planner
+   admitted what the guard would drop, producing the live sequence
+   `planned 2, placing 1 → Skipping sell CREATE … below last filled → Transient refusal 1/3
+   → batch was prepared but not executed` — a whole cycle spent on a guaranteed refusal.
+
+**Fix.** Direction only, one predicate shared by both sides:
+
+```ts
+BUY  blocked if price >= pivot    // never place a higher BUY
+SELL blocked if price <= pivot    // never place a lower SELL
+```
+
+Equal price stays blocked (re-place at the filled level). The predicate lives in
+`order/utils/system.ts` next to `resolveLastFillGuardReference`; `dexbot_cow_runtime`
+re-exports it. The planner now filters every candidate pool (and boundary promotion) with
+the **same** predicate before the quota slice, so a batch is never built out of ops the
+guard will drop, and an unplaceable side reports it honestly.
+
+**Deliberately not relaxed.** A lower SELL is still refused **when the last fill was a
+SELL**: after a fill the sell window must move *up*, so a sell slot below the last sale is
+evidence that the boundary/crawl is behind the fill — a geometry fault, not a placement
+opportunity. The log confirms it: seven slots (147–153) filled in one sync, the boundary
+then **moved down** to 146 (two commits each dropping owed crawls), leaving slots 151/152
+as sell-zone holes below the last sale. A cost-basis rule (sell only above the last BUY)
+would have *placed into* that corrupted geometry.
+
+#### 9.8 Stalls that placement cannot repair get their own clocks
+
+Three states were previously indistinguishable from patience and all waited for the
+30-minute structural window:
+
+- **Rail oversubscribed** — `availableFund = chainFree − virtual` reads 0 when the empty
+  rail already reserves more than the account holds (live: free 454560.80 vs virtual
+  456046.21, `planned 3, placing 0` for 84 minutes). Named in the log, flagged on the
+  manager, escalated on `SPREAD_STALE_FUND_ESCALATE_MS` (5 min).
+- **Geometry bind (`last-fill-blocked`)** — every tightening slot is at/through the last
+  fill, i.e. the window is behind the fill. A distinct stall value, preserved through the
+  starvation-fallback merge (`mergeSpreadStalls`), escalated on
+  `SPREAD_STALE_GEOMETRY_ESCALATE_MS` (10 min).
+- **Oscillating measurement** — one in-tolerance reading no longer clears the persistence
+  clock; tolerance must hold for `SPREAD_STALE_IN_TOLERANCE_RESET_MS` (10 min), and a
+  placed correction still clears it immediately. A single good glance between refusals was
+  what let 84 minutes pass.
+
+**Open (investigated, not fixed): the crawl ledger has a sixth leak.** A commit clears
+**all** owed fill crawls whenever the plan's boundary is accepted and not held
+(`_clearPendingFillCrawls('boundary commit')`), while the derivation folds only the subset
+that passes its batch-dedupe, edge classification and `fallbackCap`. Any excluded entry is
+lost — the same class `77e763f6` fixed for the held boundary, still open for the rest, and
+the mechanism behind a multi-slot sweep leaving the boundary *behind* the fills.
+
 ---
 
 ### A. Grid-Price Invariant — former failure trace

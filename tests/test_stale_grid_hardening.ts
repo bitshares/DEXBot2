@@ -223,8 +223,16 @@ async function testSPREAD001_HealthyOrPlacedResets() {
     const bot: any = stubSpreadBot(0);
     bot._outOfSpreadSince = Date.now() - 60 * 60 * 1000;
     bot._outOfSpreadStaleWarned = true;
+    // ONE in-tolerance reading must not clear the clock (the measured spread
+    // oscillates around the tolerance edge; clearing per good glance let a live
+    // bot stay out of tolerance for 84 minutes). It starts the tolerance window.
     trackOutOfSpreadStaleness(bot, true, 0);
-    assert.strictEqual(bot._outOfSpreadSince, 0, 'healthy spread resets the clock');
+    assert.ok(bot._outOfSpreadSince > 0, 'a single healthy reading must NOT reset the clock');
+    assert.ok(bot._outOfSpreadToleranceSince > 0, 'the tolerance window starts accumulating');
+    // Sustained tolerance (past SPREAD_STALE_IN_TOLERANCE_RESET_MS) clears it.
+    bot._outOfSpreadToleranceSince = Date.now() - (11 * 60 * 1000);
+    trackOutOfSpreadStaleness(bot, true, 0);
+    assert.strictEqual(bot._outOfSpreadSince, 0, 'sustained healthy spread resets the clock');
     assert.strictEqual(bot._outOfSpreadStaleWarned, false, 'warn latch resets');
 
     const bot2: any = stubSpreadBot(2);

@@ -44,7 +44,23 @@ export type OrderState = 'virtual' | 'active' | 'partial';
  * ('stale-snapshot' is degraded-ok, not a stall: the planner still acts, it
  *  only withholds the LAST-FILL-GUARD bypass.)
  */
-export type SpreadCorrectionStall = 'no-free-funds' | 'unfunded' | 'no-candidates' | 'cold-book' | 'unmatched-orders' | 'readiness-gate' | 'batch-not-executed' | 'apply-error';
+export type SpreadCorrectionStall =
+    | 'no-free-funds'
+    | 'unfunded'
+    | 'no-candidates'
+    | 'cold-book'
+    | 'unmatched-orders'
+    | 'readiness-gate'
+    | 'batch-not-executed'
+    | 'apply-error'
+    /**
+     * Every tightening slot on the corrected side is at/through the last fill
+     * (SELL at/below it, BUY at/above it), so placement cannot repair the side:
+     * the bind is the grid WINDOW (a sell slot below the last sale means the
+     * boundary/crawl is behind the fill), not a missing candidate. Escalates on
+     * the short geometry window instead of the structural one.
+     */
+    | 'last-fill-blocked';
 
 // ============================================================
 // SHARED PRIMITIVES (replacements for explicit `any`)
@@ -243,6 +259,12 @@ export interface BotLike {
   _outOfSpreadSince: number;
   _outOfSpreadStaleWarned: boolean;
   _outOfSpreadTransientCount: number;
+  /**
+   * Timestamp when the spread first read within tolerance. Cleared on any
+   * out-of-tolerance cycle. A single good reading no longer clears the
+   * persistence clock — it must hold for SPREAD_STALE_IN_TOLERANCE_RESET_MS.
+   */
+  _outOfSpreadToleranceSince: number;
   _strandedHoldSince: Map<string, number>;
   _recoverySyncInFlight: number;
   _batchInFlight: number;
@@ -255,7 +277,14 @@ export interface BotLike {
   _marketAdapterWatchdogInFlight: boolean;
   _blockchainFetchInFlight: number;
   _blockchainFetchIntervalMin: number;
-  _spreadFundsExhausted: boolean;
+  /**
+   * A spread-correction stall was mirrored this cycle. ANY cause arms the
+   * targeted chain refresh (a missed fill can hide the tightening slot, a stale
+   * hold can zero the funds), so the flag is cause-agnostic — the cause itself
+   * is carried in `_spreadCorrectionStall`. Formerly `_spreadFundsExhausted`,
+   * which mislabelled geometry stalls as fund stalls.
+   */
+  _spreadStallArmed: boolean;
   _spreadCorrectionStall: SpreadCorrectionStall | null;
   _skipEmptyReadConfirmDelay: boolean;
   _testPollIntervalMs?: number;
@@ -945,6 +974,13 @@ export interface CreditRuntimeLike {
 
 export interface OrderManagerLike {
   _consecutiveBoundaryHolds?: number;
+  /**
+   * Set by the spread-correction planner when the corrected side's rail reserves
+   * more than the chain free balance (virtual > free). Cleared when a correction
+   * becomes fundable again. The out-of-spread watchdog escalates on its short
+   * fund window when this is fresh.
+   */
+  _spreadRailOversubscribed?: { side: string; virtual: number; free: number; at: number } | null;
   _boundaryShiftBudgetBase?: number;
   _lastBoundaryHoldInfo?: unknown;
   _lastHeldPlanSignature?: { boundaryIdx?: number | null; pivot?: number | null; fillsAt?: number | null; [key: string]: unknown } | null;

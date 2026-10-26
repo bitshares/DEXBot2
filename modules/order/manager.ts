@@ -2008,12 +2008,34 @@ class OrderManager implements OrderManagerLike {
      *
      * @param {string} reason - Log/debug label for the drop
      */
-    _clearPendingFillCrawls(reason: string = 'unspecified'): void {
+    _clearPendingFillCrawls(reason: string = 'unspecified', detail: string = ''): void {
         if (!Array.isArray(this._pendingFillCrawls) || this._pendingFillCrawls.length === 0) return;
         const count = this._pendingFillCrawls.length;
+        // Side split + age are the two facts needed to tell "the derivation
+        // folded and applied this crawl" from "the commit cleared a crawl the
+        // derivation never consumed" after the fact: a same-sign, same-age run
+        // that did NOT move the boundary accordingly is the second case (the
+        // 2026-10-25 sweep: 7 fills, boundary 148 -> 146, 7 crawls dropped).
+        let buys = 0;
+        let sells = 0;
+        let oldestTs = 0;
+        for (const e of this._pendingFillCrawls) {
+            if (!e) continue;
+            if (e.side === ORDER_TYPES.BUY) buys++;
+            else if (e.side === ORDER_TYPES.SELL) sells++;
+            const ts = Number(e.ts);
+            if (Number.isFinite(ts) && ts > 0 && (oldestTs === 0 || ts < oldestTs)) oldestTs = ts;
+        }
+        const oldestAgeS = oldestTs > 0 ? Math.max(0, Math.round((Date.now() - oldestTs) / 1000)) : null;
         this._pendingFillCrawls = [];
         this._markGridDirty();
-        this.logger?.log?.(`[BOUNDARY] Dropped ${count} owed fill crawl(s) (${reason})`, 'debug');
+        this.logger?.log?.(
+            `[BOUNDARY] Dropped ${count} owed fill crawl(s) (${reason}): ` +
+            `buy=${buys} sell=${sells} net=${sells - buys}` +
+            `${oldestAgeS == null ? '' : ` oldest=${oldestAgeS}s`}` +
+            `${detail ? ` ${detail}` : ''}`,
+            'debug'
+        );
     }
 
     /**
@@ -2761,7 +2783,15 @@ class OrderManager implements OrderManagerLike {
                 // left for the next derivation, holes refilled same-side).
                 if (boundaryCheck.ok && commitBoundary !== null && commitBoundary !== undefined
                     && boundaryHeld !== true) {
-                    this._clearPendingFillCrawls('boundary commit');
+                    // Carry the boundary delta into the drop log: a crawl whose
+                    // net direction the commit did NOT honor is the ledger-leak
+                    // signature (see _clearPendingFillCrawls). Observability
+                    // only — the clear itself is unchanged pending that evidence.
+                    const prevBoundary = this.boundaryIdx;
+                    this._clearPendingFillCrawls(
+                        'boundary commit',
+                        `boundary ${prevBoundary ?? 'null'} -> ${commitBoundary}`
+                    );
                 }
                 this._gridVersion++;
                 committed = true;

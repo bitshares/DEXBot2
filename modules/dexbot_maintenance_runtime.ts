@@ -722,7 +722,7 @@ function _hasBudgetForSide(manager: OrderManagerLike, config: JsonObj, side: unk
  */
 export function mirrorSpreadStall(bot: BotLike, stall: SpreadCorrectionStall | null | undefined) {
     bot._spreadCorrectionStall = stall ?? null;
-    bot._spreadFundsExhausted = stall != null;
+    bot._spreadStallArmed = stall != null;
 }
 
 function getTargetedSyncReason(bot: BotLike) {
@@ -774,7 +774,7 @@ function getTargetedSyncReason(bot: BotLike) {
     // structural stall from a stale one, so arm the refresh for every cause
     // instead of waiting up to SPREAD_STALE_ESCALATE_MS for the watchdog.
     // Never recycle resting inventory.
-    if (bot._spreadFundsExhausted === true) {
+    if (bot._spreadStallArmed === true) {
         const cause = bot._spreadCorrectionStall || 'funds-exhausted';
         return { reason: `spread correction stalled (${cause})`, targetBuy, targetSell, liveBuy, liveSell, drift };
     }
@@ -826,7 +826,7 @@ async function maybeRunTargetedDriftReconciliation(bot: BotLike, context: string
         // order shortfall. The spread check later this tick re-derives the flag
         // from fresh state, so a genuinely empty balance re-arms it for the next
         // tick (subject to the cooldown below).
-        if (bot._spreadFundsExhausted === true) bot._spreadFundsExhausted = false;
+        if (bot._spreadStallArmed === true) bot._spreadStallArmed = false;
         // Clear the companion cause with the flag so the two never drift apart
         // (a leftover cause would mislabel the next tick's reason).
         bot._spreadCorrectionStall = null;
@@ -2786,12 +2786,40 @@ async function executeMaintenanceLogic(bot: BotLike, context: string) {
  */
 export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, ordersPlaced: number, transient = false) {
     const outOfSpread = Number(bot?.manager?.outOfSpread) || 0;
-    if (ordersPlaced > 0 || outOfSpread === 0) {
+    const nowMs = Date.now();
+    const inToleranceResetMs = Number(TIMING?.SPREAD_STALE_IN_TOLERANCE_RESET_MS) > 0
+        ? Number(TIMING.SPREAD_STALE_IN_TOLERANCE_RESET_MS)
+        : 10 * 60 * 1000;
+    if (ordersPlaced > 0) {
         bot._outOfSpreadSince = 0;
         bot._outOfSpreadStaleWarned = false;
         bot._outOfSpreadTransientCount = 0;
+        bot._outOfSpreadToleranceSince = 0;
+        try { bot.manager._spreadRailOversubscribed = null; } catch { /* best-effort */ }
         return { staleMs: 0, escalated: false };
     }
+    if (outOfSpread === 0) {
+        // ONE good reading must not clear the clock. The measured spread
+        // oscillates around the tolerance edge, so resetting on each
+        // in-tolerance cycle let a live bot stay out of tolerance for 84
+        // minutes while every individual glance looked recoverable (the
+        // correction placed nothing in that whole window). Clear only after
+        // tolerance has held for the reset window; a placement clears it
+        // immediately (handled above).
+        const toleranceSince = Number(bot._outOfSpreadToleranceSince) || 0;
+        if (toleranceSince === 0) {
+            bot._outOfSpreadToleranceSince = nowMs;
+            return { staleMs: 0, escalated: false };
+        }
+        if (nowMs - toleranceSince < inToleranceResetMs) return { staleMs: 0, escalated: false };
+        bot._outOfSpreadSince = 0;
+        bot._outOfSpreadStaleWarned = false;
+        bot._outOfSpreadTransientCount = 0;
+        bot._outOfSpreadToleranceSince = 0;
+        try { bot.manager._spreadRailOversubscribed = null; } catch { /* best-effort */ }
+        return { staleMs: 0, escalated: false };
+    }
+    bot._outOfSpreadToleranceSince = 0;
     if (!spreadChecked) {
         const since = Number(bot._outOfSpreadSince) || 0;
         return { staleMs: since > 0 ? Date.now() - since : 0, escalated: false };
@@ -2828,14 +2856,34 @@ export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, 
     const warnMs = Number(TIMING?.SPREAD_STALE_WARN_MS) > 0
         ? Number(TIMING.SPREAD_STALE_WARN_MS)
         : 10 * 60 * 1000;
-    const escalateMs = Number(TIMING?.SPREAD_STALE_ESCALATE_MS) > 0
-        ? Number(TIMING.SPREAD_STALE_ESCALATE_MS)
-        : 30 * 60 * 1000;
+    // An oversubscribed rail is a fund-structure stall, not "wait for a fill":
+    // escalate on the short fund window so the side is not dead for half an hour.
+    const railOversubscribed = bot.manager?._spreadRailOversubscribed;
+    const oversubscribedFresh = !!railOversubscribed && typeof railOversubscribed === 'object'
+        && (now - Number(railOversubscribed.at || 0)) < 5 * 60 * 1000;
+    const fundEscalateMs = Number(TIMING?.SPREAD_STALE_FUND_ESCALATE_MS) > 0
+        ? Number(TIMING.SPREAD_STALE_FUND_ESCALATE_MS)
+        : 5 * 60 * 1000;
+    // The geometry bind has its own (longer than funds, shorter than structural)
+    // window: the sell window is behind the last sale, which only a re-center
+    // repairs.
+    const geometryBlocked = bot._spreadCorrectionStall === 'last-fill-blocked';
+    const geometryEscalateMs = Number(TIMING?.SPREAD_STALE_GEOMETRY_ESCALATE_MS) > 0
+        ? Number(TIMING.SPREAD_STALE_GEOMETRY_ESCALATE_MS)
+        : 10 * 60 * 1000;
+    const escalateMs = oversubscribedFresh
+        ? fundEscalateMs
+        : geometryBlocked
+            ? geometryEscalateMs
+            : (Number(TIMING?.SPREAD_STALE_ESCALATE_MS) > 0
+                ? Number(TIMING.SPREAD_STALE_ESCALATE_MS)
+                : 30 * 60 * 1000);
     if (staleMs >= warnMs && !bot._outOfSpreadStaleWarned) {
         bot._outOfSpreadStaleWarned = true;
+        const stall = bot._spreadCorrectionStall ? `, stall=${bot._spreadCorrectionStall}` : '';
         bot._log(
             `[SPREAD-STALE] Spread out of tolerance for ${staleMin}min with no correction placed ` +
-            `(outOfSpread=${outOfSpread}); structural re-center follows if unhealed`,
+            `(outOfSpread=${outOfSpread}${stall}); structural re-center follows if unhealed`,
             'warn'
         );
     }
@@ -2853,7 +2901,10 @@ export function trackOutOfSpreadStaleness(bot: BotLike, spreadChecked: boolean, 
         if (now - lastAt >= cooldownMs) {
             bot._lastSpreadStaleResyncAt = now;
             bot._log(
-                `[SPREAD-STALE] Spread out of tolerance for ${staleMin}min despite corrections; ` +
+                `[SPREAD-STALE] Spread out of tolerance for ${staleMin}min despite corrections` +
+                `${oversubscribedFresh ? ' (rail oversubscribed — re-sizing from chain truth)' : ''}` +
+                `${geometryBlocked ? ' (sell window behind the last fill — re-centering)' : ''}` +
+                `${bot._spreadCorrectionStall ? ` (stall=${bot._spreadCorrectionStall})` : ''}; ` +
                 `requesting structural re-center`,
                 'warn'
             );

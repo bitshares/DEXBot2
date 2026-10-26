@@ -364,6 +364,28 @@ let TIMING = {
     // by moving the boundary). Time-based so it holds for any tick cadence.
     SPREAD_STALE_WARN_MS: 10 * 60 * 1000,  // 10 minutes
     SPREAD_STALE_ESCALATE_MS: 30 * 60 * 1000,  // 30 minutes
+    // SPREAD_STALE_IN_TOLERANCE_RESET_MS: how long the spread must stay
+    // continuously within tolerance before the persistence clock is cleared.
+    // A single in-tolerance reading between refusals must NOT clear it: the
+    // measured spread oscillates around the threshold, and resetting on each
+    // good glance let a live bot sit out of tolerance for 84 minutes while
+    // every individual cycle looked recoverable. A placed correction always
+    // clears the clock immediately.
+    SPREAD_STALE_IN_TOLERANCE_RESET_MS: 10 * 60 * 1000,  // 10 minutes
+    // SPREAD_STALE_FUND_ESCALATE_MS: escalated window used when the correction
+    // reports a RAIL-OVERSUBSCRIBED fund stall (virtual reservation > chain
+    // free on the corrected side, e.g. free 454560 vs virtual 456046). That is
+    // not "wait for a fill" — the rail itself must be re-sized from chain
+    // truth, which the structural re-center does. A shorter window keeps the
+    // side dead for minutes instead of the 84 minutes observed live.
+    SPREAD_STALE_FUND_ESCALATE_MS: 5 * 60 * 1000,  // 5 minutes
+    // SPREAD_STALE_GEOMETRY_ESCALATE_MS: escalated window used when the
+    // correction reports the geometry bind 'last-fill-blocked' — every
+    // tightening slot on the corrected side sits at/through the last fill, i.e.
+    // the sell window itself is behind the last sale (boundary/crawl lag). No
+    // amount of waiting fixes that; a re-center does. Waiting the structural
+    // 30 minutes just leaves the side unquoted.
+    SPREAD_STALE_GEOMETRY_ESCALATE_MS: 10 * 60 * 1000,  // 10 minutes
     // SPREAD_CORRECTION_MAX_ATTEMPTS: bounded attempts for one spread-correction
     // cycle (initial broadcast + fresh-master re-plan retries). Kept next to the
     // other SPREAD_* tunables so the retry budget is centralized; a value < 1

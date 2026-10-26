@@ -164,10 +164,38 @@ function classifySpreadStall(c: SpreadCorrection | null | undefined): SpreadCorr
     // over any structural hint (those are only set on empty returns today, but
     // the precedence is explicit so a future hint can never mask 'unfunded').
     if (Number(c?.plannedCount || 0) > 0 || hint === 'unfunded') return 'unfunded';
-    // Preserve the readiness-gate causes verbatim; they are operationally
-    // distinct and the targeted-sync reason states them literally.
-    if (hint === 'cold-book' || hint === 'unmatched-orders' || hint === 'readiness-gate') return hint;
+    // Preserve the named causes verbatim; they are operationally distinct (one
+    // wants a sync, one wants a re-center) and the watchdog keys its escalation
+    // window off them.
+    if (hint === 'cold-book' || hint === 'unmatched-orders' || hint === 'readiness-gate'
+        || hint === 'last-fill-blocked') return hint;
     return 'no-candidates';
+}
+
+/**
+ * Merge two side stalls so the starvation fallback cannot mask a named cause.
+ * 'unfunded' stays top (a refresh may repair it); 'unmatched-orders' next (a
+ * sync repairs it); then the geometry bind; readiness causes; 'no-candidates'
+ * is the floor. Exported for tests.
+ */
+export function mergeSpreadStalls(
+    a: SpreadCorrectionStall | undefined,
+    b: SpreadCorrectionStall | undefined
+): SpreadCorrectionStall {
+    const rank: Record<string, number> = {
+        'unfunded': 5,
+        'no-free-funds': 5,
+        'unmatched-orders': 4,
+        'last-fill-blocked': 3,
+        'cold-book': 2,
+        'readiness-gate': 2,
+        'no-candidates': 1,
+        'batch-not-executed': 1,
+        'apply-error': 1
+    };
+    const ra = rank[String(a)] ?? 0;
+    const rb = rank[String(b)] ?? 0;
+    return (rb > ra ? String(b) : String(a)) as SpreadCorrectionStall;
 }
 
 /**
@@ -461,7 +489,7 @@ import {
     liveWindowIdSet,
     getOrderTypeFromUpdatedFlags
 } from './utils/order.js';
-import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot, evaluateSpreadCorrectionReadiness, maybeRefreshLiveMarketPrice } from './utils/system.js';
+import { loadAmaCenterPrice, loadAmaCenterSnapshot, withBlockchainRetry, restoreLastFillPivot, resetLastFillPivot, evaluateSpreadCorrectionReadiness, maybeRefreshLiveMarketPrice, resolveLastFillGuardReference, isLastFillGuardBlocked } from './utils/system.js';
 import * as MathUtils from './utils/math.js';
 import { derivePriceWithPoolRef, resolveStartPriceMode } from './utils/withPoolRef.js';
 import { getWhitelistFlags } from '../market_adapter_whitelist.js';
@@ -2961,9 +2989,10 @@ export async function checkSpreadCondition(manager: OrderManagerLike, _BitShares
                     correction = oppositeCorrection;
                     placeCount = oppositeCorrection.ordersToPlace?.length || 0;
                     const oppositeStall = classifySpreadStall(oppositeCorrection);
-                    sideStall = (sideStall === 'unfunded' || oppositeStall === 'unfunded')
-                        ? 'unfunded'
-                        : 'no-candidates';
+                    // Precedence merge (never overwrite): 'unfunded' > sync-repairable
+                    // > geometry bind > readiness > 'no-candidates'. The old collapse
+                    // to 'unfunded'/'no-candidates' dropped every named cause.
+                    sideStall = mergeSpreadStalls(sideStall, oppositeStall);
                 }
             }
 
@@ -3578,6 +3607,45 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
             : 'no-candidates';
         const railType = preferredSide;
         const sideName = railType === ORDER_TYPES.BUY ? 'buy' : 'sell';
+        // LAST-FILL FILTER (planner-side, same predicate as the broadcast guard).
+        //
+        // The guard drops any create at/through the last fill price, so a plan
+        // built from such candidates can only end as "batch prepared but not
+        // executed" (observed live: the only funded candidate was a SELL below
+        // the 0.447640 fill, both attempts were dropped, and the correction
+        // burned its cycle on a refusal). Filter here instead: the quota is then
+        // filled from candidates the guard can accept, and an empty pool is an
+        // honest "nothing to place" rather than a vetoed batch.
+        //
+        // Uses resolveLastFillGuardReference (the SAME effective pivot the guard
+        // probes, including the persisted fallback that survives a rebuild) so
+        // planner and guard cannot drift apart.
+        const lastFillRef = resolveLastFillGuardReference(manager);
+        const lastFillPivot = lastFillRef.price != null && Number.isFinite(Number(lastFillRef.price))
+            ? Number(lastFillRef.price)
+            : null;
+        const lastFillSide = lastFillRef.type;
+        const lastFillBlocks = (c: ManagedOrder): boolean => {
+            if (lastFillPivot == null || lastFillSide == null) return false;
+            if (c?.price == null || !Number.isFinite(Number(c.price))) return false;
+            return isLastFillGuardBlocked(
+                Number(c.price),
+                Number(c.size) || 0,
+                railType,
+                lastFillPivot,
+                lastFillSide,
+                manager.config?.incrementPercent
+            ).blocked === true;
+        };
+        let lastFillExcluded = 0;
+        const passesLastFill = (c: ManagedOrder): boolean => {
+            if (!lastFillBlocks(c)) return true;
+            lastFillExcluded++;
+            return false;
+        };
+        const lastFillRuleText = lastFillPivot == null
+            ? ''
+            : `${railType === ORDER_TYPES.BUY ? 'BUY must be below' : 'SELL must be above'} the last fill ${Format.formatPrice6(lastFillPivot)}`;
         const configuredMissingSlots = Number(outOfSpread || 0);
         const missingSlots = configuredMissingSlots > 0
             ? Math.floor(configuredMissingSlots)
@@ -3771,6 +3839,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 && isSlotAvailable(o)
                 && getSlotCorrectType(o) === railType
             )
+            .filter(passesLastFill)
             .filter(tightensSpread)
             .filter(doesNotCrossMarket)
             .filter(doesNotCollideUnmatched)
@@ -3818,6 +3887,7 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
                 && !o.orderId
                 && getSlotCorrectType(o) === railType
             )
+            .filter(passesLastFill)
             .filter(tightensSpread)
             .filter(doesNotCrossMarket)
             .filter(doesNotCollideUnmatched)
@@ -3933,10 +4003,17 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
         // consume the whole quota without ever entering the gap.
         const remainingQuota = Math.max(0, missingSlots - orphanedVirtualCandidates.length);
         let spreadCandidates: ManagedOrder[] = [
-            ...promotedCandidates,
+            ...promotedCandidates.filter(passesLastFill),
             ...typedSpreadCandidates.slice(0, remainingQuota),
             ...orphanedVirtualCandidates
         ];
+        if (lastFillExcluded > 0) {
+            manager.logger?.log?.(
+                `[SPREAD-CORRECTION] Excluded ${lastFillExcluded} candidate(s) from ${sideName} planning: ` +
+                `${lastFillRuleText} (the broadcast guard would drop them)`,
+                'debug'
+            );
+        }
 
         // Dedupe by slot id: an empty in-rail slot typed SPREAD (normalized) now
         // qualifies for BOTH orphanedVirtualCandidates and typedSpreadCandidates
@@ -3987,12 +4064,60 @@ export function determineOrderSideByFunds(manager: OrderManagerLike, currentMark
 
         if (spreadCandidates.length === 0) {
             manager.logger?.log?.(
-                bestLiveOnRail == null
-                    ? `[SPREAD-CORRECTION] No orphaned virtual slots or spread slots found. Skipping.`
-                    : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
+                lastFillExcluded > 0 && lastFillPivot != null
+                    ? `[SPREAD-CORRECTION] No placeable ${sideName} slot: every tightening slot is at/through the last fill ` +
+                      `${Format.formatPrice6(lastFillPivot)} (${lastFillRuleText}). The spread cannot be tightened on this ` +
+                      `side; a boundary move or a fill must restore headroom.`
+                    : bestLiveOnRail == null
+                        ? `[SPREAD-CORRECTION] No orphaned virtual slots or spread slots found. Skipping.`
+                        : `[SPREAD-CORRECTION] No spread-tightening slot on ${sideName} (best live ${bestLiveOnRail}); every remaining empty slot sits beyond the live window and cannot narrow the spread. Skipping.`,
                 'warn'
             );
-            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: refusalStallHint, origin: COW_ORIGINS.SPREAD_CORRECTION };
+            // Name the geometry bind: the window itself is wrong (a sell slot
+            // below the last sale means the boundary/crawl is behind the fill),
+            // so placement cannot repair the side and a re-center can.
+            const emptyStall: SpreadCorrectionStall = (lastFillExcluded > 0 && lastFillPivot != null)
+                ? 'last-fill-blocked'
+                : refusalStallHint;
+            return { ordersToPlace: [], ordersToUpdate: [], plannedCount: 0, stallHint: emptyStall, origin: COW_ORIGINS.SPREAD_CORRECTION };
+        }
+
+        // RAIL-OVERSUBSCRIBED: availableFund is chainFree − virtualReservation, so
+        // it reads 0 whenever the empty rail already reserves more than the free
+        // balance (observed live: free 454560.80 vs virtual 456046.21, a 1485 base
+        // short, "planned 3, placing 0" every cycle for 84 minutes). That is not
+        // "wait for a fill": the rail must be re-sized from chain truth, which a
+        // re-center does. Detect it BEFORE the sizing-context gate (a zero budget
+        // is the very symptom) and flag it so the persistence watchdog escalates
+        // on its short fund window instead of the 30-minute structural one.
+        {
+            const sideChainFree = Math.max(0, Number(sideName === 'buy'
+                ? manager.accountTotals?.buyFree
+                : manager.accountTotals?.sellFree) || 0);
+            const sideVirtual = Math.max(0, Number(sideName === 'buy'
+                ? manager.funds?.virtual?.buy
+                : manager.funds?.virtual?.sell) || 0);
+            const sideAvailable = Math.max(0, Math.min(
+                Number(manager.funds?.available?.[sideName] || 0),
+                sideChainFree
+            ));
+            const epsilon = 1e-8;
+            if (sideAvailable <= epsilon && (sideVirtual - sideChainFree) > epsilon) {
+                try {
+                    manager._spreadRailOversubscribed = {
+                        side: sideName, virtual: sideVirtual, free: sideChainFree, at: Date.now()
+                    };
+                } catch { /* best-effort */ }
+                manager.logger?.log?.(
+                    `[SPREAD-CORRECTION] ${sideName} rail is OVERSUBSCRIBED: virtual reservation ` +
+                    `${Format.formatAmount8(sideVirtual)} exceeds chain free ${Format.formatAmount8(sideChainFree)} ` +
+                    `by ${Format.formatAmount8(sideVirtual - sideChainFree)} — no correction can be funded ` +
+                    `until the rail is re-sized (structural re-center) or a fill frees inventory`,
+                    'warn'
+                );
+            } else if (sideAvailable > epsilon) {
+                try { manager._spreadRailOversubscribed = null; } catch { /* best-effort */ }
+            }
         }
 
         const orphanedIds = new Set(orphanedVirtualCandidates.map((o) => o.id));

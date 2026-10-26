@@ -14,7 +14,7 @@ const { readOpenOrdersWithMetaSafe } = chainOrdersModule;
 import { BroadcastUncertainError as BroadcastUncertainErrorBinding } from './dexbot_credential_client.js';
 const BroadcastUncertainError = BroadcastUncertainErrorBinding;
 import * as orderUtils from './order/utils/order.js';
-import { sleep, setLastFillPivot, fireStructuralResync, evaluateSpreadCorrectionReadiness, resolveLastFillGuardReference } from './order/utils/system.js';
+import { sleep, setLastFillPivot, fireStructuralResync, evaluateSpreadCorrectionReadiness, resolveLastFillGuardReference, isLastFillGuardBlocked } from './order/utils/system.js';
 const {
     buildCreateOrderArgs,
     buildCreateOpFingerprint,
@@ -2172,58 +2172,23 @@ function collectGapBandPlacementShadowSlots(actions: CowAction[] | null | undefi
 }
 
 /**
- * LAST-FILL-GUARD helper — DIRECTION ONLY, relative to the last fill price.
- *
- *   BUY  blocked if price >= pivot   (never place a higher BUY)
- *   SELL blocked if price <= pivot   (never place a lower SELL)
- *
- * A placement on the permitted side is always profitable against the last trade
- * we actually did: a BUY below the last sell, a SELL above the last buy. The
- * earlier pivot ± increment/2 band was NOT an economic test — it ignored the
- * last fill's side and blocked profitable placements within half a step of the
- * pivot, which is exactly the distance spread correction needs (it always
- * places at the spread edge on a grid slot, i.e. tighter than a full step), and
- * it blocked buy-backs below a SELL fill. Equal price counts as blocked: that
- * is a re-place at the just-filled level, the immediate re-fill loop this guard
- * exists to prevent.
- *
- * Cold (no numeric pivot, or no fill side recorded — e.g. a book-seeded pivot)
- * => disabled. The pivot is the latest fill of either side and is never
- * expired; the increment no longer participates (kept in the signature so the
- * call sites and their logs stay stable).
- *
- * @param {number} price - Target order price
- * @param {number} size - Order size (unused, kept for compat)
- * @param {string} type - ORDER_TYPES.BUY/SELL
- * @param {number|null} lastPrice - Most recent fill price
- * @param {string|null} lastType - Most recent fill side (BUY/SELL); null keeps the guard cold
- * @param {number|any} incrementPercent - Unused (kept for signature compat)
- * @returns {{blocked: boolean, pivot: number|null, threshold: number|null}}
- */
-function isLastFillGuardBlocked(price: number, _size: number, type: unknown, lastPrice: number | null, lastType: string | null, _incrementPercent?: number): { blocked: boolean; pivot: number|null; threshold?: number|null } {
-    const numPrice = Number(price);
-    if (!Number.isFinite(numPrice)) return { blocked: false, pivot: null };
-    if (lastPrice == null || !Number.isFinite(Number(lastPrice)) || lastType == null) return { blocked: false, pivot: null };
-    const pivot = Number(lastPrice);
-    if (type === ORDER_TYPES.BUY && numPrice >= pivot) return { blocked: true, pivot, threshold: pivot };
-    if (type === ORDER_TYPES.SELL && numPrice <= pivot) return { blocked: true, pivot, threshold: pivot };
-    return { blocked: false, pivot: null, threshold: null };
-}
-
-/**
  * Whether a spread-correction CREATE may bypass the LAST-FILL-GUARD.
  *
- * The bypass exists so gap repair can close even after a recent fill (the
- * correction is tightening the spread, not chasing it). It must not become a
- * licence to place THROUGH the market the bot last traded at:
+ * Remaining purpose: the STARTUP BOOK SEED proxy. Before the first real fill a
+ * single-sided book arms the guard on our own resting quote (max bid / min
+ * ask) — a proxy that `b14a1fc8` deliberately keeps non-persistent ("a book
+ * seed never fossilizes into the snapshot as market truth") because it goes
+ * wrong whenever the book is not adjacent to the last fill. Blocking a
+ * tightening placement against that proxy would be arbitrary, so the correction
+ * is released from it while the local snapshot can be trusted.
  *
- * 1. A real fill pivot (`lastFillPivotSource === 'fill'`) is always honored —
- *    no bypass. A sell below the last fill (or a buy above it) is the
- *    issue-#31 adverse fill.
- * 2. A cold/book pivot is a heuristic (book seed) or absent, so the historical
- *    fail-open bypass is kept — but only while the LOCAL snapshot is fresh.
- *    A stale snapshot (known-unmatched chain orders, or an old sync) can hide
- *    the real window edge, so the bypass is withheld and the guard applies.
+ * A real FILL reference always denies the bypass. Since the planner now filters
+ * candidates with the SAME predicate the guard applies, planner-built
+ * corrections never even propose an op that would need it — the bypass is a
+ * proxy-case valve, not a licence to trade through the last real fill.
+ *
+ * Denied too when the snapshot is stale or has known-unmatched chain orders
+ * (a stale edge can hide the real window edge), fail-closed on a gate throw.
  *
  * Exported for tests.
  * @param {Object} bot

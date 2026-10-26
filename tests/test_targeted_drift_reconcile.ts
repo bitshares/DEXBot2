@@ -106,7 +106,7 @@ async function runTests() {
         assert.strictEqual(orders.get('slot-1').orderId, '1.7.9001', 'sync should restore the live order into the grid');
 
     // Pure fund-driven spread correction: when it finds no free funds it sets
-    // _spreadFundsExhausted; the next tick's targeted-sync gate must refresh
+    // _spreadStallArmed; the next tick's targeted-sync gate must refresh
     // account totals + open orders from that flag (the only fallback). The gate
     // reports the exact stall cause now, and EVERY cause — including a
     // structural 'no-candidates' stall — must arm the refresh so a stale local
@@ -116,7 +116,7 @@ async function runTests() {
         const makeBot = (exhausted: boolean, stall: string | null = null) => ({
             config: { dryRun: false, coreOrders: { buy: 0, sell: 0 } },
             manager: { checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }) },
-            _spreadFundsExhausted: exhausted,
+            _spreadStallArmed: exhausted,
             _spreadCorrectionStall: stall,
         });
         const reason = MaintenanceRuntime.getTargetedSyncReason(makeBot(true, 'funds-exhausted'));
@@ -140,16 +140,16 @@ async function runTests() {
         // is the regression guard for the stale-order-state case: a
         // 'no-candidates' result (phantom ACTIVE slot hiding the tightening
         // slot) previously left the refresh disarmed and waited for the watchdog.
-        const mirrorBot: any = { _spreadFundsExhausted: false, _spreadCorrectionStall: null };
+        const mirrorBot: any = { _spreadStallArmed: false, _spreadCorrectionStall: null };
         for (const cause of ['no-free-funds', 'unfunded', 'no-candidates', 'batch-not-executed', 'apply-error']) {
             MaintenanceRuntime.mirrorSpreadStall(mirrorBot, cause);
-            assert.strictEqual(mirrorBot._spreadFundsExhausted, true,
+            assert.strictEqual(mirrorBot._spreadStallArmed, true,
                 `mirrorSpreadStall must arm the refresh for '${cause}'`);
             assert.strictEqual(mirrorBot._spreadCorrectionStall, cause,
                 `mirrorSpreadStall must keep the companion cause '${cause}'`);
         }
         MaintenanceRuntime.mirrorSpreadStall(mirrorBot, null);
-        assert.strictEqual(mirrorBot._spreadFundsExhausted, false,
+        assert.strictEqual(mirrorBot._spreadStallArmed, false,
             'a cleared stall must disarm the refresh');
         assert.strictEqual(mirrorBot._spreadCorrectionStall, null,
             'a cleared stall must clear the companion cause');
@@ -174,7 +174,7 @@ async function runTests() {
                     checkFundDriftAfterFills: () => ({ isValid: true, reason: 'ok' }),
                     persistGrid: async () => {},
                 },
-                _spreadFundsExhausted: true,
+                _spreadStallArmed: true,
                 _spreadCorrectionStall: 'unfunded',
                 _targetedDriftSyncCooldownMs: 0,
                 _lastTargetedDriftSyncAt: 0,
@@ -192,7 +192,7 @@ async function runTests() {
         const ran = await MaintenanceRuntime.maybeRunTargetedDriftReconciliation(ok, 'test');
         assert.strictEqual(ran, true, 'refresh must run for the funds-exhausted trigger');
         assert.strictEqual(okState.syncCalls, 1, 'refresh must fetch open orders exactly once');
-        assert.strictEqual(ok._spreadFundsExhausted, false,
+        assert.strictEqual(ok._spreadStallArmed, false,
             'a successful refresh must clear the funds-exhausted flag so the reconcile is conditional');
         assert.strictEqual(ok._spreadCorrectionStall, null,
             'a successful refresh must also clear the companion stall cause');
@@ -202,7 +202,7 @@ async function runTests() {
         const ranAbort = await MaintenanceRuntime.maybeRunTargetedDriftReconciliation(abort, 'test');
         assert.strictEqual(ranAbort, false, 'aborted sync must not report a completed refresh');
         assert.strictEqual(abortState.syncCalls, 1, 'aborted refresh must still have attempted the sync');
-        assert.strictEqual(abort._spreadFundsExhausted, true,
+        assert.strictEqual(abort._spreadStallArmed, true,
             'an aborted refresh must retain the funds-exhausted flag so the next tick retries');
         assert.strictEqual(abort._spreadCorrectionStall, 'unfunded',
             'an aborted refresh must retain the stall cause with the flag');

@@ -257,6 +257,20 @@ async function testSmr6BypassGate() {
         true,
         'cold reference with unknown sync time fails open (historical behavior)'
     );
+    // Book-seed proxy case (b14a1fc8): before the first real fill a single-sided
+    // book arms the guard on our own resting quote. That proxy is deliberately
+    // non-persistent and may go wrong when the book is not adjacent to the last
+    // fill, so the correction keeps the historical bypass. This assertion locks
+    // the remaining purpose of the gate: do not delete it as dead code.
+    assert.strictEqual(
+        gate({
+            lastFillPivotSource: 'book',
+            _lastFilledPrice: 100, _lastFilledType: ORDER_TYPES.SELL,
+            _lastUnmatchedChainOrders: [], _lastSyncAt: Date.now(),
+        }),
+        true,
+        'a book-seeded pivot (no real fill reference) keeps the proxy-case bypass'
+    );
     assert.strictEqual(
         gate({ lastFillPivotSource: null, _lastUnmatchedChainOrders: [{}], _lastSyncAt: Date.now() }),
         false,
@@ -358,13 +372,13 @@ async function testSmr9LiveMarketPricePreferred() {
     const manager = makeManager();
     await buildGeometry(manager, [0, -1], [160, 175]);
 
-    // A stale fill anchor sits far above the window (price 200); a fresh live
-    // read sits just above the empty sell band (price 157). The floor must be
-    // the CURRENT read: it admits the market-safe sells above 157 instead of
-    // walling the side off against the old anchor — no distance heuristic.
-    manager._lastMarketFillPrice = price(200);
-    manager._lastMarketFillType = ORDER_TYPES.SELL;
-    manager._lastMarketFillAt = NOW;
+    // PART A — the live read IS the crossing floor when no fill anchor exists.
+    // A fresh live read sits just above the empty sell band (price 157), so the
+    // market-safe sells above it must be planned. (A fill anchor would be a
+    // separate floor — see PART B — so it is deliberately absent here.)
+    manager._lastMarketFillPrice = null;
+    manager._lastMarketFillType = null;
+    manager._lastMarketFillAt = 0;
     manager._liveMarketPrice = price(157);
     manager._liveMarketPriceAt = NOW;
 
@@ -377,13 +391,18 @@ async function testSmr9LiveMarketPricePreferred() {
             `${id} must sit above the live market read ${price(157).toFixed(2)}, got ${price(idx).toFixed(2)}`);
     }
 
-    // Remove the live read: the fill anchor is the fallback floor and blocks
-    // the whole side (no distance cap relaxes it).
+    // PART B — without a live read the fill anchor is the fallback floor. It is
+    // ALSO the last-fill reference the planner now shares with the broadcast
+    // guard, so a stale anchor above the window legitimately walls the side off
+    // (the planner no longer plans creates the guard would drop).
     manager._liveMarketPrice = null;
     manager._liveMarketPriceAt = 0;
+    manager._lastMarketFillPrice = price(200);
+    manager._lastMarketFillType = ORDER_TYPES.SELL;
+    manager._lastMarketFillAt = NOW;
     const fallbackCorrection = await Grid.prepareSpreadCorrectionOrders(manager, ORDER_TYPES.SELL, 5);
     assert.strictEqual(fallbackCorrection.ordersToPlace.length, 0,
-        'without a live read the fill anchor is the floor (fallback)');
+        'without a live read the fill anchor is the floor (fallback) and no sell may be placed below it');
     console.log(`  ✓ fresh live market price preferred (${JSON.stringify(placed)}); fill anchor is the fallback`);
 }
 

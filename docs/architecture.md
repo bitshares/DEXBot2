@@ -488,7 +488,12 @@ The correction path is fund-only and never manufactures budget by shrinking a re
    without shrinking inventory, and log the fund-constrained remainder.
 6. If neither side places an effective order, `checkSpreadCondition` reports a
    `stall` cause (`no-free-funds` / `unfunded` / `no-candidates` / `cold-book` /
-   `unmatched-orders` / `readiness-gate` / `batch-not-executed` / `apply-error`).
+   `unmatched-orders` / `readiness-gate` / `last-fill-blocked` /
+   `batch-not-executed` / `apply-error`). `last-fill-blocked` is the geometry
+   bind: every tightening slot on that side is at/through the last fill, so a
+   sell slot below the last sale means the boundary/crawl is behind the fill —
+   placement cannot repair it and the re-center can, so it escalates on the
+   short geometry window.
    Every cause arms the targeted
    balances + open-orders refresh: the local snapshot the check reasoned over
    may be stale (`no-candidates` can mean a missed fill left an ACTIVE slot
@@ -519,6 +524,35 @@ const availableFund = Math.max(0, Math.min(
 // Each target is created or topped up only while remainingBudget covers it.
 // No resting ACTIVE/PARTIAL order is shrunk to fund the correction.
 ```
+
+`availableFund` is `chainFree − virtualReservation`, so it reads 0 when the
+empty rail already reserves more than the chain holds. That state
+(*rail oversubscribed*) is named explicitly in the log and flagged on the
+manager; the out-of-spread watchdog then escalates on its short fund window
+instead of waiting for a fill that cannot free existing inventory.
+
+### Candidate Selection: Spread Edge, Grid Slot, Last-Fill Consistent
+
+The planner only ever emits the tightening edge on a real grid slot:
+
+- `tightensSpread` — a SELL must improve (be below) the lowest live sell, a BUY
+  must improve the highest live buy;
+- `sortCandidates` + `.slice(0, missingSlots)` — the nearest empty level to the
+  live edge, so no interior hole is created;
+- `doesNotCrossMarket` — the absolute crossing floor (fresh live read, fill
+  reference as fallback);
+- **`passesLastFill`** — the same direction rule the broadcast guard applies
+  (`SELL` above the last fill, `BUY` below it), evaluated on the same pivot.
+
+The last filter is what keeps planner and guard from disagreeing: without it a
+cycle could plan a candidate the guard was guaranteed to drop, and the whole
+batch would be reported as "prepared but not executed" (observed live: the only
+funded candidate sat at the fill price, both attempts were dropped, and the
+correction spent its cycle on a refusal). With it, an unplaceable side reports
+*no placeable slot — every tightening slot is at/through the last fill* and the
+batch is never built. Only a fill arriving **during** the check can still change
+the pivot under the batch; the final pre-broadcast gate remains the last line
+for that race.
 
 **Benefits**:
 - ✅ No inventory recycling from stale-size snapshots
@@ -570,6 +604,16 @@ effective correction**:
 - warns once past `TIMING.SPREAD_STALE_WARN_MS`;
 - escalates to a structural re-center past `TIMING.SPREAD_STALE_ESCALATE_MS`
   (cooldown `TIMING.SPREAD_STALE_RESYNC_COOLDOWN_MS`);
+- clears the clock only after the spread has stayed in tolerance for
+  `TIMING.SPREAD_STALE_IN_TOLERANCE_RESET_MS` (or immediately on a placed
+  correction). A single in-tolerance reading does not clear it: the measured
+  spread oscillates around the tolerance edge, and resetting per good glance let
+  a live bot sit out of tolerance for 84 minutes while every cycle looked
+  recoverable;
+- escalates on a **shorter** window (`TIMING.SPREAD_STALE_FUND_ESCALATE_MS`) when
+  the correction reports a rail-oversubscribed fund stall (`virtual` reservation
+  > chain free on the corrected side). That state cannot heal by waiting for a
+  fill — the rail must be re-sized from chain truth, which the re-center does;
 - tolerates up to `TIMING.SPREAD_STALE_TRANSIENT_GRACE` consecutive **transient**
   refusals (which reset the stale clock) before they count toward escalation, so a
   retryable refusal is not mistaken for a structural dead end — a persistent one

@@ -232,9 +232,11 @@ class DEXBot implements BotLike {
     _outOfSpreadSince!: number;
     _outOfSpreadStaleWarned!: boolean;
     _outOfSpreadTransientCount!: number;
+    /** When the spread first read within tolerance; cleared on any out-of-tolerance cycle. */
+    _outOfSpreadToleranceSince!: number;
     _postRecoveryRebalanceDefers!: number;
     _skipEmptyReadConfirmDelay!: boolean;
-    _spreadFundsExhausted!: boolean;
+    _spreadStallArmed!: boolean;
     _spreadCorrectionStall!: SpreadCorrectionStall | null;
     _strandedHoldSince!: Map<string, number>;
     _structuralGridResyncDeferCount!: number;
@@ -299,6 +301,7 @@ class DEXBot implements BotLike {
         this._outOfSpreadSince = 0;
         this._outOfSpreadStaleWarned = false;
         this._outOfSpreadTransientCount = 0;
+        this._outOfSpreadToleranceSince = 0;
         this.logPrefix = options.logPrefix || '';
         this._credentialDaemonWatchdogInterval = null;
         this._credentialDaemonDown = false;
@@ -363,7 +366,7 @@ class DEXBot implements BotLike {
         // Spread-correction stall state: the boolean gate and its companion cause
         // are read by getTargetedSyncReason before the first spread check, so
         // initialize both rather than leaving them undefined.
-        this._spreadFundsExhausted = false;
+        this._spreadStallArmed = false;
         this._spreadCorrectionStall = null;
         this._lightweightSyncCheckAt = 0;
         this._targetedDriftSyncCooldownMs = this.config.timing?.TARGETED_DRIFT_SYNC_COOLDOWN_MS as number;
