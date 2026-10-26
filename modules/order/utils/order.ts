@@ -2516,6 +2516,23 @@ function buildDelta(masterGrid: Map<string, ManagedOrder>, workingGrid: Map<stri
 // ================================================================================
 
 /**
+ * A pending-crawl ledger entry as consumed by a derivation.
+ * `ts` is carried so the commit clears exactly the records the derivation
+ * folded — never a newer record for the same slot (recording happens at fill
+ * intake, so a slot can be re-recorded between derivation and commit).
+ */
+type CrawlEntry = { slotId: string; side: string; ts?: number };
+
+/** Normalise a ledger record into the identity the commit clears by. */
+function toCrawlEntry(e: { slotId?: unknown; side?: unknown; ts?: unknown } | null | undefined): CrawlEntry {
+    return {
+        slotId: String(e?.slotId ?? ''),
+        side: String(e?.side ?? ''),
+        ts: Number.isFinite(Number(e?.ts)) ? Number(e?.ts) : undefined,
+    };
+}
+
+/**
  * Check whether a fill is eligible to drive boundary shift / rotation.
  * Partials only count when they are delayed-rotation triggers.
  *
@@ -2526,7 +2543,7 @@ function isShiftEligibleFill(fill: { isPartial?: boolean; isDelayedRotationTrigg
     return fill?.isPartial !== true || fill?.isDelayedRotationTrigger === true;
 }
 
-function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?: string; [key: string]: unknown }> | null | undefined, currentBoundaryIdx: number | null | undefined, allSlots: ManagedOrder[], config: { startPrice?: number | string; genesisStartPrice?: number | string; coreOrders?: { buy?: number; sell?: number; [key: string]: unknown }; [key: string]: unknown } | null | undefined, gapSlots: number, crossChunkBudget?: number | null, pendingCrawls?: Array<{ slotId?: string; side?: string; [key: string]: unknown }> | null, edgeAnchors?: { buy?: number | null; sell?: number | null } | null): { boundaryIdx: number | null; remainingBudget: number } {
+function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?: string; [key: string]: unknown }> | null | undefined, currentBoundaryIdx: number | null | undefined, allSlots: ManagedOrder[], config: { startPrice?: number | string; genesisStartPrice?: number | string; coreOrders?: { buy?: number; sell?: number; [key: string]: unknown }; [key: string]: unknown } | null | undefined, gapSlots: number, crossChunkBudget?: number | null, pendingCrawls?: Array<{ slotId?: string; side?: string; [key: string]: unknown }> | null, edgeAnchors?: { buy?: number | null; sell?: number | null } | null): { boundaryIdx: number | null; remainingBudget: number; consumedCrawlIds: CrawlEntry[] } {
     let newBoundaryIdx: number | null = currentBoundaryIdx ?? null;
 
     // Recovery when the committed boundary is unknown (GRID-LOAD rejected a
@@ -2605,7 +2622,7 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
                 1
             );
             const effectiveBudget = crossChunkBudget ?? fallbackCap;
-            return { boundaryIdx: null, remainingBudget: effectiveBudget };
+            return { boundaryIdx: null, remainingBudget: effectiveBudget, consumedCrawlIds: [] };
         }
         newBoundaryIdx = calculateIdealBoundary(allSlots, referencePrice, gapSlots);
         if (!Number.isFinite(newBoundaryIdx) || (newBoundaryIdx as number) < 0) {
@@ -2617,7 +2634,7 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
                 Math.floor((config?.coreOrders?.buy ?? 1) / 2),
                 1
             );
-            return { boundaryIdx: null, remainingBudget: crossChunkBudget ?? fallbackCap };
+            return { boundaryIdx: null, remainingBudget: crossChunkBudget ?? fallbackCap, consumedCrawlIds: [] };
         }
         recovered = true;
     }
@@ -2652,12 +2669,49 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
     const currentSlotIds = new Set(
         (fills ?? []).map((f) => f?.id).filter((id) => typeof id === 'string' && id.length > 0)
     );
-    const owedPending = (pendingCrawls ?? []).filter((e) => e
-        && typeof e.slotId === 'string' && e.slotId.length > 0
+    type LedgerEntry = { slotId?: string; side?: string; ts?: number; [key: string]: unknown };
+    const allPending: Array<LedgerEntry & { slotId: string }> = (pendingCrawls ?? [])
+        .filter((e): e is LedgerEntry & { slotId: string } => !!e
+            && typeof e.slotId === 'string' && e.slotId.length > 0);
+    const owedPending = allPending.filter((e) => e
         && !currentSlotIds.has(e.slotId)
         && (e.side === ORDER_TYPES.BUY || e.side === ORDER_TYPES.SELL)
         && !(e.side === ORDER_TYPES.BUY && edgeBuyIds && edgeBuyIds.has(e.slotId))
         && !(e.side === ORDER_TYPES.SELL && edgeSellIds && edgeSellIds.has(e.slotId)));
+    /**
+     * Ledger records this derivation CONSUMED:
+     *   - everything it deliberately never counts (current-batch slots whose
+     *     shift comes from `fills`, edge-classified slots which never crawl,
+     *     malformed records), and
+     *   - the owed entries whose shift it actually APPLIED.
+     *
+     * `applied` is the (possibly capped) net shift. A capped fold applies only
+     * part of the owed net, so only that part may be consumed — the remainder
+     * stays owed, or the next derivation would either lose it (clear-all) or
+     * apply it twice (keep-all).
+     */
+    const consumedFor = (applied: number): CrawlEntry[] => {
+        const never = allPending.filter((e) => !owedPending.includes(e));
+        let appliedEntries: Array<LedgerEntry & { slotId: string }> = [];
+        if (cap <= 0) {
+            // No cross-chunk budget left: NOTHING was applied, so every owed
+            // record stays owed (a net-zero reading here is not a cancellation).
+            appliedEntries = [];
+        } else if (applied === 0) {
+            // A net-zero mix was fully accounted for by cancelling out.
+            appliedEntries = owedPending;
+        } else {
+            // Consume same-side entries up to the applied magnitude; the mixed
+            // remainder still nets out to (net - applied) for the next run.
+            const dirSide = applied > 0 ? ORDER_TYPES.SELL : ORDER_TYPES.BUY;
+            appliedEntries = owedPending
+                .filter((e) => e.side === dirSide)
+                .slice(0, Math.abs(applied));
+        }
+        return [...never, ...appliedEntries].map(toCrawlEntry);
+    };
+    /** Every owed record is subsumed (absolute anchor / generation discard). */
+    const consumedAll = (): CrawlEntry[] => allPending.map(toCrawlEntry);
     for (const fill of fills ?? []) {
         if (!isShiftEligibleFill(fill)) continue;
         if (fill && fill.type === ORDER_TYPES.BUY && edgeBuyIds && fill.id != null && edgeBuyIds.has(fill.id)) continue;
@@ -2698,8 +2752,18 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
                 (allSlots.length - gapSlots - 1) >= 0 ? (allSlots.length - gapSlots - 1) : (allSlots.length - 1),
                 newBoundaryIdx as number)),
             remainingBudget: effectiveBudget,
+            // The absolute fill anchor positions from live prices, which already
+            // reflect every owed delta. The remaining delta is NOT added on top
+            // (double-count guard), so every record is subsumed regardless of
+            // what the cap would have admitted.
+            consumedCrawlIds: consumedAll(),
         };
     }
+    // A truncated shift (or an exhausted cross-chunk budget) applies only part
+    // of the owed net, so the consumed set below is scoped to WHAT WAS APPLIED:
+    // the commit must neither lose the remainder (the 2026-10-25 leak: 7 fills,
+    // boundary +3 planned, all 7 records dropped) nor leave an applied entry
+    // owed for a second pass.
     if (Math.abs(netShift) > cap) {
         netShift = Math.sign(netShift) * cap;
     }
@@ -2718,6 +2782,7 @@ function deriveTargetBoundary(fills: Array<{ id?: string; price?: number; type?:
     return {
         boundaryIdx: Math.max(0, Math.min(ceiling, newBoundaryIdx)),
         remainingBudget,
+        consumedCrawlIds: consumedFor(netShift),
     };
 }
 
@@ -3481,6 +3546,7 @@ function collectKnownOnChainOrderIds(mgr: OrderManagerLike, placedResults: unkno
     return { masterIds: [...masterIds], createIds: [...createIds], all: [...all] };
 }
 
-export { parseChainOrder, applyChainSizeToGridOrder, buildFillKey, correctOrderPriceOnChain, correctAllPriceMismatches, _validatePriceCorrectionEntry, _stampCorrectionProvenance, findLiveOrderOwnerByChainId, buildCreateOrderArgs, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, virtualizeOrder, convertToSpreadPlaceholder, toRailHolePlaceholder, geometryTypeForSlotIndex, detectGapEvacuationCandidates, updateGapEvacuationStreaks, resolveSpreadOrderSide, chainOrderMatchesSlot, chainOrderMatchesSlotWithTolerance, crossingCandidateChainId, isCrossingCheckCandidate, buildCrossingCheckCandidates, parseSlotIndex, filterOrdersByType, buildOutsideInPairGroups, extractBatchOperationResults, formatUnmatchedChainOrder, isNonBlockingUnmatchedOrder, isStrandedHoldOrder, isOrderOnChain, isOrderVirtual, hasOnChainId, isOrderPlaced, isPhantomOrder, isSlotAvailable, isEmptyGridSlot, isOrderHealthy, checkSizeThreshold, checkSizesBeforeMinimum, calculateIdealBoundary, assignGridRoles, resolveOnChainRetypeType, shouldFlagOutOfSpread, buildIndexes, validateIndexes, ordersEqual, buildDelta, deriveTargetBoundary, isShiftEligibleFill, resolveEdgeCount, resolveEdgeOrders, selectEdgeSlots, getCoreOrdersTotal, getSideBudget, calculateBudgetedSizes, buildCreateOpFingerprint, isOrderGoneErrorMessage, recordDuplicateOrphanDetection, clearDuplicateOrphanDetection, duplicateOrphanLogInfo, chainOrderUnchangedFromCache, detectCrossedBookPlan, collectKnownOnChainOrderIds, edgeOrderIdSet, liveWindowIdSet, checkGridPriceInvariant, reportGridPriceInvariant }
+export { parseChainOrder, applyChainSizeToGridOrder,  buildFillKey, correctOrderPriceOnChain, correctAllPriceMismatches, _validatePriceCorrectionEntry, _stampCorrectionProvenance, findLiveOrderOwnerByChainId, buildCreateOrderArgs, getOrderTypeFromUpdatedFlags, resolveConfiguredPriceBound, virtualizeOrder, convertToSpreadPlaceholder, toRailHolePlaceholder, geometryTypeForSlotIndex, detectGapEvacuationCandidates, updateGapEvacuationStreaks, resolveSpreadOrderSide, chainOrderMatchesSlot, chainOrderMatchesSlotWithTolerance, crossingCandidateChainId, isCrossingCheckCandidate, buildCrossingCheckCandidates, parseSlotIndex, filterOrdersByType, buildOutsideInPairGroups, extractBatchOperationResults, formatUnmatchedChainOrder, isNonBlockingUnmatchedOrder, isStrandedHoldOrder, isOrderOnChain, isOrderVirtual, hasOnChainId, isOrderPlaced, isPhantomOrder, isSlotAvailable, isEmptyGridSlot, isOrderHealthy, checkSizeThreshold, checkSizesBeforeMinimum, calculateIdealBoundary, assignGridRoles, resolveOnChainRetypeType, shouldFlagOutOfSpread, buildIndexes, validateIndexes, ordersEqual, buildDelta, deriveTargetBoundary, isShiftEligibleFill, resolveEdgeCount, resolveEdgeOrders, selectEdgeSlots, getCoreOrdersTotal, getSideBudget, calculateBudgetedSizes, buildCreateOpFingerprint, isOrderGoneErrorMessage, recordDuplicateOrphanDetection, clearDuplicateOrphanDetection, duplicateOrphanLogInfo, chainOrderUnchangedFromCache, detectCrossedBookPlan, collectKnownOnChainOrderIds, edgeOrderIdSet, liveWindowIdSet, checkGridPriceInvariant, reportGridPriceInvariant };
+export type { CrawlEntry }
 export { resolveEdgeAnchorPrice, resolveLiveEdgeAnchorPrice, compareEdge, collectRefillSlotIds, recordOrderPlacement, isFreshlyPlacedOrder, _filterUnmatchedChainOrders };
 

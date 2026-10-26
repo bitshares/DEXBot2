@@ -547,6 +547,21 @@ so the correction funds what the chain actually holds free (capped by what the
 candidates need, and the chain stays the final arbiter). Live effect: the
 `planned 3, placing 0` cycle that ran for 84 minutes now places the three holes.
 
+### Owed Fill Crawls: consume what was applied, keep the rest owed
+
+Every shift-eligible fill records a relative boundary delta (`_pendingFillCrawls`)
+because the batch that saw the fill may not commit a boundary (refused
+broadcast, held boundary, restart). The derivation folds a *subset* — current-batch
+slots are deduped (their shift comes from `fills`), edge slots never crawl, and
+the cross-chunk budget caps how far one plan may move. So the commit must not
+clear the whole ledger: `deriveTargetBoundary` returns `consumedCrawlIds`
+(what it applied, plus what it deliberately never counts), the plan carries it
+to `_consumePendingFillCrawls` via `buildSuccessResult` → `CowResult` →
+`_commitWorkingGrid({ consumedCrawlIds })`, and only those records are dropped.
+A capped fold consumes a same-side prefix up to the applied magnitude; the rest
+stays owed and applies exactly once on a later derivation. `_clearPendingFillCrawls`
+is the explicit allowed-loss path (rebuild, rejected snapshot, restart replay).
+
 ### Boundary Re-Anchoring: the fill is the anchor
 
 A boundary crawl is ±1 slot per committed fill, so a window that ends up

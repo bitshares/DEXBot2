@@ -708,7 +708,15 @@ Three states were previously indistinguishable from patience and all waited for 
   placed correction still clears it immediately. A single good glance between refusals was
   what let 84 minutes pass.
 
-**Open (investigated, not fixed): the crawl ledger has a sixth leak.** A commit clears
+**RESOLVED (crawl consumption is now scoped).** The clear was ledger-wide while
+the derivation folded a subset. `deriveTargetBoundary` now returns
+`consumedCrawlIds`, the plan carries it to the commit (`_consumePendingFillCrawls`),
+and only the applied records are dropped — a capped fold consumes a same-side
+prefix up to the applied magnitude, so the remainder stays owed exactly once.
+A commit without the wire consumes nothing. The instrumentation below remains
+(and now reports `kept=M`), and the historical leak record is kept for context:
+
+**Original finding (leak #6): the crawl ledger dropped records it never applied.** A commit clears
 **all** owed fill crawls whenever the plan's boundary is accepted and not held
 (`_clearPendingFillCrawls('boundary commit')`), while the derivation folds only the subset
 that passes its batch-dedupe, edge classification and `fallbackCap`. Any excluded entry is

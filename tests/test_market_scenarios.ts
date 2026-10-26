@@ -113,7 +113,13 @@ async function runStateLifecycleScenario() {
     // Helper to commit COW results (required for type assignments to take effect)
     async function commitResult(res) {
         if (res?.workingGrid) {
-            await mgr._commitWorkingGrid(res.workingGrid, res.workingGrid.getIndexes(), res.workingBoundary);
+            // Mirror the COW executor: the commit consumes exactly the owed
+            // fill-crawl records this plan's derivation folded. A commit without
+            // the wire consumes nothing, which would leave the crawl owed and
+            // re-apply it on the next rebalance.
+            await mgr._commitWorkingGrid(res.workingGrid, res.workingGrid.getIndexes(), res.workingBoundary, {
+                consumedCrawlIds: res.consumedCrawlIds
+            });
         }
     }
 

@@ -133,6 +133,15 @@ export interface CowResult extends JsonObj {
     workingIndexes: unknown;
     origin?: string;
     refillSlotIds?: string[];
+    /**
+     * Owed fill-crawl records this plan's derivation actually folded. The
+     * commit clears ONLY these; a record the derivation could not apply (a
+     * truncated cross-chunk shift, an edge-classified slot, a newer record for
+     * the same slot) stays owed. Without this the commit cleared the whole
+     * ledger and silently lost the difference (2026-10-25: 7 fills swept
+     * slots 147-153, boundary ended 7 levels behind).
+     */
+    consumedCrawlIds?: Array<{ slotId: string; side: string; ts?: number }>;
     fills?: unknown[];
 }
 
@@ -2583,13 +2592,25 @@ function buildCowResultFromPlan(bot: BotLike, plan: JsonObj): CowResult {
     const refillSlotIds = Array.isArray(plan?.refillSlotIds)
         ? plan.refillSlotIds.filter((id: unknown) => typeof id === 'string' && id.length > 0)
         : undefined;
+    // Crawl-ledger wire: exactly which owed records this plan's derivation
+    // folded (see CowResult.consumedCrawlIds). Absent/non-array => undefined,
+    // which the commit reads as "clear nothing" rather than "clear all".
+    const consumedCrawlIds = Array.isArray(plan?.consumedCrawlIds)
+        ? (plan.consumedCrawlIds as unknown[])
+            .filter((e): e is { slotId: string; side: string; ts?: number } => {
+                const rec = e as { slotId?: unknown; side?: unknown } | null;
+                return !!rec && typeof rec.slotId === 'string' && rec.slotId.length > 0
+                    && typeof rec.side === 'string' && rec.side.length > 0;
+            })
+        : undefined;
     return {
         workingGrid,
         workingIndexes: workingGrid.getIndexes(),
         workingBoundary: workingBoundary as number,
         actions,
         origin: plan.origin as string | undefined,
-        ...(refillSlotIds !== undefined ? { refillSlotIds } : {})
+        ...(refillSlotIds !== undefined ? { refillSlotIds } : {}),
+        ...(consumedCrawlIds !== undefined ? { consumedCrawlIds } : {})
     };
 }
 
@@ -4959,7 +4980,12 @@ async function updateOrdersOnChainBatchCOWBody(
                     workingGrid,
                     workingIndexes,
                     effectiveBoundary,
-                    { skipRecalc: true, result: cowResult, boundaryHeld }
+                    {
+                        skipRecalc: true,
+                        result: cowResult,
+                        boundaryHeld,
+                        consumedCrawlIds: cowResult?.consumedCrawlIds
+                    }
                 );
                 if (!commitOk) {
                     // Master changed during broadcast (e.g. a fill landed and was
@@ -5100,7 +5126,12 @@ async function updateOrdersOnChainBatchCOWBody(
                         workingGrid,
                         workingIndexes,
                         effectiveBoundary,
-                        { skipRecalc: true, result: cowResult, boundaryHeld }
+                        {
+                            skipRecalc: true,
+                            result: cowResult,
+                            boundaryHeld,
+                            consumedCrawlIds: cowResult?.consumedCrawlIds
+                        }
                     );
                     if (!pollCommitOk) {
                         // Master moved while polling — same recovery as the

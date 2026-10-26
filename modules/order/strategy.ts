@@ -314,7 +314,7 @@ class StrategyEngine {
             buy: resolveLiveEdgeAnchorPrice(this.manager, 'buy'),
             sell: resolveLiveEdgeAnchorPrice(this.manager, 'sell'),
         };
-        let { boundaryIdx: newBoundaryIdx, remainingBudget } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, edgeAnchors);
+        let { boundaryIdx: newBoundaryIdx, remainingBudget, consumedCrawlIds } = deriveTargetBoundary(fills, currentBoundaryIdx, allSlots, boundaryConfig, gapSlots, crossChunkBudget, this.manager._pendingFillCrawls, edgeAnchors);
         if (crossChunkBudget != null) {
             this.manager._boundaryShiftBudget = remainingBudget;
         }
@@ -535,7 +535,12 @@ class StrategyEngine {
 
         return { 
             targetGrid: targetGrid,
-            boundaryIdx: newBoundaryIdx 
+            boundaryIdx: newBoundaryIdx,
+            // Records whose shift this derivation actually folded. The commit
+            // clears ONLY these, so a record it could not apply (truncated
+            // shift, edge classification, a newer record for the same slot)
+            // stays owed instead of vanishing with the commit.
+            consumedCrawlIds
         }; 
     }
 

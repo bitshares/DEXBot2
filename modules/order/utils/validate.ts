@@ -1290,7 +1290,8 @@ function buildSuccessResult({
     workingGrid,
     workingBoundary,
     planningDuration,
-    refillSlotIds
+    refillSlotIds,
+    consumedCrawlIds
 }: {
     actions: CowAction[];
     stateUpdates: ManagedOrder[];
@@ -1298,6 +1299,7 @@ function buildSuccessResult({
     workingBoundary: number | null;
     planningDuration: number;
     refillSlotIds?: unknown;
+    consumedCrawlIds?: unknown;
 }) {
     return {
         actions,
@@ -1311,6 +1313,10 @@ function buildSuccessResult({
         // planned boundary shift. May be absent/empty => executor treats as
         // empty (guarded default, never fail-open).
         ...(refillSlotIds !== undefined ? { refillSlotIds } : {}),
+        // Crawl-ledger wire: the owed fill-crawl records this plan's derivation
+        // actually folded. The commit clears only these; anything it could not
+        // apply stays owed for the next derivation.
+        ...(consumedCrawlIds !== undefined ? { consumedCrawlIds } : {}),
         aborted: false
     };
 }

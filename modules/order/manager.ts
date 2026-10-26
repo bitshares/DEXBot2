@@ -263,7 +263,11 @@ class COWRebalanceEngine {
             currentBoundaryIdx: boundaryIdx
         };
 
-        const { targetGrid, boundaryIdx: targetBoundary } = this.strategy.calculateTargetGrid(strategyParams);
+        const { targetGrid, boundaryIdx: targetBoundary, consumedCrawlIds } = this.strategy.calculateTargetGrid(strategyParams) as {
+            targetGrid: Map<string, ManagedOrder>;
+            boundaryIdx: number | null;
+            consumedCrawlIds?: Array<{ slotId: string; side: string; ts?: number }>;
+        };
 
         // P4 / unanchored plan: the strategy returns a null boundary paired
         // with an EMPTY target grid only when no numeric center exists to
@@ -476,7 +480,8 @@ class COWRebalanceEngine {
                 workingGrid,
                 workingBoundary: targetBoundary,
                 planningDuration: duration,
-                refillSlotIds
+                refillSlotIds,
+                consumedCrawlIds
             }),
             evacReady
         };
@@ -2008,9 +2013,17 @@ class OrderManager implements OrderManagerLike {
      *
      * @param {string} reason - Log/debug label for the drop
      */
+    /**
+     * Drop ALL owed fill-crawl records.
+     *
+     * This is the explicit allowed-loss path: the grid generation is being
+     * discarded (rebuild, rejected snapshot, restart replay), so the relative
+     * deltas no longer have a geometry to apply onto.
+     */
     _clearPendingFillCrawls(reason: string = 'unspecified', detail: string = ''): void {
         if (!Array.isArray(this._pendingFillCrawls) || this._pendingFillCrawls.length === 0) return;
-        const count = this._pendingFillCrawls.length;
+        const dropped = this._pendingFillCrawls;
+        const count = dropped.length;
         // Side split + age are the two facts needed to tell "the derivation
         // folded and applied this crawl" from "the commit cleared a crawl the
         // derivation never consumed" after the fact: a same-sign, same-age run
@@ -2019,7 +2032,7 @@ class OrderManager implements OrderManagerLike {
         let buys = 0;
         let sells = 0;
         let oldestTs = 0;
-        for (const e of this._pendingFillCrawls) {
+        for (const e of dropped) {
             if (!e) continue;
             if (e.side === ORDER_TYPES.BUY) buys++;
             else if (e.side === ORDER_TYPES.SELL) sells++;
@@ -2033,6 +2046,70 @@ class OrderManager implements OrderManagerLike {
             `[BOUNDARY] Dropped ${count} owed fill crawl(s) (${reason}): ` +
             `buy=${buys} sell=${sells} net=${sells - buys}` +
             `${oldestAgeS == null ? '' : ` oldest=${oldestAgeS}s`}` +
+            `${detail ? ` ${detail}` : ''}`,
+            'debug'
+        );
+    }
+
+    /**
+     * Consume the owed fill-crawl records a derivation actually folded.
+     *
+     * A boundary commit must never clear a record it could not apply: a
+     * truncated cross-chunk shift, an edge-classified slot of an older
+     * generation, or a record re-written for the same slot after the
+     * derivation ran. Clearing all of them was the last way a fill's crawl
+     * could be lost silently (2026-10-25: 7 fills swept slots 147-153, the
+     * commits dropped every record and the boundary ended 7 levels behind).
+     *
+     * `consumed` is the derivation's `consumedCrawlIds`; absent/not-an-array
+     * means the plan never derived a boundary (e.g. a create-only correction),
+     * so NOTHING is consumed. Records are matched by `slotId` + `ts`, so a
+     * newer record for the same slot survives a stale consumption.
+     */
+    _consumePendingFillCrawls(consumed: unknown, reason: string = 'boundary commit', detail: string = ''): void {
+        if (!Array.isArray(this._pendingFillCrawls) || this._pendingFillCrawls.length === 0) return;
+        const before = this._pendingFillCrawls;
+        if (!Array.isArray(consumed)) {
+            this.logger?.log?.(
+                `[BOUNDARY] Kept ${before.length} owed fill crawl(s) unconsumed (${reason})` +
+                `${detail ? `: ${detail}` : ''} — a later derivation still owes them`,
+                'debug'
+            );
+            return;
+        }
+        const key = (e: { slotId?: unknown; ts?: unknown }): string => {
+            const ts = Number(e?.ts);
+            return `${String(e?.slotId ?? '')}|${Number.isFinite(ts) ? ts : '*'}`;
+        };
+        const consumedKeys = new Set(consumed
+            .filter((e): e is { slotId: string; ts?: number } => !!e
+                && typeof (e as { slotId?: unknown }).slotId === 'string'
+                && ((e as { slotId: string }).slotId).length > 0)
+            .map(key));
+        const dropped = before.filter((e) => consumedKeys.has(key(e)));
+        if (dropped.length === 0) {
+            this.logger?.log?.(
+                `[BOUNDARY] Kept ${before.length} owed fill crawl(s) unconsumed (${reason})` +
+                `${detail ? `: ${detail}` : ''} — a later derivation still owes them`,
+                'debug'
+            );
+            return;
+        }
+        const kept = before.filter((e) => !consumedKeys.has(key(e)));
+        const buys = dropped.filter((e) => e?.side === ORDER_TYPES.BUY).length;
+        const sells = dropped.filter((e) => e?.side === ORDER_TYPES.SELL).length;
+        let oldestTs = 0;
+        for (const e of dropped) {
+            const ts = Number(e?.ts);
+            if (Number.isFinite(ts) && ts > 0 && (oldestTs === 0 || ts < oldestTs)) oldestTs = ts;
+        }
+        const oldestAgeS = oldestTs > 0 ? Math.max(0, Math.round((Date.now() - oldestTs) / 1000)) : null;
+        this._pendingFillCrawls = kept;
+        this._markGridDirty();
+        this.logger?.log?.(
+            `[BOUNDARY] Dropped ${dropped.length} owed fill crawl(s) (${reason}): ` +
+            `buy=${buys} sell=${sells} net=${sells - buys}` +
+            `${oldestAgeS == null ? '' : ` oldest=${oldestAgeS}s`} kept=${kept.length}` +
             `${detail ? ` ${detail}` : ''}`,
             'debug'
         );
@@ -2788,7 +2865,11 @@ class OrderManager implements OrderManagerLike {
                     // signature (see _clearPendingFillCrawls). Observability
                     // only — the clear itself is unchanged pending that evidence.
                     const prevBoundary = this.boundaryIdx;
-                    this._clearPendingFillCrawls(
+                    // Scope the drop to what the plan's derivation folded: a
+                    // record it could not apply (truncated shift, edge slot,
+                    // re-recorded slot) stays owed for the next derivation.
+                    this._consumePendingFillCrawls(
+                        options?.consumedCrawlIds,
                         'boundary commit',
                         `boundary ${prevBoundary ?? 'null'} -> ${commitBoundary}`
                     );

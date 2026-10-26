@@ -450,8 +450,13 @@ async function testCommit_AppliedBoundaryClearsOwedCrawls() {
     const { manager, logs } = createCommitFixture();
     const workingGrid = buildCommitWorkingGrid(manager);
     const advanced = manager.boundaryIdx + 1;
+    // The commit consumes exactly what the plan's derivation folded
+    // (`consumedCrawlIds`, produced by deriveTargetBoundary); a commit without
+    // that wire consumes NOTHING by design, so the fixture must supply it the
+    // way the COW executor does.
     const accepted = await manager._commitWorkingGrid(
-        workingGrid, workingGrid.getIndexes(), advanced);
+        workingGrid, workingGrid.getIndexes(), advanced,
+        { consumedCrawlIds: (manager._pendingFillCrawls as Array<{ slotId: string; side: string; ts?: number }>).slice() });
     assert.strictEqual(accepted, true, 'commit must be accepted');
     assert.strictEqual(manager.boundaryIdx, advanced, 'boundary must actually advance');
     assert.deepStrictEqual(manager._pendingFillCrawls, [], 'an applied boundary consumes the owed crawls');
@@ -588,8 +593,14 @@ async function testPersistSkip_RestartReplaysCommitOnce() {
         // Accepted commit consumes the owed movement (96 -> 94).
         const workingGrid = new WorkingGrid(live.orders, { baseVersion: live._gridVersion });
         workingGrid.set('slot-0', { ...live.orders.get('slot-0'), size: 101 });
+        // The COW executor always supplies the derivation's consumed set; the
+        // commit consumes exactly those records (a wire-less commit consumes
+        // nothing by design).
         const accepted = await live._commitWorkingGrid(
-            workingGrid, workingGrid.getIndexes(), B1, { skipRecalc: true });
+            workingGrid, workingGrid.getIndexes(), B1, {
+                skipRecalc: true,
+                consumedCrawlIds: live._pendingFillCrawls.map((e) => ({ ...e }))
+            });
         assert.strictEqual(accepted, true, 'commit must be accepted');
         assert.strictEqual(live.boundaryIdx, B1, 'commit applies the owed crawl');
         assert.deepStrictEqual(live._pendingFillCrawls, [], 'commit consumes the owed crawls in memory');
