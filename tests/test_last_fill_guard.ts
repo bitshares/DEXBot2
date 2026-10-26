@@ -1,146 +1,128 @@
 /**
- * LAST-FILL-GUARD unit tests — pivot ± halfIncrement (replaces tolerance).
- * Last fill at x with increment i (half=i/2): BUY must be < x*(1-half/100), SELL > x*(1+half/100)
- * e.g. x=1000 i=0.5% => BUY < 997.5, SELL > 1002.5
- * Cold (null pivot/type) => disabled.
+ * LAST-FILL-GUARD unit tests — DIRECTION ONLY relative to the last fill price.
+ *
+ *   BUY  blocked at/above the pivot   (never place a higher BUY)
+ *   SELL blocked at/below the pivot   (never place a lower SELL)
+ *
+ * The increment takes no part: the old pivot ± increment/2 band blocked
+ * profitable placements within half a step of the pivot (which is exactly where
+ * spread correction places — the spread edge on a grid slot), and it blocked
+ * buy-backs below a SELL fill. Cold (null pivot/type) => disabled.
  */
 const assert = require('assert');
 const { isLastFillGuardBlocked, resolveOnGridPivot } = require('../modules/dexbot_cow_runtime');
 const { ORDER_TYPES } = require('../modules/constants');
 
-const INC = 0.5; // default grid increment
-const HALF = INC / 2; // 0.25
+const INC = 0.5; // grid increment — accepted by the signature, must have no effect
 
-function buyThreshold(pivot: number, inc: number = INC) { return pivot * (1 - inc/2/100); }
-function sellThreshold(pivot: number, inc: number = INC) { return pivot * (1 + inc/2/100); }
+const blocked = (price: number, type: string, pivot: number | null, lastType: string | null, inc: any = INC) =>
+    isLastFillGuardBlocked(price, 1, type, pivot, lastType, inc).blocked;
 
 async function testColdStartDisabled() {
     console.log('\n[LFG-1] cold start (null) => disabled');
-    assert.strictEqual(isLastFillGuardBlocked(1000, 1, ORDER_TYPES.BUY, null, ORDER_TYPES.BUY, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(1000, 1, ORDER_TYPES.SELL, null, ORDER_TYPES.SELL, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(1000, 1, ORDER_TYPES.BUY, 1000, null, INC).blocked, false, 'null type => disabled');
-    assert.strictEqual(isLastFillGuardBlocked(1000, 1, ORDER_TYPES.BUY, undefined, ORDER_TYPES.BUY, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(1000, 1, ORDER_TYPES.SELL, NaN, ORDER_TYPES.SELL, INC).blocked, false);
+    assert.strictEqual(blocked(1000, ORDER_TYPES.BUY, null, ORDER_TYPES.BUY), false);
+    assert.strictEqual(blocked(1000, ORDER_TYPES.SELL, null, ORDER_TYPES.SELL), false);
+    assert.strictEqual(blocked(1000, ORDER_TYPES.BUY, 1000, null), false, 'null fill side => disabled (book-seeded pivot)');
+    assert.strictEqual(blocked(1000, ORDER_TYPES.BUY, undefined, ORDER_TYPES.BUY), false);
+    assert.strictEqual(blocked(1000, ORDER_TYPES.SELL, NaN, ORDER_TYPES.SELL), false);
+    assert.strictEqual(blocked(NaN, ORDER_TYPES.SELL, 1000, ORDER_TYPES.BUY), false, 'non-finite price => not blocked');
     console.log('✓ LFG-1 passed');
 }
 
-async function testBuyAfterBuyHalfIncrement() {
-    console.log('\n[LFG-2] BUY after BUY with halfIncrement 0.25%: BUY > 997.5 blocked, SELL < 1002.5 blocked');
-    const lastPrice = 1000;
-    const lastType = ORDER_TYPES.BUY;
-    const bThr = buyThreshold(lastPrice); // 997.5
-    const sThr = sellThreshold(lastPrice); // 1002.5
-    // BUY exactly at threshold passes, just above blocks
-    assert.strictEqual(isLastFillGuardBlocked(bThr, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, false, `BUY ${bThr} at threshold should pass`);
-    assert.strictEqual(isLastFillGuardBlocked(bThr + 0.01, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, true, `BUY ${bThr+0.01} > thr should block`);
-    assert.strictEqual(isLastFillGuardBlocked(990, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, false, 'BUY 990 < 997.5 should pass');
-    assert.strictEqual(isLastFillGuardBlocked(999, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, true, 'BUY 999 (>997.5) should now block — stricter than old pivot');
-    // SELL after BUY must be higher
-    assert.strictEqual(isLastFillGuardBlocked(900, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, true, 'SELL 900 < 1002.5 after BUY should block');
-    assert.strictEqual(isLastFillGuardBlocked(sThr, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, false, `SELL ${sThr} at threshold should pass`);
-    assert.strictEqual(isLastFillGuardBlocked(sThr - 0.01, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, true, `SELL ${sThr-0.01} < thr should block`);
-    assert.strictEqual(isLastFillGuardBlocked(1100, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, false, 'SELL 1100 > 1002.5 should pass');
-    // Reported SELL 1013 > 1001 should PASS with halfInc (sellThr ~1003.5), old tol case now stricter but still passes because well above half
-    assert.strictEqual(isLastFillGuardBlocked(1013.153043, 1, ORDER_TYPES.SELL, 1001.081341, ORDER_TYPES.BUY, INC).blocked, false, 'SELL 1013 > 1001*(1+0.25%) should PASS');
-    assert.strictEqual(isLastFillGuardBlocked(1002, 1, ORDER_TYPES.SELL, 1001.081341, ORDER_TYPES.BUY, INC).blocked, true, 'SELL 1002 < 1003.58 should block with halfInc');
+async function testBuyAndSellDirection() {
+    console.log('\n[LFG-2] BUY must be below the pivot, SELL above it (any distance)');
+    const pivot = 1000;
+    // BUY: below passes, at/above blocks — with NO increment margin.
+    assert.strictEqual(blocked(999.99, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY), false, 'BUY 999.99 is below => allowed');
+    assert.strictEqual(blocked(1000, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY), true, 'BUY at the pivot => blocked (re-place at the filled level)');
+    assert.strictEqual(blocked(1000.01, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY), true, 'BUY above the pivot => blocked');
+    assert.strictEqual(blocked(990, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY), false);
+    // SELL: above passes, at/below blocks.
+    assert.strictEqual(blocked(1000.01, ORDER_TYPES.SELL, pivot, ORDER_TYPES.BUY), false, 'SELL just above the pivot => allowed');
+    assert.strictEqual(blocked(1000, ORDER_TYPES.SELL, pivot, ORDER_TYPES.BUY), true, 'SELL at the pivot => blocked');
+    assert.strictEqual(blocked(999.99, ORDER_TYPES.SELL, pivot, ORDER_TYPES.BUY), true, 'SELL below the pivot => blocked');
+    assert.strictEqual(blocked(1100, ORDER_TYPES.SELL, pivot, ORDER_TYPES.BUY), false);
     console.log('✓ LFG-2 passed');
 }
 
-async function testSellAfterSellHalfIncrement() {
-    console.log('\n[LFG-3] SELL after SELL: same thresholds (BUY < 997.5, SELL > 1002.5)');
-    const lastPrice = 1000;
-    const lastType = ORDER_TYPES.SELL;
-    const bThr = buyThreshold(lastPrice);
-    const sThr = sellThreshold(lastPrice);
-    assert.strictEqual(isLastFillGuardBlocked(sThr, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(sThr - 0.01, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(1005, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, false, 'SELL 1005 > 1002.5 should pass');
-    // BUY after SELL
-    assert.strictEqual(isLastFillGuardBlocked(bThr, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, false, `BUY ${bThr} at threshold should pass`);
-    assert.strictEqual(isLastFillGuardBlocked(bThr + 0.01, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(900, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(1100, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, true, 'BUY 1100 > 997.5 should block');
+async function testLowerBuyUnderHigherSellIsAllowed() {
+    console.log('\n[LFG-3] a BUY under a SELL fill is never blocked (the old band blocked it)');
+    const sellFill = 100;
+    // The band used to block these (BUY > pivot*(1-inc/2/100) = 99.75 for inc 0.5%).
+    assert.strictEqual(blocked(99.8, ORDER_TYPES.BUY, sellFill, ORDER_TYPES.SELL), false,
+        'buying back 0.2% below our sale must be allowed');
+    assert.strictEqual(blocked(99.6, ORDER_TYPES.BUY, sellFill, ORDER_TYPES.SELL), false,
+        'buying back 0.4% below our sale must be allowed');
+    assert.strictEqual(blocked(100.2, ORDER_TYPES.BUY, sellFill, ORDER_TYPES.SELL), true,
+        'buying ABOVE our sale is still blocked (adverse)');
     console.log('✓ LFG-3 passed');
 }
 
-async function testReportedCaseHalfIncrement() {
-    console.log('\n[LFG-4] reported case with halfInc: pivot 995.083863 => BUY thr ~992.596, SELL thr ~997.571');
-    const lastPrice = 995.083863;
-    const lastType = ORDER_TYPES.BUY;
-    const bThr = buyThreshold(lastPrice);
-    const sThr = sellThreshold(lastPrice);
-    assert.strictEqual(isLastFillGuardBlocked(bThr, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(bThr + 0.01, 1, ORDER_TYPES.BUY, lastPrice, lastType, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(sThr, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(sThr - 0.01, 1, ORDER_TYPES.SELL, lastPrice, lastType, INC).blocked, true);
-    // BUY after SELL
-    const laterPrice = 1010;
-    const laterType = ORDER_TYPES.SELL;
-    const bThr2 = buyThreshold(laterPrice);
-    assert.strictEqual(isLastFillGuardBlocked(1004.089103, 1, ORDER_TYPES.BUY, laterPrice, laterType, INC).blocked, false, `BUY 1004 < ${bThr2} after SELL should pass`);
-    assert.strictEqual(isLastFillGuardBlocked(1008, 1, ORDER_TYPES.BUY, laterPrice, laterType, INC).blocked, true, `BUY 1008 > ${bThr2} after SELL should block`);
-    assert.strictEqual(isLastFillGuardBlocked(990, 1, ORDER_TYPES.BUY, laterPrice, laterType, INC).blocked, false, 'BUY 990 < thr after SELL should pass');
-    assert.strictEqual(isLastFillGuardBlocked(1015, 1, ORDER_TYPES.BUY, laterPrice, laterType, INC).blocked, true);
+async function testSpreadEdgeAfterFillIsAllowed() {
+    console.log('\n[LFG-4] the spread edge next to a fill is placeable (spread correction)');
+    // Dump sweep: our BUYs filled down, the last fill is a BUY at 100 and the
+    // correction wants to place the tightening SELL at the edge, 0.2% above.
+    assert.strictEqual(blocked(100.2, ORDER_TYPES.SELL, 100, ORDER_TYPES.BUY), false,
+        'SELL 0.2% above our cost must be placeable — this is the spread edge');
+    assert.strictEqual(blocked(100.01, ORDER_TYPES.SELL, 100, ORDER_TYPES.BUY), false,
+        'even a 0.01% profit is a profit: direction only');
+    assert.strictEqual(blocked(99.8, ORDER_TYPES.SELL, 100, ORDER_TYPES.BUY), true,
+        'selling below our cost stays blocked (issue #31)');
+    // Mirror: after a SELL fill at 100 the tightening BUY edge is just below.
+    assert.strictEqual(blocked(99.8, ORDER_TYPES.BUY, 100, ORDER_TYPES.SELL), false,
+        'BUY 0.2% below our sale must be placeable');
     console.log('✓ LFG-4 passed');
 }
 
-async function testMostRecentWins() {
-    console.log('\n[LFG-5] most recent fill wins: pivot is most recent fill');
-    const pivotSell = 1010;
-    const typeSell = ORDER_TYPES.SELL;
-    const bThrSell = buyThreshold(pivotSell);
-    const sThrSell = sellThreshold(pivotSell);
-    assert.strictEqual(isLastFillGuardBlocked(990, 1, ORDER_TYPES.BUY, pivotSell, typeSell, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(bThrSell, 1, ORDER_TYPES.BUY, pivotSell, typeSell, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(bThrSell + 0.01, 1, ORDER_TYPES.BUY, pivotSell, typeSell, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(sThrSell - 0.01, 1, ORDER_TYPES.SELL, pivotSell, typeSell, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(sThrSell, 1, ORDER_TYPES.SELL, pivotSell, typeSell, INC).blocked, false);
-    const pivotBuy = 980;
-    const typeBuy = ORDER_TYPES.BUY;
-    const bThrBuy = buyThreshold(pivotBuy);
-    const sThrBuy = sellThreshold(pivotBuy);
-    assert.strictEqual(isLastFillGuardBlocked(bThrBuy, 1, ORDER_TYPES.BUY, pivotBuy, typeBuy, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(bThrBuy + 0.01, 1, ORDER_TYPES.BUY, pivotBuy, typeBuy, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(900, 1, ORDER_TYPES.SELL, pivotBuy, typeBuy, INC).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(sThrBuy, 1, ORDER_TYPES.SELL, pivotBuy, typeBuy, INC).blocked, false);
-    assert.strictEqual(isLastFillGuardBlocked(1100, 1, ORDER_TYPES.SELL, pivotBuy, typeBuy, INC).blocked, false);
+async function testIncrementHasNoEffect() {
+    console.log('\n[LFG-5] the increment argument no longer changes the verdict');
+    const pivot = 1000;
+    const price = 999.9; // below the pivot: allowed under the direction rule
+    for (const inc of [0.1, 0.5, 2, 5]) {
+        assert.strictEqual(blocked(price, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, inc), false,
+            `BUY 999.9 must be allowed for increment ${inc}%`);
+        assert.strictEqual(blocked(1000.1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, inc), true,
+            `BUY 1000.1 must be blocked for increment ${inc}%`);
+    }
+    // Legacy assets-object 6th arg must not crash or change the verdict.
+    const assets = { assetA: { precision: 5 }, assetB: { precision: 5 } };
+    assert.strictEqual(blocked(999.9, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, assets), false);
+    assert.strictEqual(blocked(1000, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, assets), true);
     console.log('✓ LFG-5 passed');
 }
 
-async function testHalfIncrementParam() {
-    console.log('\n[LFG-6] increment param controls threshold (0.5% half=0.25% vs 2% half=1%)');
-    const pivot = 1000;
-    // inc 2% => half 1% => bThr 990, sThr 1010
-    assert.strictEqual(isLastFillGuardBlocked(995, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, 2).blocked, true, 'BUY 995 > 990 (2% inc) should block');
-    assert.strictEqual(isLastFillGuardBlocked(985, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, 2).blocked, false, 'BUY 985 < 990 should pass');
-    assert.strictEqual(isLastFillGuardBlocked(1005, 1, ORDER_TYPES.SELL, pivot, ORDER_TYPES.SELL, 2).blocked, true, 'SELL 1005 < 1010 should block');
-    assert.strictEqual(isLastFillGuardBlocked(1015, 1, ORDER_TYPES.SELL, pivot, ORDER_TYPES.SELL, 2).blocked, false, 'SELL 1015 > 1010 should pass');
-    // inc 0.1% => half 0.05% => bThr 999.5, sThr 1000.5 (very tight)
-    assert.strictEqual(isLastFillGuardBlocked(999.6, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, 0.1).blocked, true);
-    assert.strictEqual(isLastFillGuardBlocked(999.4, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, 0.1).blocked, false);
-    // backward compat: assets object fallback uses default INC
-    const assets = { assetA: { precision: 5 }, assetB: { precision: 5 } };
-    assert.strictEqual(isLastFillGuardBlocked(999, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, assets).blocked, true, 'assets fallback should use default halfInc');
-    assert.strictEqual(isLastFillGuardBlocked(990, 1, ORDER_TYPES.BUY, pivot, ORDER_TYPES.BUY, assets).blocked, false);
+async function testMostRecentFillWins() {
+    console.log('\n[LFG-6] the pivot is always the most recent fill');
+    // After the sweep the last fill is a BUY at 980: sells above it are fine,
+    // buys at/above it are not.
+    assert.strictEqual(blocked(990, ORDER_TYPES.SELL, 980, ORDER_TYPES.BUY), false);
+    assert.strictEqual(blocked(975, ORDER_TYPES.SELL, 980, ORDER_TYPES.BUY), true);
+    assert.strictEqual(blocked(979, ORDER_TYPES.BUY, 980, ORDER_TYPES.BUY), false);
+    assert.strictEqual(blocked(980, ORDER_TYPES.BUY, 980, ORDER_TYPES.BUY), true);
+    // Then a SELL fills at 1010 and takes over the pivot.
+    assert.strictEqual(blocked(1005, ORDER_TYPES.BUY, 1010, ORDER_TYPES.SELL), false);
+    assert.strictEqual(blocked(1010, ORDER_TYPES.BUY, 1010, ORDER_TYPES.SELL), true);
+    assert.strictEqual(blocked(1005, ORDER_TYPES.SELL, 1010, ORDER_TYPES.SELL), true);
+    assert.strictEqual(blocked(1015, ORDER_TYPES.SELL, 1010, ORDER_TYPES.SELL), false);
     console.log('✓ LFG-6 passed');
 }
 
-async function testSpreadBypassNote() {
-    console.log('\n[LFG-7] spread-correction bypass — helper blocks, cowResult.origin skips it');
-    const lastPrice = 1010;
-    const bThr = buyThreshold(lastPrice);
-    const sThr = sellThreshold(lastPrice);
-    assert.strictEqual(isLastFillGuardBlocked(sThr - 1, 10, ORDER_TYPES.SELL, lastPrice, ORDER_TYPES.SELL, INC).blocked, true, 'helper blocks sell below thr');
-    assert.strictEqual(isLastFillGuardBlocked(bThr - 1, 10, ORDER_TYPES.BUY, lastPrice, ORDER_TYPES.SELL, INC).blocked, false, `BUY ${bThr-1} < thr should PASS`);
-    assert.strictEqual(isLastFillGuardBlocked(bThr + 1, 10, ORDER_TYPES.BUY, lastPrice, ORDER_TYPES.SELL, INC).blocked, true, `BUY ${bThr+1} > thr should block`);
+async function testSpreadCorrectionBypassNote() {
+    console.log('\n[LFG-7] spread-correction origin propagation (bypass still a separate decision)');
+    // The helper is origin-agnostic: a correction CREATE judged by the guard
+    // obeys the same direction rule. Whether a correction may bypass is decided
+    // at the broadcast site (isSpreadCorrectionBypassAllowed), not here.
+    assert.strictEqual(blocked(1009, ORDER_TYPES.SELL, 1010, ORDER_TYPES.SELL), true,
+        'a SELL below the pivot is blocked for the helper regardless of origin');
+    assert.strictEqual(blocked(1011, ORDER_TYPES.SELL, 1010, ORDER_TYPES.SELL), false,
+        'a SELL above the pivot passes for the helper regardless of origin');
     const { buildCowResultFromPlan } = require('../modules/dexbot_cow_runtime');
-    const mockBot = { manager: { orders: new Map(), _gridVersion: 0, boundaryIdx: 0 } , config: {} };
-    const plan = { ordersToPlace: [{ id: 'slot-135', type: ORDER_TYPES.SELL, price: sThr - 1, size: 10 }], origin: 'spread-correction' };
+    const mockBot = { manager: { orders: new Map(), _gridVersion: 0, boundaryIdx: 0 }, config: {} };
+    const plan = { ordersToPlace: [{ id: 'slot-135', type: ORDER_TYPES.SELL, price: 1009, size: 10 }], origin: 'spread-correction' };
     const cow = buildCowResultFromPlan(mockBot as any, plan as any);
-    assert.strictEqual((cow as any).origin, 'spread-correction', 'origin must propagate for bypass');
+    assert.strictEqual((cow as any).origin, 'spread-correction', 'origin must propagate for the bypass decision');
     console.log('✓ LFG-7 passed');
 }
-
 
 /**
  * PIVOT-001..003 - the LAST-FILL pivot must be a real grid level.
@@ -230,12 +212,12 @@ async function testPivotWithoutGenesisFallsBack() {
 
 async function main() {
     await testColdStartDisabled();
-    await testBuyAfterBuyHalfIncrement();
-    await testSellAfterSellHalfIncrement();
-    await testReportedCaseHalfIncrement();
-    await testMostRecentWins();
-    await testHalfIncrementParam();
-    await testSpreadBypassNote();
+    await testBuyAndSellDirection();
+    await testLowerBuyUnderHigherSellIsAllowed();
+    await testSpreadEdgeAfterFillIsAllowed();
+    await testIncrementHasNoEffect();
+    await testMostRecentFillWins();
+    await testSpreadCorrectionBypassNote();
     await testPivotSnapsToGridLevel();
     await testOffGridPivotIsNotRewritten();
     await testPivotWithoutGenesisFallsBack();

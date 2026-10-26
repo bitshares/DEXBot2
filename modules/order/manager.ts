@@ -2102,12 +2102,12 @@ class OrderManager implements OrderManagerLike {
 
     /**
      * Record last filled price for the single-pivot guard: when armed, BOTH
-     * sides are gated against the most recent fill price (BUY blocked above
-     * pivot*(1-halfInc), SELL blocked below pivot*(1+halfInc); see
-     * isLastFillGuardBlocked). Spread-correction bypasses. _lastFilledType is
-     * purely the cold/armed discriminator (null => disabled). The per-side
-     * fields are not read by the guard itself; they feed the book-seed
-     * cold-check and per-side seeding in seedLastFilledPricesFromBook.
+     * sides are gated by the direction rule against the most recent fill price
+     * (BUY blocked at/above the pivot, SELL blocked at/below it; see
+     * isLastFillGuardBlocked). _lastFilledType is purely the cold/armed
+     * discriminator (null => disabled). The per-side fields are not read by the
+     * guard itself; they feed the book-seed cold-check and per-side seeding in
+     * seedLastFilledPricesFromBook.
      * @param {Array} fills
      */
     recordLastFilledPrices(fills: COWFillLike[]): void {

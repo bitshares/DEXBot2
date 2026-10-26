@@ -361,22 +361,17 @@ async function testWIRE003_PivotIsValidatedNotRaw() {
     assert.strictEqual(validated.price, 110, 'the validated pivot must be the snapped level 110');
     assert.notStrictEqual(validated.price, 112, 'validated and raw pivots must differ, else this test cannot discriminate');
 
-    // A BUY CREATE at slot-2's own genesis level (105) would be judged against
-    // the pivot. To isolate the PIVOT wiring we place the create at 108, which
-    // is intentionally off its own level so the invariant check (not the pivot
-    // guard) must be the thing that skips it... so instead place it ON level
-    // 110 (slot-3) and move the pivot comparison to a price that sits between
-    // the two thresholds while still being a genesis level.
-    //
-    // Level 108 does not exist on this ladder, so we drive the guard directly
-    // through its exported decision helper with both pivots.
+    // The guard is a DIRECTION rule (BUY must be below the pivot), so the probe
+    // price has to sit between the validated pivot (110) and the raw pivot
+    // (112): a BUY at 111 is "above" the validated pivot (blocked) but "below"
+    // the raw one (allowed). That is what makes the wiring observable.
     const { isLastFillGuardBlocked } = require('../modules/dexbot_cow_runtime');
-    const price = 108;
+    const price = 111;
     const viaValidated = isLastFillGuardBlocked(price, 10, ORDER_TYPES.BUY, validated.price, ORDER_TYPES.BUY, 5);
     const viaRaw = isLastFillGuardBlocked(price, 10, ORDER_TYPES.BUY, 112, ORDER_TYPES.BUY, 5);
 
     assert.strictEqual(viaValidated.blocked, true,
-        'a BUY at 108 must be BLOCKED when judged against the validated pivot 110');
+        'a BUY at 111 must be BLOCKED when judged against the validated pivot 110 (BUY must be below it)');
     assert.strictEqual(viaRaw.blocked, false,
         'the same BUY must PASS against the raw pivot 112 -- otherwise the wiring is untestable');
     console.log('✓ GPI-WIRE-003 passed');
@@ -464,16 +459,15 @@ async function testWIRE004_RotationPriceDerivedFromDestination() {
  * raw fill price. This drives a real CREATE batch and asserts the emission is
  * blocked.
  *
- * Geometry (solved so the two pivots disagree):
+ * Geometry (solved so the two pivots disagree under the DIRECTION rule):
  *   ladder levels       95, 100, 105, 110, 115   (genesis)
- *   incrementPercent    20  -> half-increment 10%
- *   raw fill price      112 -> snaps to level 110 (within the 2.5% snap band)
- *   CREATE              BUY at 100 (slot-1's own genesis level, so the
+ *   raw fill price      112 -> snaps to level 110 (within the snap band)
+ *   CREATE              BUY at 110 (slot-3's own genesis level, so the
  *                       invariant check passes and cannot mask the result)
  *
- *   BUY blocks when price > pivot * (1 - 0.10):
- *     validated pivot 110 -> 100 > 99.0   -> BLOCKED
- *     raw pivot       112 -> 100 > 100.8  -> not blocked
+ *   The guard blocks a BUY at/above the pivot:
+ *     validated pivot 110 -> 110 >= 110 -> BLOCKED
+ *     raw pivot       112 -> 110 <  112 -> not blocked
  *
  * So the validated pivot blocks this BUY and the raw one emits it. The
  * assertion below is therefore a direct test of the call-site wiring.
@@ -498,8 +492,10 @@ async function testWIRE005_PivotWiringEndToEnd() {
     assert.strictEqual(validated.price, 110, 'raw pivot 112 must validate to level 110');
     assert.notStrictEqual(validated.price, 112, 'raw and validated pivots must differ');
 
-    // A BUY CREATE at slot-1 = level 100 (its own genesis level).
-    const cowResult = createCowCreateResult(manager, 'slot-1', 100);
+    // A BUY CREATE at slot-3 = level 110 (its own genesis level). It sits AT
+    // the validated pivot (blocked) but BELOW the raw one (allowed), which is
+    // what makes the pivot wiring observable under the direction rule.
+    const cowResult = createCowCreateResult(manager, 'slot-3', 110);
     cowResult.actions[0].order.type = ORDER_TYPES.BUY;
 
     const originalExecuteBatch = chainOrders.executeBatch;
@@ -518,7 +514,8 @@ async function testWIRE005_PivotWiringEndToEnd() {
     }
 
     assert.strictEqual(builtOps, 0,
-        'a BUY at 100 must be blocked by the validated pivot 110; emitting it means the raw pivot 112 was used');
+        'a BUY at 110 must be blocked by the validated pivot 110 (BUY must be below the pivot); ' +
+        'emitting it means the raw pivot 112 was used');
     console.log('✓ GPI-WIRE-005 passed');
 }
 

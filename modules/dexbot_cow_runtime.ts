@@ -148,7 +148,7 @@ interface PreBroadcastGuardResult extends JsonObj {
 interface LastFillGuardResult {
     blocked: boolean;
     pivot: number | null;
-    halfInc?: number;
+    /** The pivot itself: the direction rule has no separate band threshold. */
     threshold?: number | null;
 }
 
@@ -2172,44 +2172,42 @@ function collectGapBandPlacementShadowSlots(actions: CowAction[] | null | undefi
 }
 
 /**
- * LAST-FILL-GUARD helper — pivot ± halfIncrement (replaces price-tolerance).
- *  last fill @x with increment i (blocked shapes): BUY > x*(1 - i/2/100),
- *  SELL < x*(1 + i/2/100)
- *  e.g. x=1000, i=0.5% => BUY > 997.5 and SELL < 1002.5 are blocked
- * Cold (pivot null or lastType null) => disabled. Spread-correction CREATES
- * bypass per-action (see broadcast sites); gap-evacuation rotation UPDATEs
- * bypass only via the violation-reducing allowance (origin='gap-evacuation',
- * UPDATE-only, frozen B-stamp or live-proven isEvacuationRotationAllowed) —
- * see the UPDATE rotation guard block.
- * The pivot is the latest fill of either side and is never expired: it stays
- * the durable mark (last sold level floors new sells; buy fills pull it down
- * and re-open the sell side, buy-below-sell is never gated).
+ * LAST-FILL-GUARD helper — DIRECTION ONLY, relative to the last fill price.
+ *
+ *   BUY  blocked if price >= pivot   (never place a higher BUY)
+ *   SELL blocked if price <= pivot   (never place a lower SELL)
+ *
+ * A placement on the permitted side is always profitable against the last trade
+ * we actually did: a BUY below the last sell, a SELL above the last buy. The
+ * earlier pivot ± increment/2 band was NOT an economic test — it ignored the
+ * last fill's side and blocked profitable placements within half a step of the
+ * pivot, which is exactly the distance spread correction needs (it always
+ * places at the spread edge on a grid slot, i.e. tighter than a full step), and
+ * it blocked buy-backs below a SELL fill. Equal price counts as blocked: that
+ * is a re-place at the just-filled level, the immediate re-fill loop this guard
+ * exists to prevent.
+ *
+ * Cold (no numeric pivot, or no fill side recorded — e.g. a book-seeded pivot)
+ * => disabled. The pivot is the latest fill of either side and is never
+ * expired; the increment no longer participates (kept in the signature so the
+ * call sites and their logs stay stable).
+ *
  * @param {number} price - Target order price
  * @param {number} size - Order size (unused, kept for compat)
  * @param {string} type - ORDER_TYPES.BUY/SELL
  * @param {number|null} lastPrice - Most recent fill price
- * @param {string|null} lastType - Most recent fill side (BUY/SELL)
- * @param {number|any} incrementPercent - Grid increment percent (e.g. 0.5). If assets object passed, falls back to default.
- * @returns {{blocked: boolean, pivot: number|null, halfInc: number, threshold: number|null}}
+ * @param {string|null} lastType - Most recent fill side (BUY/SELL); null keeps the guard cold
+ * @param {number|any} incrementPercent - Unused (kept for signature compat)
+ * @returns {{blocked: boolean, pivot: number|null, threshold: number|null}}
  */
-function isLastFillGuardBlocked(price: number, _size: number, type: unknown, lastPrice: number | null, lastType: string | null, incrementPercent: number): { blocked: boolean; pivot: number|null; halfInc?: number; threshold?: number|null } {
+function isLastFillGuardBlocked(price: number, _size: number, type: unknown, lastPrice: number | null, lastType: string | null, _incrementPercent?: number): { blocked: boolean; pivot: number|null; threshold?: number|null } {
     const numPrice = Number(price);
     if (!Number.isFinite(numPrice)) return { blocked: false, pivot: null };
     if (lastPrice == null || !Number.isFinite(Number(lastPrice)) || lastType == null) return { blocked: false, pivot: null };
     const pivot = Number(lastPrice);
-    // Resolve increment: fallback to default 0.5 (also covers legacy assets-object 6th arg)
-    let inc = Number(incrementPercent);
-    if (!Number.isFinite(inc) || inc <= 0) {
-        inc = Number(constantsModule?.DEFAULT_CONFIG?.incrementPercent ?? 0.5);
-    }
-    if (!Number.isFinite(inc) || inc <= 0) return { blocked: false, pivot: null };
-    const halfInc = inc / 2;
-    const halfPct = halfInc / 100;
-    const buyThreshold = pivot * (1 - halfPct);
-    const sellThreshold = pivot * (1 + halfPct);
-    if (type === ORDER_TYPES.BUY && numPrice > buyThreshold) return { blocked: true, pivot, halfInc, threshold: buyThreshold };
-    if (type === ORDER_TYPES.SELL && numPrice < sellThreshold) return { blocked: true, pivot, halfInc, threshold: sellThreshold };
-    return { blocked: false, pivot: null, halfInc, threshold: null };
+    if (type === ORDER_TYPES.BUY && numPrice >= pivot) return { blocked: true, pivot, threshold: pivot };
+    if (type === ORDER_TYPES.SELL && numPrice <= pivot) return { blocked: true, pivot, threshold: pivot };
+    return { blocked: false, pivot: null, threshold: null };
 }
 
 /**
@@ -3993,7 +3991,7 @@ async function updateOrdersOnChainBatchCOWBody(
                         continue;
                     }
 
-                    // LAST-FILL PRICE GUARD: pivot ± halfIncrement (BUY < pivot*(1-half), SELL > pivot*(1+half)).
+                    // LAST-FILL PRICE GUARD: direction rule (BUY < pivot, SELL > pivot).
                     // Bypass is per-action: only spread-correction CREATES skip so gap repair can close.
                     // The batch-level origin is honored only for actions without their own origin stamp
                     // (back-compat for plans that bypass buildActionsFromPlan). Cold (null) => disabled.
@@ -4010,7 +4008,7 @@ async function updateOrdersOnChainBatchCOWBody(
                                 lastFillGuardStats.skipped++;
                                 const dir = order.type === ORDER_TYPES.BUY ? 'above' : 'below';
                                 bot.manager.logger.log(
-                                    `[LAST-FILL-GUARD] Skipping ${order.type} CREATE for ${order.id} at ${Format.formatPrice6(createPrice)}: ${dir} last filled ${Format.formatPrice6(Number(check.pivot))} (halfInc ${check.halfInc}% thr ${Format.formatPrice6(Number(check.threshold))}); re-planned after market moves`,
+                                    `[LAST-FILL-GUARD] Skipping ${order.type} CREATE for ${order.id} at ${Format.formatPrice6(createPrice)}: ${dir} last filled ${Format.formatPrice6(Number(check.pivot))} (direction rule: BUY must be below / SELL above the last fill); re-planned after market moves`,
                                     'debug'
                                 );
                                 if (order.id) skippedCreateSlotIds.add(order.id);
@@ -4178,7 +4176,7 @@ async function updateOrdersOnChainBatchCOWBody(
                             continue;
                         }
 
-                        // LAST-FILL PRICE GUARD (UPDATE rotation): pivot ± halfIncrement — same as CREATE,
+                        // LAST-FILL PRICE GUARD (UPDATE rotation): direction rule — same as CREATE,
                         // plus the GAP-EVACUATION ALLOWANCE (violation-reducing): a rotation stamped
                         // origin='gap-evacuation' at plan-build moves a live order OUT of the gap band
                         // onto its rail with bit-exact non-growing size — it shrinks the violation
@@ -4317,7 +4315,7 @@ async function updateOrdersOnChainBatchCOWBody(
                                 if (action.newGridId) skippedUpdateSlotIds.add(action.newGridId);
                                 const dir = orderType === ORDER_TYPES.BUY ? 'above' : 'below';
                                 bot.manager.logger.log(
-                                    `[LAST-FILL-GUARD] Skipping ${orderType} UPDATE for ${action.id} -> ${action.newGridId} at ${Format.formatPrice6(newPrice)}: ${dir} last filled ${Format.formatPrice6(Number(check.pivot))} (halfInc ${check.halfInc}% thr ${Format.formatPrice6(Number(check.threshold))})`,
+                                    `[LAST-FILL-GUARD] Skipping ${orderType} UPDATE for ${action.id} -> ${action.newGridId} at ${Format.formatPrice6(newPrice)}: ${dir} last filled ${Format.formatPrice6(Number(check.pivot))} (direction rule: BUY must be below / SELL above the last fill)`,
                                     'debug'
                                 );
                                 continue;
@@ -4500,8 +4498,8 @@ async function updateOrdersOnChainBatchCOWBody(
                                         bot.manager.logger.log(
                                             `[LAST-FILL-GUARD] Skipping CREATE fallback for ${targetSlotId} at ` +
                                             `${Format.formatPrice6(fbPrice)}: ${fbDir} last filled ` +
-                                            `${Format.formatPrice6(Number(fbCheck.pivot))} (halfInc ${fbCheck.halfInc}% thr ` +
-                                            `${Format.formatPrice6(Number(fbCheck.threshold))}); re-planned after market moves`,
+                                            `${Format.formatPrice6(Number(fbCheck.pivot))} (direction rule: BUY must be ` +
+                                            `below / SELL above the last fill); re-planned after market moves`,
                                             'debug'
                                         );
                                         continue;
@@ -5889,7 +5887,7 @@ function runFinalPivotGate(bot: BotLike, operations: unknown[], opContexts: OpPh
                 bot.manager?.logger?.log?.(
                     `[LAST-FILL-GUARD] Final gate dropping ${type} ${ctx.kind} for ${slotId ?? 'unknown'} at ` +
                     `${Format.formatPrice6(price as number)}: ${dir} last filled ${check.pivot != null ? Format.formatPrice6(Number(check.pivot)) : 'n/a'} ` +
-                    `(halfInc ${check.halfInc}% thr ${check.threshold != null ? Format.formatPrice6(Number(check.threshold)) : 'n/a'}); re-planned after market moves`,
+                    `(direction rule: BUY must be below / SELL above the last fill); re-planned after market moves`,
                     'warn'
                 );
             } catch { /* logging is best-effort */ }
