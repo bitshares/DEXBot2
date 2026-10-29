@@ -12,8 +12,11 @@ const require = createRequire(import.meta.url);
  * additionally report per-pair and average CR, but only for pairs that are
  * both whitelisted in bots.json (debtPolicy.lending) and listed on the
  * current credit offer (acceptable_collateral) — anything else is reported
- * as ignored/unpriced and excluded from the average. A borrow-now preview
- * per configured pair shows the rate a fresh borrow would get today.
+ * as ignored/unpriced and excluded from the average. LP-share collateral is
+ * valued from live pool reserves/supply, not the offer's fixed
+ * acceptable_collateral price (a contract haircut); the source tag on each
+ * Avar. CR line shows `pool` or `offer`. A borrow-now preview per configured
+ * pair shows the rate a fresh borrow would get today.
  *
  * Chain source of truth (see bitshares-core):
  * - MPA positions:  database_api::get_margin_positions(account)
@@ -44,6 +47,8 @@ import { pathToFileURL } from 'node:url';
 // `dexbot order` so both analyzers stay visually in lockstep.
 import { CLI_COLORS as colors } from '../modules/cli_colors.js';
 import { muteChainLogs } from '../modules/utils/chain_logs.js';
+import { setGlobalConsoleLevel } from '../modules/order/logger.js';
+import { deriveLiquidityPoolTokenValue } from '../modules/order/utils/system.js';
 
 const BOTS_FILE = PATHS.PROFILES.BOTS_JSON;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -127,6 +132,7 @@ import {
   dailyOfferFeeRate,
   extractOfferConversionRate,
   normalizeCollateralMap as normalizeOfferCollateralMap,
+  selectCollateralConversionRate,
 } from '../modules/credit_pricing.js';
 
 function lendingAssetsOfType(bot: BotEntry, type: string): string[] {
@@ -251,16 +257,35 @@ async function main() {
   }
 
   setSuppressConnectionLog(true);
+  // One-shot CLI: keep the analyzer's own console.log output, but silence
+  // Logger INFO chatter emitted while valuing LP collateral (e.g.
+  // derivePoolPrice). Warnings/errors still surface.
+  setGlobalConsoleLevel('warn');
   await waitForConnected(CONNECT_TIMEOUT_MS);
-  // Asset metadata cache: id -> { symbol, precision }
-  const assetCache = new Map<string, { symbol: string; precision: number }>();
-  async function assetInfo(assetId: string): Promise<{ symbol: string; precision: number }> {
+  // Asset metadata cache: id -> { symbol, precision, forLiquidityPool }
+  interface AssetInfo { symbol: string; precision: number; forLiquidityPool: string | null }
+  const assetCache = new Map<string, AssetInfo>();
+  async function assetInfo(assetId: string): Promise<AssetInfo> {
     if (assetCache.has(assetId)) return assetCache.get(assetId)!;
     const res = await dbCall('get_assets', [[assetId]]);
     const a = Array.isArray(res) ? res[0] : null;
-    const info = { symbol: String(a?.symbol || assetId), precision: Number.isFinite(Number(a?.precision)) ? Number(a.precision) : 5 };
+    const info: AssetInfo = {
+      symbol: String(a?.symbol || assetId),
+      precision: Number.isFinite(Number(a?.precision)) ? Number(a.precision) : 5,
+      forLiquidityPool: a?.for_liquidity_pool ? String(a.for_liquidity_pool) : null,
+    };
     assetCache.set(assetId, info);
     return info;
+  }
+  // LP-share collateral is valued from pool reserves/supply, not from the
+  // credit offer's fixed contract price. Cache per collateral/debt pair.
+  const poolValueCache = new Map<string, number | null>();
+  async function poolValueFor(collateralId: string, debtId: string): Promise<number | null> {
+    const key = `${collateralId}:${debtId}`;
+    if (poolValueCache.has(key)) return poolValueCache.get(key)!;
+    const value = await deriveLiquidityPoolTokenValue(BitShares, collateralId, debtId, 'auto', true).catch(() => null);
+    poolValueCache.set(key, value);
+    return value;
   }
   async function toFloat(raw: number, assetId: string): Promise<number | null> {
     if (!Number.isFinite(raw)) return null;
@@ -281,7 +306,11 @@ async function main() {
       const res = await dbCall('lookup_asset_symbols', [[s]]);
       const a = Array.isArray(res) ? res[0] : null;
       if (a?.id) {
-        assetCache.set(String(a.id), { symbol: String(a.symbol || s), precision: Number(a.precision ?? 5) });
+        assetCache.set(String(a.id), {
+          symbol: String(a.symbol || s),
+          precision: Number(a.precision ?? 5),
+          forLiquidityPool: a.for_liquidity_pool ? String(a.for_liquidity_pool) : null,
+        });
         return { id: String(a.id), symbol: String(a.symbol || s) };
       }
     } catch { /* keep raw symbol */ }
@@ -300,7 +329,7 @@ async function main() {
             if (offer?.id) out.set(String(offer.id), offer);
           }
         }
-      } catch { /* leave missing; deal falls back to pool/market pricing */ }
+      } catch { /* leave missing; LP-share collateral can still be pool-valued */ }
     }
     return out;
   }
@@ -514,7 +543,7 @@ async function main() {
     const lendingItems: BotLendingEntry[] = bot.debtPolicy?.lending ?? [];
     // Configured credit pairs drive the whitelist, per-pair CR lines, and
     // the borrow-now preview.
-    const creditPairs: Array<{ debtId: string | null; debtSym: string; collId: string | null; collSym: string; maxCR: number | null }> = [];
+    const creditPairs: Array<{ debtId: string | null; debtSym: string; collId: string | null; collSym: string; collForLiquidityPool: boolean; maxCR: number | null }> = [];
     for (const item of lendingItems) {
       if (!item || item.type !== 'creditOffer' || typeof item.asset !== 'string' || typeof item.collateralAsset !== 'string') continue;
       const [debtR, collR] = await Promise.all([
@@ -522,9 +551,11 @@ async function main() {
         resolveLendingRef(String(item.collateralAsset)),
       ]);
       const maxCR = Number((item as { maxCollateralRatio?: unknown }).maxCollateralRatio);
+      const collInfo = collR.id ? await assetInfo(collR.id) : null;
       creditPairs.push({
         debtId: debtR.id, debtSym: debtR.symbol,
         collId: collR.id, collSym: collR.symbol,
+        collForLiquidityPool: Boolean(collInfo?.forLiquidityPool),
         maxCR: Number.isFinite(maxCR) && maxCR > 0 ? maxCR : null,
       });
     }
@@ -572,17 +603,22 @@ async function main() {
           supported = pairSymKeys.has(`${(await symbolOf(debtId)).toUpperCase()}←${(await symbolOf(collId)).toUpperCase()}`);
         } catch { /* stays false */ }
       }
-      // Conversion rate comes ONLY from the deal's current credit offer
-      // (acceptable_collateral). A pair whose collateral is not listed on
-      // the offer gets no CR — no pool/market estimates.
-      let rate: number | null = null;
-      let source: string | null = null;
+      // Conversion rate: LP-share collateral is valued from the live pool
+      // (reserves/supply), because the offer's fixed acceptable_collateral
+      // price is a contract haircut, not the share's market value. Other
+      // collateral uses the deal's current credit offer price; if the offer
+      // is missing there is no CR.
       const offerId = d?.offer_id != null ? String(d.offer_id) : null;
       const offer = offerId ? offerById.get(offerId) : null;
-      if (offer && collId && debtId) {
-        const offerRate = extractOfferConversionRate(offer?.acceptable_collateral, collId, debtId, precisionOf);
-        if (offerRate !== null) { rate = offerRate; source = 'offer'; }
-      }
+      const collInfo = collId ? await assetInfo(collId) : null;
+      const isLiquidityPoolShare = Boolean(collInfo?.forLiquidityPool);
+      const poolRate = isLiquidityPoolShare && collId && debtId
+        ? await poolValueFor(collId, debtId)
+        : null;
+      const offerRate = offer && collId && debtId
+        ? extractOfferConversionRate(offer?.acceptable_collateral, collId, debtId, precisionOf)
+        : null;
+      const { rate, source } = selectCollateralConversionRate({ offerRate, poolRate, isLiquidityPoolShare });
       const value = debtFloat != null && collFloat != null && rate !== null ? collFloat * rate : null;
       const cr = debtFloat != null && collFloat != null ? creditDealCr(debtFloat, collFloat, rate) : null;
       crRows.push({
@@ -687,7 +723,9 @@ async function main() {
           const segments = [...collTotals.values()]
             .map((t) => `${formatAmount(t.debt)} ${group.debtSym} ← ${formatAmount(t.coll)} ${t.collSym}`)
             .join(' + ');
-          console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} ${groupColor}${formatAmount(groupCr)}${colors.reset}, ${segments} ${colors.gray}(x${group.rows.length})${colors.reset}`);
+          const sources = [...new Set(group.rows.map((r) => r.source).filter((s): s is string => !!s))];
+          const sourceTag = sources.length === 1 ? `, ${sources[0]}` : sources.length > 1 ? ', mixed' : '';
+          console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} ${groupColor}${formatAmount(groupCr)}${colors.reset}, ${segments} ${colors.gray}(x${group.rows.length}${sourceTag})${colors.reset}`);
         }
       } else if (supportedRows.length > 0) {
         console.log(`   ${colors.orange}${colors.bold}Avar. CR:${colors.reset} n/a (no priced, available credit)`);
@@ -715,7 +753,9 @@ async function main() {
         let liveOffer: CreditOffer | null = null;
         let liveRate: number | null = null;
         let liveOfferId: string | null = null;
-        const offerRows = pairRows.filter((r) => r.source === 'offer' && r.rate !== null && r.offerId);
+        // Select the offer used by the active deals even when the CR rate
+        // itself came from the pool (LP-share collateral).
+        const offerRows = pairRows.filter((r) => r.rate !== null && r.offerId);
         if (offerRows.length > 0) {
           const ranked = offerRows.map((r) => ({ r, daily: dailyOfferFeeRate(offerById.get(r.offerId!), feeDenom) }))
             .sort((a, b) => a.daily - b.daily || String(a.r.offerId).localeCompare(String(b.r.offerId)));
@@ -750,8 +790,11 @@ async function main() {
         // the offer's available funds, i.e. the CR a fresh borrow of the
         // full available amount would land at.
         let displayCr = pairCr;
-        if (displayCr === null && walletFloat !== null && walletFloat > 0 && liveRate !== null && avail !== null && avail > 0) {
-          displayCr = (walletFloat * liveRate) / avail;
+        if (displayCr === null && walletFloat !== null && walletFloat > 0 && avail !== null && avail > 0) {
+          const displayRate = pair.collForLiquidityPool && pair.collId && pair.debtId
+            ? await poolValueFor(pair.collId, pair.debtId)
+            : liveRate;
+          if (displayRate !== null && displayRate > 0) displayCr = (walletFloat * displayRate) / avail;
         }
         // Green at/below the user max (borrow allowed), red above it, white
         // when no max is defined, gray when there is no CR at all.
@@ -777,6 +820,7 @@ async function main() {
   console.log(`${colors.cyan}${'='.repeat(62)}${colors.reset}`);
   console.log(`${colors.cyan}Summary: ${analyzed} bots, ${totalMpa} MPA positions, ${totalDeals} credit deals${colors.reset}\n`);
 
+  setGlobalConsoleLevel(null);
   try { disconnectClient(); } catch { /* already disconnected */ }
   process.exit(0);
 }
@@ -784,6 +828,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err: unknown) => {
     console.error(`credit: ${getErrorMessage(err) || err}`);
+    setGlobalConsoleLevel(null);
     try { disconnectClient(); } catch { /* noop */ }
     process.exit(1);
   });

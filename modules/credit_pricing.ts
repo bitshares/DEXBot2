@@ -254,6 +254,34 @@ function capBorrowToCollateral(
 }
 
 /**
+ * Pick the conversion rate used to value collateral.
+ *
+ * LP-share collateral is a claim on pool reserves, so its market value comes
+ * from the live pool and must win over the credit offer's fixed contract price
+ * (which is a haircut that can go stale). Other collateral uses the offer
+ * price; the pool rate is only a fallback.
+ *
+ * Returns the selected rate plus its source, or null/ null when neither is
+ * usable.
+ */
+function selectCollateralConversionRate({
+    offerRate,
+    poolRate,
+    isLiquidityPoolShare,
+}: {
+    offerRate?: unknown;
+    poolRate?: unknown;
+    isLiquidityPoolShare?: boolean;
+}): { rate: number | null; source: 'offer' | 'pool' | null } {
+    const offer = positiveOrNull(offerRate);
+    const pool = positiveOrNull(poolRate);
+    if (isLiquidityPoolShare && pool !== null) return { rate: pool, source: 'pool' };
+    if (offer !== null) return { rate: offer, source: 'offer' };
+    if (pool !== null) return { rate: pool, source: 'pool' };
+    return { rate: null, source: null };
+}
+
+/**
  * Per-deal CR from floats plus a conversion rate:
  * (collateralFloat * rate) / debtFloat.
  */
@@ -328,6 +356,7 @@ export {
     requiredCollateralForBorrow,
     borrowAmountForCollateral,
     capBorrowToCollateral,
+    selectCollateralConversionRate,
     creditDealCollateralRatio,
     averageCollateralRatio,
     dailyOfferFeeRate,

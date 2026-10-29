@@ -13,6 +13,7 @@ const {
   requiredCollateralForBorrow,
   borrowAmountForCollateral,
   capBorrowToCollateral,
+  selectCollateralConversionRate,
   creditDealCollateralRatio,
   averageCollateralRatio,
   dailyOfferFeeRate,
@@ -94,6 +95,34 @@ function testCapBorrowToCollateral() {
   assert.strictEqual(capBorrowToCollateral(200000, 50000, reversed, '1.3.10', '1.3.0'), 100000, 'reversed orientation matches core');
 }
 
+function testSelectCollateralConversionRate() {
+  assert.deepStrictEqual(
+    selectCollateralConversionRate({ offerRate: 11.111, poolRate: 13.994, isLiquidityPoolShare: true }),
+    { rate: 13.994, source: 'pool' },
+    'LP-share collateral uses the pool value, not the offer contract price',
+  );
+  assert.deepStrictEqual(
+    selectCollateralConversionRate({ offerRate: 11.111, poolRate: null, isLiquidityPoolShare: true }),
+    { rate: 11.111, source: 'offer' },
+    'LP-share collateral falls back to the offer when the pool value is unavailable',
+  );
+  assert.deepStrictEqual(
+    selectCollateralConversionRate({ offerRate: 2, poolRate: 3, isLiquidityPoolShare: false }),
+    { rate: 2, source: 'offer' },
+    'non-LP collateral keeps the offer price',
+  );
+  assert.deepStrictEqual(
+    selectCollateralConversionRate({ offerRate: null, poolRate: 3, isLiquidityPoolShare: false }),
+    { rate: 3, source: 'pool' },
+    'non-LP collateral can fall back to the pool rate',
+  );
+  assert.deepStrictEqual(
+    selectCollateralConversionRate({ offerRate: 0, poolRate: -1, isLiquidityPoolShare: true }),
+    { rate: null, source: null },
+    'non-positive rates are unusable',
+  );
+}
+
 function testCreditDealCollateralRatio() {
   assert.strictEqual(creditDealCollateralRatio(10, 4, 2), 0.8, 'collateral value / debt');
   assert.strictEqual(creditDealCollateralRatio(10, 4, null), null, 'no rate is null');
@@ -129,6 +158,7 @@ function main() {
   testCollateralValueFromOfferPrice();
   testRequiredAndBorrowRoundTrip();
   testCapBorrowToCollateral();
+  testSelectCollateralConversionRate();
   testCreditDealCollateralRatio();
   testAverageCollateralRatio();
   testDailyOfferFeeRate();

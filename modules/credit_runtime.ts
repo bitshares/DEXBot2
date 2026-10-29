@@ -880,14 +880,32 @@ class CreditRuntime {
         const cachedAt = (this.state.positions[posKey]?.creditConversionRateAt as number | undefined) || 0;
         const cachedIsFresh = cached !== null && (Date.now() - cachedAt) < CREDIT_RATE_MAX_AGE_MS;
 
-        // Prefer the offer map (live-offer / owned-offer) — it provides an
-        // authoritative conversion rate even for LP share collateral that has
-        // an explicit entry in acceptable_collateral. Only when the offer map
-        // has no entry for the debt/collateral pair do we fall back to pool
-        // derivation (reserveA*priceA + reserveB*priceB / supply). This avoids
-        // re-attempting deriveLiquidityPoolTokenValue on every hourly call
-        // when a fresh live-offer rate exists and would otherwise log a pool
-        // failure even though the offer would succeed.
+        // LP-share collateral is a claim on pool reserves, so its market value
+        // comes from the live pool and must win over the offer's fixed
+        // acceptable_collateral price (a contract haircut). This matches the
+        // borrow gate in _calculateCollateralValueInDebtAsset(). Other
+        // collateral uses the offer map; pool/market pricing is only a
+        // fallback for those pairs.
+        {
+            const debtAsset = await this._resolveAsset(debtAssetId);
+            const collateralAsset = await this._resolveAsset(collateralAssetId);
+            if (collateralAsset?.for_liquidity_pool && debtAsset?.id) {
+                const poolRate = await deriveLiquidityPoolTokenValue(BitShares, String(collateralAsset.id), String(debtAsset.id), 'auto', true).catch((e) => {
+                    this.log(`credit runtime: pool token rate derivation failed for ${collateralAsset.id}/${debtAsset.id}: ${getErrorMessage(e)}`);
+                    return null;
+                });
+                if (poolRate != null && Number.isFinite(poolRate) && poolRate > 0) {
+                    if (!this.state.positions[posKey]) this.state.positions[posKey] = {};
+                    this.state.positions[posKey].creditConversionRate = poolRate;
+                    this.state.positions[posKey].creditConversionRateAt = Date.now();
+                    return options.includeSource ? { price: poolRate, source: 'pool-derived' } : poolRate;
+                }
+            }
+        }
+
+        // Non-LP collateral uses the offer map (live-offer / owned-offer) —
+        // the offer's acceptable_collateral price is the contract's
+        // debt-per-collateral conversion rate.
         const offerIds = new Set();
 
         const deals = Array.isArray(this.state.positions[posKey]?.creditDeals)
@@ -958,14 +976,13 @@ class CreditRuntime {
             }
         }
 
-        // Offer map had no usable entry — fall back to pool derivation for LP
-        // shares, then to universal DEX pricing (direct market, else bridge
-        // hops via BTS) so every collateral/debt pair resolves a rate even
-        // when the collateral or pool is not part of the credit offer.
-        // Only attempt when cached is stale to avoid hourly
-        // deriveLiquidityPoolTokenValue failures when a fresh live-offer rate
-        // would already have returned. Reuses debtAsset/collateralAsset
-        // resolved above.
+        // Offer map had no usable entry (or the LP pool valuation above
+        // failed) — fall back to pool derivation for LP shares, then to
+        // universal DEX pricing (direct market, else bridge hops via BTS) so
+        // every collateral/debt pair resolves a rate even when the collateral
+        // or pool is not part of the credit offer. Only attempt when cached is
+        // stale to avoid hourly deriveLiquidityPoolTokenValue failures.
+        // Reuses debtAsset/collateralAsset resolved above.
         if (!cachedIsFresh) {
             if (collateralAsset?.for_liquidity_pool && debtAsset?.id) {
                 const poolRate = await deriveLiquidityPoolTokenValue(BitShares, String(collateralAsset.id), String(debtAsset.id), 'auto', true).catch((e) => {

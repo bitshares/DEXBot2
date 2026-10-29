@@ -4436,7 +4436,7 @@ async function testLpCollateralResolvesCreditConversionRate() {
       },
       '1.3.20': {
         id: '1.3.20',
-        symbol: 'TWENTIX.IOXRPMM',
+        symbol: 'LP-USD-BTS',
         precision: 0,
         bitasset_data_id: null,
         dynamic_asset_data_id: '2.4.20',
@@ -4484,7 +4484,7 @@ async function testLpCollateralResolvesCreditConversionRate() {
             lending: [
               {
                 asset: 'BTS',
-                collateralAsset: 'TWENTIX.IOXRPMM',
+                collateralAsset: 'LP-USD-BTS',
                 type: 'creditOffer',
                 outputWeight: 1,
                 maxBorrowAmount: 1000,
@@ -4507,11 +4507,28 @@ async function testLpCollateralResolvesCreditConversionRate() {
 
     const lendingItem = runtime.debtPolicy.lending.find((item) => item.type === 'creditOffer');
     const debtAsset = await runtime._resolveAsset('BTS');
-    const collateralAsset = await runtime._resolveAsset('TWENTIX.IOXRPMM');
+    const collateralAsset = await runtime._resolveAsset('LP-USD-BTS');
+    // Seed an active deal/offer so the offer path is populated; the pool value
+    // must still win for LP-share collateral.
+    runtime.state.positions[`${debtAsset.id}:${collateralAsset.id}`] = { creditDeals: [{ offerId: '1.21.7' }] };
+    runtime._dbCall = async (method: string) => method === 'get_objects'
+      ? [{
+          id: '1.21.7',
+          asset_type: debtAsset.id,
+          enabled: true,
+          acceptable_collateral: {
+            [collateralAsset.id]: {
+              base: { amount: 100000, asset_id: debtAsset.id },
+              quote: { amount: 100000, asset_id: collateralAsset.id },
+            },
+          },
+        }]
+      : [];
     const rate = await runtime._resolveCreditConversionRate(lendingItem, debtAsset.id, collateralAsset.id, { includeSource: true });
 
     assert.ok(rate && rate.price != null && rate.price > 0, `pool collateral should resolve a positive conversion rate (got ${JSON.stringify(rate)})`);
-    assert.strictEqual(rate.source, 'pool-derived', 'pool share collateral should derive its credit conversion rate from the AMM pool');
+    assert.strictEqual(rate.source, 'pool-derived', 'pool share collateral should prefer the AMM pool over the offer contract price');
+    assert.ok(Math.abs(rate.price - 0.02) < 1e-12, `pool value per share should be 0.02 BTS (got ${rate.price})`);
   } finally {
     restore();
     try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch (err) { }

@@ -170,9 +170,10 @@ C_i             = C_total * weight_i / sum(all weights)
 ```
 
 - **MPA**: `feedPrice_i` is the current settlement feed price (collateral per debt asset), discovered from the chain and cached per position.
-- **Credit**: `conversionRate_i` is the offer's `acceptable_collateral` price (debt asset per collateral unit), discovered from existing deals or `allowedOfferIds`.
-- **Fallback chain** (every pair resolves a rate, so every CR is calculable): offer map → LP pool valuation (`pool-derived`) → universal DEX price (`market-direct`, else `market-bridge:<asset>` via bridge hops, default BTS). Only when all three fail does the group keep its existing budget with a warning and `weight = outputWeight * targetCR`.
+- **Credit**: `conversionRate_i` is the live pool value for LP-share collateral (`pool-derived`); other collateral uses the offer's `acceptable_collateral` price (debt asset per collateral unit), discovered from existing deals or `allowedOfferIds`.
+- **Fallback chain** (every pair resolves a rate, so every CR is calculable): LP-share collateral tries pool valuation (`pool-derived`) → offer map → universal DEX price; other collateral tries offer map → LP pool valuation → universal DEX price (`market-direct`, else `market-bridge:<asset>` via bridge hops, default BTS). Only when all three fail does the group keep its existing budget with a warning and `weight = outputWeight * targetCR`.
 - All offer-price orientation, conversion-rate, and CR math lives in `modules/credit_pricing.ts`, shared by the runtime and `dexbot credit`.
+- LP-share collateral is valued at the pure pool market value: reserves/supply, with no slippage, taker fee, or withdrawal-fee deduction, matching the runtime borrow gate.
 - `outputWeight` is the user's output proportion. Equal weights produce **equal economic debt value** across all lending items, regardless of price or CR differences.
 
 ### Examples
