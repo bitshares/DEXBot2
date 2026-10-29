@@ -120,6 +120,24 @@ const { createCredentialDaemonController } = require('../modules/launcher/creden
         await controller.ensureCredentialDaemon({ vaultSecret: verifiedSecret });
         assert.strictEqual(spawnCount, 2, 'controller should spawn the daemon for a pre-authenticated restart');
         assert.strictEqual(authenticateCalls, 1, 'a pre-authenticated secret must bypass the password prompt');
+        assert.strictEqual(verifiedSecret.vaultKeyHex, null, 'the launcher-side secret must be cleared after the handoff');
+
+        // A failure before the daemon is spawned (here: the bootstrap path
+        // file cannot be written) must still clear the handed-off secret.
+        const failingSecret = { kind: 'vault', version: 1, vaultKeyHex: '00'.repeat(32) };
+        const bootstrapPathFile = require('path').join(controllerRoot, '.dexbot-cred-bootstrap-path');
+        fs.rmSync(bootstrapPathFile, { force: true });
+        fs.mkdirSync(bootstrapPathFile);
+        try {
+            await assert.rejects(
+                () => controller.ensureCredentialDaemon({ vaultSecret: failingSecret }),
+                /Cannot write bootstrap path file/,
+                'a bootstrap path failure should reject the daemon startup'
+            );
+        } finally {
+            fs.rmSync(bootstrapPathFile, { recursive: true, force: true });
+        }
+        assert.strictEqual(failingSecret.vaultKeyHex, null, 'a failed handoff must still clear the launcher-side secret');
 
         restoreStubs();
         originalConsoleLog('credential daemon controller output tests passed');

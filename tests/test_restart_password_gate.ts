@@ -26,8 +26,11 @@ const LIVE_WRAPPER_PID = 999999;
 
 const state: any = {
     wrongPassword: false,
+    liveMonolithic: true,
+    ownerPid: 0,
     events: [] as string[],
     ensureCalls: [] as any[],
+    clearedSecrets: [] as any[],
     exitCodes: [] as number[],
     logs: [] as string[],
     errors: [] as string[],
@@ -55,6 +58,7 @@ const controller = {
 
 const runtimePath = require.resolve('../modules/launcher/monolithic_runtime');
 const controllerPath = require.resolve('../modules/launcher/credential_daemon');
+const supervisorControlPath = require.resolve('../modules/launcher/supervisor_control');
 
 const originalProcessExit = process.exit;
 const originalConsoleLog = console.log;
@@ -63,8 +67,21 @@ const originalConsoleWarn = console.warn;
 const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 
 function installStubs() {
-    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController'], {
+    defineEsmMockAbs(supervisorControlPath, ['sendControlCommand'], {
+        sendControlCommand: async () => {
+            state.events.push('control');
+            return { ok: true };
+        },
+    });
+
+    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController', 'clearVaultSecret'], {
         createCredentialDaemonController: () => controller,
+        clearVaultSecret: (secret: any) => {
+            state.clearedSecrets.push(secret);
+            if (secret) {
+                for (const key of Object.keys(secret)) secret[key] = null;
+            }
+        },
     });
 
     // The control path only needs a small surface of monolithic_runtime; the
@@ -97,18 +114,20 @@ function installStubs() {
         normalizeControlTarget: (target: any) => target,
         statusIgnoresTargetMessage: () => '',
         cleanupStateFiles: () => {},
-        readLiveMonolithicPid: () => ({ pid: LIVE_WRAPPER_PID, stale: false }),
+        readLiveMonolithicPid: () => ({ pid: state.liveMonolithic ? LIVE_WRAPPER_PID : 0, stale: false }),
         readMonolithicBotInfo: () => null,
-        isLikelyCredentialDaemonProcess: () => false,
+        isLikelyCredentialDaemonProcess: () => state.ownerPid > 0,
         isExpectedMonolithicBotPid: () => false,
         isProcessInDstate: () => false,
-        stopCredentialDaemonPid: async () => {},
+        stopCredentialDaemonPid: async () => {
+            state.events.push('stop');
+        },
         stopCredentialDaemon: async () => {
             state.events.push('stop');
             return { signaled: true, cleaned: true };
         },
         ensureNoForeignCredentialDaemon: async () => {},
-        findCredentialSocketOwnerPid: () => 0,
+        findCredentialSocketOwnerPid: () => state.ownerPid,
         cleanupCredentialRuntimeFiles: () => {},
         readCredentialDaemonStatus: () => ({ running: false }),
         ensureLogDir: () => {},
@@ -172,8 +191,11 @@ function restoreStubs() {
 
 function resetState() {
     state.wrongPassword = false;
+    state.liveMonolithic = true;
+    state.ownerPid = 0;
     state.events.length = 0;
     state.ensureCalls.length = 0;
+    state.clearedSecrets.length = 0;
     state.exitCodes.length = 0;
     state.logs.length = 0;
     state.errors.length = 0;
@@ -232,9 +254,42 @@ runEsmMockStages(['restart_password_gate'], async () => {
         );
         assert.strictEqual(state.ensureCalls.length, 1, 'a successful restart should start exactly one daemon');
         assert.ok(state.ensureCalls[0].vaultSecret, 'the verified secret should be handed to the daemon startup');
+        assert.strictEqual(state.clearedSecrets.length, 1, 'the launcher should clear its verified secret reference');
+        assert.strictEqual(state.clearedSecrets[0], state.ensureCalls[0].vaultSecret, 'the handed-off secret should be the one cleared');
+        assert.strictEqual(state.ensureCalls[0].vaultSecret.vaultKeyHex, null, 'the cleared secret should no longer hold key material');
         assert.ok(
             state.logs.includes('✓ Authentication successful'),
             'a successful restart should confirm authentication'
+        );
+
+        // Isolated supervisor path: the same auth-before-stop gate applies.
+        resetState();
+        state.liveMonolithic = false;
+        state.ownerPid = 4242;
+        await runRestart(unlock);
+        assert.deepStrictEqual(
+            state.events,
+            ['authenticate', 'stop', 'ensure', 'control'],
+            'isolated restart must authenticate before stopping the socket owner and signalling the supervisor'
+        );
+
+        // Wrong password in isolated mode must not reach the owner stop or the
+        // supervisor control command.
+        resetState();
+        state.liveMonolithic = false;
+        state.ownerPid = 4242;
+        state.wrongPassword = true;
+        let isolatedRejection: any = null;
+        try {
+            await runRestart(unlock);
+        } catch (err) {
+            isolatedRejection = err;
+        }
+        assert.ok(isolatedRejection, 'isolated restart should fail when authentication fails');
+        assert.deepStrictEqual(
+            state.events,
+            ['authenticate'],
+            'isolated restart must not stop the daemon or signal the supervisor after a failed authentication'
         );
     } catch (err) {
         stageError = err;

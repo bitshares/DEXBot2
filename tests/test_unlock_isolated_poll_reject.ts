@@ -53,8 +53,10 @@ async function runIsolatedPollRejectStage() {
 
     defineEsmMockAbs(require.resolve('../modules/launcher/credential_daemon'), [
         'createCredentialDaemonController',
+        'clearVaultSecret',
     ], {
         createCredentialDaemonController: () => controller,
+        clearVaultSecret: () => {},
     });
 
     setCachedModule(supervisorPath, {

@@ -136,8 +136,9 @@ const originalStdoutIsTTY = process.stdout.isTTY;
 const { setProcessDiscovery, resetProcessDiscovery } = require('../modules/process_discovery');
 
 function installStubs() {
-    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController'], {
+    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController', 'clearVaultSecret'], {
         createCredentialDaemonController: () => controller,
+        clearVaultSecret: () => {},
     });
 
     childProcess.spawn = (command: any, args: any, options: any) => {

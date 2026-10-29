@@ -52,7 +52,7 @@ import fs from 'node:fs';
 import { path } from './modules/path_api.js';
 import type { ChildProcess } from 'node:child_process';
 import { getStorage } from './modules/storage/index.js';
-import { createCredentialDaemonController } from './modules/launcher/credential_daemon.js';
+import { createCredentialDaemonController, clearVaultSecret } from './modules/launcher/credential_daemon.js';
 import { buildScopedChildEnv } from './modules/launcher/child_env.js';
 import { parseUnlockArgs } from './modules/launcher/launch_modes.js';
 import { UPDATER, LAUNCHER } from './modules/constants.js';
@@ -66,6 +66,7 @@ import { registerCleanup, setupGracefulShutdown } from './modules/graceful_shutd
 import { normalizeBotEntry, resolveRawBotEntries, loadSettingsFile, type BotEntry } from './modules/bot_settings.js';
 import { selectStartOnboardingCommand } from './modules/cli_start_onboarding.js';
 import * as chainKeys from './modules/chain_keys.js';
+import type { VaultSecret } from './modules/chain_keys.js';
 import * as credentialPolicy from './modules/credential_policy.js';
 import { getWhitelistFlags } from './modules/market_adapter_whitelist.js';
 import { createMarketAdapterWatchdog } from './modules/launcher/market_adapter_watchdog.js';
@@ -131,7 +132,7 @@ interface CredentialDaemonOpts {
     stdio?: Array<'ignore' | number>;
     headless?: boolean;
     passwordFile?: string | null;
-    vaultSecret?: unknown;
+    vaultSecret?: VaultSecret | null;
     [key: string]: unknown;
 }
 
@@ -1032,19 +1033,23 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
                     // instead of killing it and then failing to re-unlock.
                     const daemonOpts: CredentialDaemonOpts = { detached: true };
                     const vaultSecret = await controller.authenticateCredential();
-                    const credResult = await stopCredentialDaemon();
-                    if (credResult.signaled) {
-                        console.log('Stop signal sent to credential daemon');
+                    try {
+                        const credResult = await stopCredentialDaemon();
+                        if (credResult.signaled) {
+                            console.log('Stop signal sent to credential daemon');
+                        }
+                        const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
+                        if (unlockedNow) {
+                            console.log(statusSuccess('✓ Authentication successful'));
+                        }
+                        const newCredPid = controller.getManagedDaemonPid();
+                        if (newCredPid) {
+                            try { storage.writeFile(MONOLITHIC_CRED_PID_FILE, String(newCredPid), { mode: 0o600 }); } catch (_) {}
+                        }
+                        controller.releaseManagedDaemon();
+                    } finally {
+                        clearVaultSecret(vaultSecret);
                     }
-                    const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
-                    if (unlockedNow) {
-                        console.log(statusSuccess('✓ Authentication successful'));
-                    }
-                    const newCredPid = controller.getManagedDaemonPid();
-                    if (newCredPid) {
-                        try { storage.writeFile(MONOLITHIC_CRED_PID_FILE, String(newCredPid), { mode: 0o600 }); } catch (_) {}
-                    }
-                    controller.releaseManagedDaemon();
                 }
                 // reload-all intentionally skips the credential daemon
                 // stop/re-unlock above: bots keep their key access while the
@@ -1221,16 +1226,20 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
         // master password is confirmed, so a failed restart keeps keys live.
         const daemonOpts: CredentialDaemonOpts = { detached: true };
         const vaultSecret = await controller.authenticateCredential();
-        const ownerPid = findCredentialSocketOwnerPid();
-        if (ownerPid > 0 && isLikelyCredentialDaemonProcess(ownerPid)) {
-            await stopCredentialDaemonPid(ownerPid);
+        try {
+            const ownerPid = findCredentialSocketOwnerPid();
+            if (ownerPid > 0 && isLikelyCredentialDaemonProcess(ownerPid)) {
+                await stopCredentialDaemonPid(ownerPid);
+            }
+            cleanupCredentialRuntimeFiles();
+            const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
+            if (unlockedNow) {
+                console.log(statusSuccess('✓ Authentication successful'));
+            }
+            controller.releaseManagedDaemon();
+        } finally {
+            clearVaultSecret(vaultSecret);
         }
-        cleanupCredentialRuntimeFiles();
-        const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
-        if (unlockedNow) {
-            console.log(statusSuccess('✓ Authentication successful'));
-        }
-        controller.releaseManagedDaemon();
     }
 
     try {

@@ -104,8 +104,9 @@ let restoreConsole: () => void = () => {};
 const originalProcessExit = process.exit;
 
 function installStubs() {
-    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController'], {
+    defineEsmMockAbs(controllerPath, ['createCredentialDaemonController', 'clearVaultSecret'], {
         createCredentialDaemonController: () => controller,
+        clearVaultSecret: () => {},
     });
     defineEsmMockAbs(supervisorControlPath, ['sendControlCommand'], {
         sendControlCommand: async (cmd: any) => {

@@ -653,7 +653,7 @@ async function _promptPassword() {
     return await readPassword('Enter master password: ');
 }
 
-type VaultSecret = { kind: string; version: number; vaultKeyHex: string };
+export type VaultSecret = { kind: string; version: number; vaultKeyHex: string };
 
 /**
  * Authenticate and return a derived vault secret.

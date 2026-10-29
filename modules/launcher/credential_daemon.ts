@@ -4,6 +4,7 @@ import { LAUNCHER } from '../constants.js';
 import { getStorage } from '../storage/index.js';
 import { spawn } from 'node:child_process';
 import * as chainKeys from '../chain_keys.js';
+import type { VaultSecret } from '../chain_keys.js';
 import * as credentialPolicy from '../credential_policy.js';
 import { createPasswordBootstrapServer } from './credential_bootstrap.js';
 import { buildScopedChildEnv } from './child_env.js';
@@ -25,6 +26,21 @@ import { buildRuntimeScriptArgs, SCRIPTS_ROOT as DEFAULT_CODE_ROOT } from './run
 import { getErrorMessage, getErrorCode } from '../utils/errors.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
+
+/**
+ * Best-effort wipe of a derived vault secret held in memory.
+ * Vault secrets are plain objects with hex-string fields; V8 cannot zero an
+ * immutable string in place, so drop each value and let GC reclaim it.
+ */
+function clearVaultSecret(secret: VaultSecret | null | undefined): void {
+    if (!secret || typeof secret !== 'object') return;
+    const record = secret as unknown as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+        const value = record[key];
+        if (Buffer.isBuffer(value)) value.fill(0);
+        record[key] = null;
+    }
+}
 
 function waitForExit(child: import('node:child_process').ChildProcess): Promise<number | null> {
     return new Promise((resolve, reject) => {
@@ -80,19 +96,25 @@ function createCredentialDaemonController({
     async function authenticateCredential({ headless = false, passwordFile = null }: {
         headless?: boolean;
         passwordFile?: string | null;
-    } = {}) {
+    } = {}): Promise<VaultSecret> {
         if (headless) {
             return chainKeys.unlockWithPassword(readHeadlessPassword({ passwordFile }));
         }
         return chainKeys.authenticate();
     }
 
+    /**
+     * Ensure a responsive credential daemon, starting one when needed.
+     * A caller-supplied `vaultSecret` is consumed: the launcher-side reference
+     * is cleared once the secret has been handed off (or startup fails), so
+     * callers must not reuse the object after this returns.
+     */
     async function ensureCredentialDaemon({ detached = false, stdio: stdioOption = undefined, headless = false, passwordFile = null, vaultSecret: preAuthenticatedSecret = null }: {
         detached?: boolean;
         stdio?: StdioOptions;
         headless?: boolean;
         passwordFile?: string | null;
-        vaultSecret?: unknown;
+        vaultSecret?: VaultSecret | null;
     } = {}) {
         if (await isDaemonReady()) {
             return false;
@@ -106,26 +128,26 @@ function createCredentialDaemonController({
         // secret in, so the daemon restart never has to re-prompt (and can
         // never kill a healthy daemon before the password is known good).
         const vaultSecret = preAuthenticatedSecret ?? await authenticateCredential({ headless, passwordFile });
-        const bootstrap = await createPasswordBootstrapServer({ secret: vaultSecret });
-        const daemonArgs = buildRuntimeScriptArgs({
-            codeRoot,
-            scriptSegments: ['credential-daemon'],
-        });
-
-        // Write the bootstrap socket path to a stable file in the runtime dir
-        // so the credential daemon can find it via DEXBOT_CRED_BOOTSTRAP_PATH_FILE
-        // instead of a PM2-persistable env var.
-        const bootstrapPathFile = path.join(path.dirname(socketPath), '.dexbot-cred-bootstrap-path');
+        let bootstrap: Awaited<ReturnType<typeof createPasswordBootstrapServer>> | null = null;
         try {
-            storage.writeFile(bootstrapPathFile, bootstrap.socketPath, { mode: 0o600 });
-        } catch (err) {
-            bootstrap.close();
-            throw new Error(
-                `Cannot write bootstrap path file at ${bootstrapPathFile}: ${getErrorMessage(err)}`
-            );
-        }
+            bootstrap = await createPasswordBootstrapServer({ secret: vaultSecret });
+            const daemonArgs = buildRuntimeScriptArgs({
+                codeRoot,
+                scriptSegments: ['credential-daemon'],
+            });
 
-        try {
+            // Write the bootstrap socket path to a stable file in the runtime dir
+            // so the credential daemon can find it via DEXBOT_CRED_BOOTSTRAP_PATH_FILE
+            // instead of a PM2-persistable env var.
+            const bootstrapPathFile = path.join(path.dirname(socketPath), '.dexbot-cred-bootstrap-path');
+            try {
+                storage.writeFile(bootstrapPathFile, bootstrap.socketPath, { mode: 0o600 });
+            } catch (err) {
+                throw new Error(
+                    `Cannot write bootstrap path file at ${bootstrapPathFile}: ${getErrorMessage(err)}`
+                );
+            }
+
             const childStdio: StdioOptions = stdioOption ?? (detached ? 'ignore' : 'inherit');
             daemonProcess = spawn(Config.EXEC_PATH, daemonArgs, {
                 cwd: root,
@@ -164,8 +186,15 @@ function createCredentialDaemonController({
             ]);
             return true;
         } catch (error) {
-            bootstrap.close();
+            bootstrap?.close();
             throw error;
+        } finally {
+            // The secret has been transferred over the one-shot bootstrap
+            // socket (or startup failed). Drop the launcher-side material as
+            // soon as it is no longer needed. Hex strings cannot be zeroed in
+            // place in V8, but clearing the properties lets the values be
+            // reclaimed with the object.
+            clearVaultSecret(vaultSecret);
         }
     }
 
@@ -222,5 +251,5 @@ function createCredentialDaemonController({
     };
 }
 
-export { createCredentialDaemonController, DEFAULT_POLL_INTERVAL_MS, waitForExit }
+export { createCredentialDaemonController, clearVaultSecret, DEFAULT_POLL_INTERVAL_MS, waitForExit }
 
