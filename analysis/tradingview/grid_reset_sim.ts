@@ -102,7 +102,7 @@ function gridSimNonNegativeInt(value: unknown, fallback: number): number {
  * UNCLIPPED `slopePct`; the clipped value only feeds the range tilt.
  */
 function gridSimSlopeSignal(slopePct: unknown, clipThreshold: unknown, cfg: GridSimCfg) {
-    const maxSlopePct = gridSimPositiveNumber(cfg?.maxSlopePct, 0.09);
+    const maxSlopePct = gridSimPositiveNumber(cfg?.maxSlopePct, 0.1);
     const neutralZonePct = Number.isFinite(Number(cfg?.neutralZonePct)) ? Number(cfg.neutralZonePct) : 0;
     const maxSlopeOffset = gridSimPositiveNumber(cfg?.maxSlopeOffset, 0.5);
     // null/undefined/NaN all mean "no slope this bar" (computeAmaSlopeWeights'

@@ -1330,7 +1330,7 @@ let MARKET_ADAPTER = {
     // Lower values make the AMA channel reach maximum influence more easily.
     // Higher values require a stronger price move before AMA reaches full effect.
     // nob: amaS% (AMA Max Slope %)
-    DYNAMIC_WEIGHT_AMA_MAX_SLOPE_PCT: 0.09,
+    DYNAMIC_WEIGHT_AMA_MAX_SLOPE_PCT: 0.1,
 
     // DYNAMIC_WEIGHT_KALMAN_MAX_SLOPE_PCT: Trend size that counts as "full strength" for
     // the Kalman composite branch. Kept separate from the AMA slope knob so the two

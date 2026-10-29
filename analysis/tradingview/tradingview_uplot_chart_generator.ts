@@ -1779,7 +1779,7 @@ function generateHTML(data: TvChartInput, title: string = 'TradingView Style Res
             const slopeCfg = payload.rangeSlope || {};
             const gridCfg = payload.grid || null;
             const lookback = resolveSlopeLookbackBars();
-            const maxSlope = Number(slopeCfg.maxSlopePct) > 0 ? Number(slopeCfg.maxSlopePct) : 0.09;
+            const maxSlope = Number(slopeCfg.maxSlopePct) > 0 ? Number(slopeCfg.maxSlopePct) : 0.1;
             const neutral = Number(slopeCfg.neutralZonePct) >= 0 ? Number(slopeCfg.neutralZonePct) : 0;
             const maxSlopeOffset = Number(slopeCfg.maxSlopeOffset) > 0 ? Number(slopeCfg.maxSlopeOffset) : 0.5;
             const maxAsym = gridCfg && Number(gridCfg.maxAsymmetryFactor) > 0
