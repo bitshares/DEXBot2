@@ -78,6 +78,7 @@ export function hasActiveAmaBot() {
 
 export function makeControllerStub(overrides: any = {}) {
     return {
+        authenticateCredential: async () => ({ kind: 'vault', version: 1, vaultKeyHex: '00'.repeat(32) }),
         ensureCredentialDaemon: async () => false,
         getManagedDaemonPid: () => null,
         releaseManagedDaemon: () => {},

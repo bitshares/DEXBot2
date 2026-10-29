@@ -131,6 +131,7 @@ interface CredentialDaemonOpts {
     stdio?: Array<'ignore' | number>;
     headless?: boolean;
     passwordFile?: string | null;
+    vaultSecret?: unknown;
     [key: string]: unknown;
 }
 
@@ -1025,12 +1026,17 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
 
             if (effectiveCmd === 'restart-all' || effectiveCmd === 'reload-all') {
                 if (effectiveCmd === 'restart-all' && process.stdin.isTTY) {
+                    // Verify the master password BEFORE stopping the live
+                    // daemon. A wrong or cancelled password must leave the
+                    // existing daemon (and every bot's key access) intact
+                    // instead of killing it and then failing to re-unlock.
+                    const daemonOpts: CredentialDaemonOpts = { detached: true };
+                    const vaultSecret = await controller.authenticateCredential();
                     const credResult = await stopCredentialDaemon();
                     if (credResult.signaled) {
                         console.log('Stop signal sent to credential daemon');
                     }
-                    const daemonOpts: CredentialDaemonOpts = { detached: true };
-                    const unlockedNow = await controller.ensureCredentialDaemon(daemonOpts);
+                    const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
                     if (unlockedNow) {
                         console.log(statusSuccess('✓ Authentication successful'));
                     }
@@ -1211,13 +1217,16 @@ async function handleControl({ cmd, target }: { cmd: string; target?: string }) 
 
     // Restart credential daemon for restart-all (no target) in isolated mode
     if (!effectiveTarget && effectiveCmd === 'restart-all' && process.stdin.isTTY) {
+        // Authenticate first: the running daemon is only stopped once the
+        // master password is confirmed, so a failed restart keeps keys live.
+        const daemonOpts: CredentialDaemonOpts = { detached: true };
+        const vaultSecret = await controller.authenticateCredential();
         const ownerPid = findCredentialSocketOwnerPid();
         if (ownerPid > 0 && isLikelyCredentialDaemonProcess(ownerPid)) {
             await stopCredentialDaemonPid(ownerPid);
         }
         cleanupCredentialRuntimeFiles();
-        const daemonOpts: CredentialDaemonOpts = { detached: true };
-        const unlockedNow = await controller.ensureCredentialDaemon(daemonOpts);
+        const unlockedNow = await controller.ensureCredentialDaemon({ ...daemonOpts, vaultSecret });
         if (unlockedNow) {
             console.log(statusSuccess('✓ Authentication successful'));
         }

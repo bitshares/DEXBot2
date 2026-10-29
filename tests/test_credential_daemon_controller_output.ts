@@ -21,11 +21,12 @@ const warns: any[] = [];
 const errors: any[] = [];
 let spawnCount = 0;
 const spawnCalls: any[] = [];
+let authenticateCalls = 0;
 
 function installStubs() {
     defineEsmMockAbs(require.resolve('../modules/chain_keys'),
         ['authenticate', 'isDaemonReady', 'isDaemonResponsive', 'waitForDaemon', 'unlockWithPassword'], {
-        authenticate: async () => 'test-password',
+        authenticate: async () => { authenticateCalls += 1; return 'test-password'; },
         isDaemonReady: () => false,
         isDaemonResponsive: async () => false,
         waitForDaemon: async () => {},
@@ -98,6 +99,7 @@ const { createCredentialDaemonController } = require('../modules/launcher/creden
         errors.length = 0;
         spawnCalls.length = 0;
         spawnCount = 0;
+        authenticateCalls = 0;
 
         await controller.ensureCredentialDaemon();
 
@@ -110,6 +112,14 @@ const { createCredentialDaemonController } = require('../modules/launcher/creden
         assert.deepStrictEqual(logs, [], 'controller startup should not emit info logs');
         assert.deepStrictEqual(warns, [], 'controller startup should not emit warnings');
         assert.deepStrictEqual(errors, [], 'controller startup should not emit errors');
+        assert.strictEqual(authenticateCalls, 1, 'interactive startup should authenticate once');
+
+        // A caller that already verified the master password can pass the
+        // secret in; the controller must not prompt (authenticate) again.
+        const verifiedSecret = { kind: 'vault', version: 1, vaultKeyHex: '00'.repeat(32) };
+        await controller.ensureCredentialDaemon({ vaultSecret: verifiedSecret });
+        assert.strictEqual(spawnCount, 2, 'controller should spawn the daemon for a pre-authenticated restart');
+        assert.strictEqual(authenticateCalls, 1, 'a pre-authenticated secret must bypass the password prompt');
 
         restoreStubs();
         originalConsoleLog('credential daemon controller output tests passed');

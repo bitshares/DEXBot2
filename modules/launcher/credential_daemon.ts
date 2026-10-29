@@ -77,11 +77,22 @@ function createCredentialDaemonController({
         }
     }
 
-    async function ensureCredentialDaemon({ detached = false, stdio: stdioOption = undefined, headless = false, passwordFile = null }: {
+    async function authenticateCredential({ headless = false, passwordFile = null }: {
+        headless?: boolean;
+        passwordFile?: string | null;
+    } = {}) {
+        if (headless) {
+            return chainKeys.unlockWithPassword(readHeadlessPassword({ passwordFile }));
+        }
+        return chainKeys.authenticate();
+    }
+
+    async function ensureCredentialDaemon({ detached = false, stdio: stdioOption = undefined, headless = false, passwordFile = null, vaultSecret: preAuthenticatedSecret = null }: {
         detached?: boolean;
         stdio?: StdioOptions;
         headless?: boolean;
         passwordFile?: string | null;
+        vaultSecret?: unknown;
     } = {}) {
         if (await isDaemonReady()) {
             return false;
@@ -91,13 +102,10 @@ function createCredentialDaemonController({
         ensureCredentialRuntimeDirSync();
         credentialPolicy.ensurePolicyConfig(PATHS.PROFILES.DAEMON_POLICIES_JSON);
 
-        let vaultSecret;
-
-        if (headless) {
-            vaultSecret = chainKeys.unlockWithPassword(readHeadlessPassword({ passwordFile }));
-        } else {
-            vaultSecret = await chainKeys.authenticate();
-        }
+        // A caller that verified the master password up front can hand the
+        // secret in, so the daemon restart never has to re-prompt (and can
+        // never kill a healthy daemon before the password is known good).
+        const vaultSecret = preAuthenticatedSecret ?? await authenticateCredential({ headless, passwordFile });
         const bootstrap = await createPasswordBootstrapServer({ secret: vaultSecret });
         const daemonArgs = buildRuntimeScriptArgs({
             codeRoot,
@@ -203,6 +211,7 @@ function createCredentialDaemonController({
     }
 
     return {
+        authenticateCredential,
         ensureCredentialDaemon,
         forwardSignal,
         getManagedDaemonPid,
